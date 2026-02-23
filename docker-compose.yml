@@ -1,0 +1,50 @@
+services:
+  hub:
+    build:
+      context: .
+      dockerfile: hub/deploy/Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./hub/deploy/config.example.json:/etc/amurg/config.json:ro
+      - hub-data:/var/lib/amurg/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+    networks:
+      - frontend
+      - backend
+
+  runtime:
+    build:
+      context: .
+      dockerfile: runtime/deploy/Dockerfile
+    volumes:
+      - ./runtime/deploy/config.example.json:/etc/amurg/config.json:ro
+    depends_on:
+      hub:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "2.0"
+    networks:
+      - backend
+
+networks:
+  frontend:
+  backend:
+
+volumes:
+  hub-data:

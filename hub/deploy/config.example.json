@@ -1,0 +1,36 @@
+{
+  "server": {
+    "addr": ":8080",
+    "ui_static_dir": "/var/lib/amurg/ui"
+  },
+  "auth": {
+    "jwt_secret": "change-me-to-a-random-secret-at-least-32-chars",
+    "jwt_expiry": "24h",
+    "runtime_tokens": [
+      {
+        "runtime_id": "local-dev",
+        "token": "dev-runtime-token-change-me",
+        "name": "Local Development Runtime"
+      }
+    ],
+    "initial_admin": {
+      "username": "admin",
+      "password": "admin"
+    }
+  },
+  "storage": {
+    "driver": "sqlite",
+    "dsn": "/var/lib/amurg/data/amurg.db",
+    "retention": "720h"
+  },
+  "session": {
+    "max_per_user": 20,
+    "idle_timeout": "30m",
+    "turn_based": true,
+    "replay_buffer": 100
+  },
+  "logging": {
+    "level": "info",
+    "format": "json"
+  }
+}

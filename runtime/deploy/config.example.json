@@ -1,0 +1,83 @@
+{
+  "hub": {
+    "url": "ws://hub:8080/ws/runtime",
+    "token": "dev-runtime-token-change-me",
+    "tls_skip_verify": false,
+    "reconnect_interval": "2s",
+    "max_reconnect_delay": "60s"
+  },
+  "runtime": {
+    "id": "local-dev",
+    "max_sessions": 10,
+    "default_timeout": "30m",
+    "max_output_bytes": 10485760,
+    "idle_timeout": "30s",
+    "log_level": "info"
+  },
+  "endpoints": [
+    {
+      "id": "echo-cli",
+      "name": "Echo CLI",
+      "profile": "generic-cli",
+      "tags": {"env": "dev", "purpose": "testing"},
+      "cli": {
+        "command": "cat",
+        "spawn_policy": "per-session"
+      }
+    },
+    {
+      "id": "claude-code-1",
+      "name": "Claude Code",
+      "profile": "claude-code",
+      "tags": {"env": "dev"},
+      "cli": {
+        "command": "claude",
+        "args": ["--chat"],
+        "work_dir": "/workspace",
+        "spawn_policy": "per-session"
+      }
+    },
+    {
+      "id": "copilot-1",
+      "name": "GitHub Copilot",
+      "profile": "github-copilot",
+      "tags": {"env": "dev"},
+      "cli": {
+        "command": "gh",
+        "args": ["copilot", "suggest"],
+        "spawn_policy": "per-session"
+      }
+    },
+    {
+      "id": "codex-1",
+      "name": "Codex",
+      "profile": "codex",
+      "tags": {"env": "dev"},
+      "job": {
+        "command": "codex",
+        "max_runtime": "5m"
+      }
+    },
+    {
+      "id": "date-job",
+      "name": "Date Job",
+      "profile": "generic-job",
+      "tags": {"env": "dev", "purpose": "testing"},
+      "job": {
+        "command": "date",
+        "max_runtime": "10s"
+      }
+    },
+    {
+      "id": "httpbin-http",
+      "name": "HTTPBin",
+      "profile": "generic-http",
+      "tags": {"env": "dev", "purpose": "testing"},
+      "http": {
+        "base_url": "https://httpbin.org/post",
+        "method": "POST",
+        "timeout": "30s"
+      }
+    }
+  ]
+}
