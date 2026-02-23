@@ -382,49 +382,39 @@ Create systemd unit files and enable/start the services.
 - [ ] Place the hub behind a reverse proxy (nginx, Caddy) with TLS termination
 - [ ] Restrict network access: runtime only needs outbound to hub, hub needs inbound from clients
 
-### Tunnel from home (ngrok / Cloudflare Tunnel)
+### Access from your phone (ngrok / Cloudflare Tunnel)
 
-You can run the hub on your home machine and expose it to the internet using a tunnel. This lets you access the UI from your phone and connect remote runtimes — without a static IP, port forwarding, or a VPS.
+Run the hub and runtime on your home machine, then use a tunnel to access the UI from your phone or any device outside your LAN — no static IP, port forwarding, or VPS needed.
+
+Everything stays local. The tunnel only exposes the hub's HTTP port so you can reach the UI remotely.
 
 **With ngrok:**
 
 ```bash
-# 1. Start the hub locally
+# 1. Start hub + runtime locally (as in Quick Start)
 ./bin/amurg-hub -config hub/deploy/config.local.json
+./bin/amurg-runtime -config runtime/deploy/config.local.json
 
-# 2. Expose it via ngrok (free tier works)
+# 2. Expose the hub via ngrok (free tier works)
 ngrok http 8090
 ```
 
-ngrok prints a public URL like `https://ab12cd34.ngrok-free.app`. Use this URL for:
-
-- **Browser access:** Open `https://ab12cd34.ngrok-free.app` and log in normally.
-- **Remote runtimes:** Set the hub URL in your runtime config:
-
-```json
-{
-  "hub": {
-    "url": "wss://ab12cd34.ngrok-free.app/ws/runtime",
-    "token": "your-runtime-token"
-  }
-}
-```
-
-Note: `wss://` (not `ws://`) — ngrok provides TLS automatically.
+ngrok prints a public URL like `https://ab12cd34.ngrok-free.app`. Open it on your phone and log in — the hub and runtime stay on your machine, the tunnel just lets the UI reach them.
 
 **With Cloudflare Tunnel (free, stable hostname):**
 
 ```bash
-# 1. Start the hub locally
+# 1. Start hub + runtime locally
 ./bin/amurg-hub -config hub/deploy/config.local.json
+./bin/amurg-runtime -config runtime/deploy/config.local.json
 
-# 2. Expose it via cloudflared
+# 2. Expose the hub via cloudflared
 cloudflared tunnel --url http://localhost:8090
 ```
 
 Cloudflare Tunnel gives you a `*.trycloudflare.com` URL (random) or a stable subdomain if you configure a named tunnel.
 
-**Important:** When using a tunnel, your hub is publicly accessible. Make sure to:
+**Important:** The tunnel makes your hub reachable from the internet. Make sure to:
 - Use a strong `jwt_secret` (not the dev default)
 - Change the admin password from `admin`
 - Use strong runtime tokens
