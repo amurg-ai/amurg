@@ -80,6 +80,7 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	}
 
 	if c.cfg.TLSSkipVerify {
+		c.logger.Warn("TLS certificate verification disabled — DO NOT use in production")
 		dialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
 

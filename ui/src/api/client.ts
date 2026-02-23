@@ -53,6 +53,9 @@ export const api = {
     }
 
     const data = await res.json();
+    // Security: storing JWT in localStorage exposes it to XSS. This is an accepted
+    // trade-off because (1) httpOnly cookies don't work with WebSocket auth, and
+    // (2) the hub's Content-Security-Policy restricts script sources to mitigate XSS.
     localStorage.setItem("amurg_token", data.token);
     return data;
   },

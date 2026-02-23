@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -15,8 +17,9 @@ type rateLimiter struct {
 }
 
 type bucket struct {
-	tokens    float64
-	lastCheck time.Time
+	tokens     float64
+	lastCheck  time.Time
+	lastAccess time.Time
 }
 
 func newRateLimiter(requestsPerSecond float64, burst int) *rateLimiter {
@@ -48,6 +51,7 @@ func (rl *rateLimiter) allow(key string) bool {
 		b.tokens = float64(rl.burst)
 	}
 	b.lastCheck = now
+	b.lastAccess = now
 
 	if b.tokens < 1 {
 		return false
@@ -57,13 +61,44 @@ func (rl *rateLimiter) allow(key string) bool {
 	return true
 }
 
+// cleanup removes buckets that haven't been accessed for maxAge.
+func (rl *rateLimiter) cleanup(maxAge time.Duration) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	cutoff := time.Now().Add(-maxAge)
+	for key, b := range rl.buckets {
+		if b.lastAccess.Before(cutoff) {
+			delete(rl.buckets, key)
+		}
+	}
+}
+
+// StartCleanup periodically removes stale rate limit buckets.
+func (rl *rateLimiter) StartCleanup(ctx context.Context, interval, maxAge time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				rl.cleanup(maxAge)
+			}
+		}
+	}()
+}
+
 // loginIPRateLimitMiddleware returns HTTP middleware that rate-limits by remote IP.
 func loginIPRateLimitMiddleware(rl *rateLimiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := r.RemoteAddr
-			if realIP := r.Header.Get("X-Real-Ip"); realIP != "" {
-				ip = realIP
+			// Use RemoteAddr which is already set to the real IP by chi's RealIP middleware.
+			// Strip the port to rate-limit by IP only.
+			ip, _, err := net.SplitHostPort(r.RemoteAddr)
+			if err != nil {
+				ip = r.RemoteAddr // fallback if no port
 			}
 			if !rl.allow(ip) {
 				w.Header().Set("Retry-After", "1")

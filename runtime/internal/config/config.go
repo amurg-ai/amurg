@@ -33,8 +33,9 @@ type RuntimeConfig struct {
 	MaxOutputBytes  int64    `json:"max_output_bytes"`
 	IdleTimeout     Duration `json:"idle_timeout"`
 	LogLevel        string   `json:"log_level"`
-	FileStoragePath string   `json:"file_storage_path,omitempty"` // path for file storage; default "./amurg-files"
-	MaxFileBytes    int64    `json:"max_file_bytes,omitempty"`    // max file size; default 10MB
+	FileStoragePath         string   `json:"file_storage_path,omitempty"`         // path for file storage; default "./amurg-files"
+	MaxFileBytes            int64    `json:"max_file_bytes,omitempty"`            // max file size; default 10MB
+	AllowRemotePermissionSkip bool  `json:"allow_remote_permission_skip,omitempty"`
 }
 
 // SecurityConfig defines security constraints for an endpoint.

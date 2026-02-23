@@ -251,7 +251,7 @@ func (s *Service) ValidateRuntimeToken(runtimeID, token string) bool {
 	if !ok {
 		return false
 	}
-	return expected == token
+	return hmac.Equal([]byte(expected), []byte(token))
 }
 
 func (s *Service) generateToken(user *store.User) (string, error) {

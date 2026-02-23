@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -65,11 +66,13 @@ type Router struct {
 	fileStoragePath   string
 	maxFileBytes      int64
 
-	mu              sync.RWMutex
-	runtimes        map[string]*runtimeConn  // runtime_id -> conn
-	clients         map[string]*clientConn   // conn_id -> conn
-	subscribers     map[string]map[string]*clientConn // session_id -> conn_id -> conn
-	turnStartTimes  map[string]time.Time // session_id -> turn start time
+	mu                    sync.RWMutex
+	runtimes              map[string]*runtimeConn  // runtime_id -> conn
+	clients               map[string]*clientConn   // conn_id -> conn
+	subscribers           map[string]map[string]*clientConn // session_id -> conn_id -> conn
+	turnStartTimes        map[string]time.Time // session_id -> turn start time
+	clientsByUser         map[string]int
+	maxClientConnsPerUser int
 }
 
 type pendingPermission struct {
@@ -88,25 +91,28 @@ type runtimeConn struct {
 }
 
 type clientConn struct {
-	id       string
-	userID   string
-	username string
-	role     string
-	orgID    string
-	conn     *websocket.Conn
-	mu       sync.Mutex
+	id          string
+	userID      string
+	username    string
+	role        string
+	orgID       string
+	conn        *websocket.Conn
+	mu          sync.Mutex
+	msgTokens   float64
+	msgLastTime time.Time
 }
 
 // Options configures the Router.
 type Options struct {
-	TurnBased          bool
-	MaxPerUser         int
-	AllowedOrigins     []string // for WebSocket origin check
-	MaxClientMsgBytes  int64    // max WebSocket message size from clients (default 64KB)
-	MaxRuntimeMsgBytes int64    // max WebSocket message size from runtimes (default 1MB)
-	PermissionTimeout  time.Duration
-	FileStoragePath    string // path to store files
-	MaxFileBytes       int64  // max file size in bytes
+	TurnBased             bool
+	MaxPerUser            int
+	AllowedOrigins        []string // for WebSocket origin check
+	MaxClientMsgBytes     int64    // max WebSocket message size from clients (default 64KB)
+	MaxRuntimeMsgBytes    int64    // max WebSocket message size from runtimes (default 1MB)
+	PermissionTimeout     time.Duration
+	FileStoragePath       string // path to store files
+	MaxFileBytes          int64  // max file size in bytes
+	MaxClientConnsPerUser int
 }
 
 // New creates a new Router.
@@ -131,6 +137,11 @@ func New(s store.Store, ap auth.Provider, ra auth.RuntimeAuthProvider, logger *s
 		permTimeout = 60 * time.Second
 	}
 
+	maxConnsPerUser := opts.MaxClientConnsPerUser
+	if maxConnsPerUser == 0 {
+		maxConnsPerUser = 10
+	}
+
 	return &Router{
 		store:                 s,
 		authProvider:          ap,
@@ -150,6 +161,8 @@ func New(s store.Store, ap auth.Provider, ra auth.RuntimeAuthProvider, logger *s
 		clients:               make(map[string]*clientConn),
 		subscribers:           make(map[string]map[string]*clientConn),
 		turnStartTimes:        make(map[string]time.Time),
+		clientsByUser:         make(map[string]int),
+		maxClientConnsPerUser: maxConnsPerUser,
 	}
 }
 
@@ -227,6 +240,10 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 	}
 
 	r.mu.Lock()
+	if existing, ok := r.runtimes[hello.RuntimeID]; ok {
+		r.logger.Warn("runtime reconnect: closing previous connection", "runtime_id", hello.RuntimeID)
+		existing.conn.Close()
+	}
 	r.runtimes[hello.RuntimeID] = rtConn
 	r.mu.Unlock()
 
@@ -342,6 +359,9 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 // HandleClientWS handles WebSocket connections from UI clients.
 func (r *Router) HandleClientWS(w http.ResponseWriter, req *http.Request) {
 	// Extract JWT from query param or Authorization header.
+	// Security note: JWT in query parameter is required for WebSocket connections since
+	// browsers cannot set custom headers during the WebSocket handshake. Ensure server
+	// access logs are configured to exclude query parameters to prevent token leakage.
 	tokenStr := req.URL.Query().Get("token")
 	if tokenStr == "" {
 		tokenStr = req.Header.Get("Authorization")
@@ -374,6 +394,14 @@ func (r *Router) HandleClientWS(w http.ResponseWriter, req *http.Request) {
 	}
 
 	r.mu.Lock()
+	if r.clientsByUser[identity.UserID] >= r.maxClientConnsPerUser {
+		r.mu.Unlock()
+		r.logger.Warn("too many WebSocket connections for user", "user", identity.Username, "limit", r.maxClientConnsPerUser)
+		conn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "too many connections"))
+		return
+	}
+	r.clientsByUser[identity.UserID]++
 	r.clients[connID] = cc
 	r.mu.Unlock()
 
@@ -385,6 +413,10 @@ func (r *Router) HandleClientWS(w http.ResponseWriter, req *http.Request) {
 	defer func() {
 		r.mu.Lock()
 		delete(r.clients, connID)
+		r.clientsByUser[cc.userID]--
+		if r.clientsByUser[cc.userID] <= 0 {
+			delete(r.clientsByUser, cc.userID)
+		}
 		// Remove from all subscriptions.
 		for sessID, subs := range r.subscribers {
 			delete(subs, connID)
@@ -401,6 +433,11 @@ func (r *Router) HandleClientWS(w http.ResponseWriter, req *http.Request) {
 		if err != nil {
 			r.logger.Debug("client read error", "conn_id", connID, "error", err)
 			return
+		}
+
+		if !cc.allowMessage() {
+			r.logger.Debug("client message rate limited", "conn_id", connID)
+			continue
 		}
 
 		var env protocol.Envelope
@@ -432,6 +469,14 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 		var output protocol.AgentOutput
 		json.Unmarshal(data, &output)
 
+		// Verify session ownership.
+		ctx := context.Background()
+		sess, err := r.store.GetSession(ctx, output.SessionID)
+		if err != nil || sess == nil || sess.RuntimeID != runtimeID {
+			r.logger.Warn("agent.output from wrong runtime", "session_id", output.SessionID, "runtime_id", runtimeID)
+			return
+		}
+
 		// Check message content size.
 		if int64(len(output.Content)) > r.maxRuntimeMessageSize {
 			r.logger.Warn("agent output exceeds maximum size", "session_id", output.SessionID)
@@ -439,7 +484,6 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 		}
 
 		// Persist message with atomic seq assignment.
-		ctx := context.Background()
 		seq, err := r.store.AppendMessage(ctx, &store.Message{
 			ID:        uuid.New().String(),
 			SessionID: output.SessionID,
@@ -558,6 +602,23 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 		var fileMsg protocol.FileAvailable
 		json.Unmarshal(data, &fileMsg)
 
+		// Sanitize path components to prevent path traversal.
+		safeSessionID := filepath.Base(fileMsg.SessionID)
+		safeFileID := filepath.Base(fileMsg.Metadata.FileID)
+		safeName := filepath.Base(fileMsg.Metadata.Name)
+
+		if safeSessionID == "." || safeSessionID == ".." || safeFileID == "." || safeFileID == ".." || safeName == "." || safeName == ".." {
+			r.logger.Warn("path traversal attempt in file.available", "session_id", fileMsg.SessionID)
+			return
+		}
+
+		// Verify session ownership.
+		sess, err := r.store.GetSession(context.Background(), fileMsg.SessionID)
+		if err != nil || sess == nil || sess.RuntimeID != runtimeID {
+			r.logger.Warn("file.available from wrong runtime", "session_id", fileMsg.SessionID, "runtime_id", runtimeID)
+			return
+		}
+
 		// Decode base64 content.
 		fileData, err := base64.StdEncoding.DecodeString(fileMsg.Data)
 		if err != nil {
@@ -565,13 +626,27 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 			return
 		}
 
+		// Check file size limit.
+		if int64(len(fileData)) > r.maxFileBytes {
+			r.logger.Warn("file exceeds maximum size", "session_id", fileMsg.SessionID, "size", len(fileData), "max", r.maxFileBytes)
+			return
+		}
+
 		// Save to hub disk.
-		dir := filepath.Join(r.fileStoragePath, fileMsg.SessionID, fileMsg.Metadata.FileID)
+		dir := filepath.Join(r.fileStoragePath, safeSessionID, safeFileID)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			r.logger.Warn("failed to create file directory", "error", err)
 			return
 		}
-		filePath := filepath.Join(dir, fileMsg.Metadata.Name)
+		filePath := filepath.Join(dir, safeName)
+
+		// Verify the resolved path stays within the file storage directory.
+		absPath, err := filepath.Abs(filePath)
+		if err != nil || !strings.HasPrefix(absPath, filepath.Clean(r.fileStoragePath)+string(os.PathSeparator)) {
+			r.logger.Warn("path traversal blocked in file.available", "path", filePath)
+			return
+		}
+
 		if err := os.WriteFile(filePath, fileData, 0o644); err != nil {
 			r.logger.Warn("failed to write file", "error", err)
 			return
@@ -824,6 +899,33 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 	default:
 		r.logger.Warn("unknown client message type", "type", env.Type, "user", cc.username)
 	}
+}
+
+func (cc *clientConn) allowMessage() bool {
+	const rate = 30.0  // messages per second
+	const burst = 50.0 // max burst
+
+	now := time.Now()
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+
+	if cc.msgLastTime.IsZero() {
+		cc.msgTokens = burst
+		cc.msgLastTime = now
+	}
+
+	elapsed := now.Sub(cc.msgLastTime).Seconds()
+	cc.msgTokens += elapsed * rate
+	if cc.msgTokens > burst {
+		cc.msgTokens = burst
+	}
+	cc.msgLastTime = now
+
+	if cc.msgTokens < 1 {
+		return false
+	}
+	cc.msgTokens--
+	return true
 }
 
 // CreateSession creates a new session and sends the create request to the runtime.

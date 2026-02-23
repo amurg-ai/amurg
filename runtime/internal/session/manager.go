@@ -221,6 +221,13 @@ func (m *Manager) UpdateEndpointConfig(endpointID string, security *protocol.Sec
 	}
 
 	if security != nil {
+		// Block remote override of permission_mode to "skip" unless explicitly allowed.
+		if security.PermissionMode == "skip" && !m.cfg.AllowRemotePermissionSkip {
+			m.logger.Warn("blocked remote permission_mode override to 'skip'",
+				"endpoint_id", endpointID)
+			return fmt.Errorf("remote override of permission_mode to 'skip' is not allowed")
+		}
+
 		if epCfg.Security == nil {
 			epCfg.Security = &config.SecurityConfig{}
 		}

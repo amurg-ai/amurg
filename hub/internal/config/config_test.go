@@ -154,7 +154,7 @@ func TestValidateRequired(t *testing.T) {
 	// Missing server.addr
 	noAddr := `{
 		"server": {},
-		"auth": {"jwt_secret": "some-secret-value-long-enough"}
+		"auth": {"jwt_secret": "some-secret-value-long-enough-32chars!"}
 	}`
 	path := writeTempConfig(t, noAddr)
 	_, err := Load(path)
@@ -218,8 +218,8 @@ func TestApplyDefaults(t *testing.T) {
 	if cfg.Auth.DefaultEndpointAccess != "all" {
 		t.Errorf("default DefaultEndpointAccess: got %q, want %q", cfg.Auth.DefaultEndpointAccess, "all")
 	}
-	if len(cfg.Server.AllowedOrigins) != 1 || cfg.Server.AllowedOrigins[0] != "*" {
-		t.Errorf("default AllowedOrigins: got %v, want [*]", cfg.Server.AllowedOrigins)
+	if len(cfg.Server.AllowedOrigins) != 0 {
+		t.Errorf("default AllowedOrigins: got %v, want []", cfg.Server.AllowedOrigins)
 	}
 	if cfg.Auth.RuntimeTokenLifetime.Duration != 1*time.Hour {
 		t.Errorf("default RuntimeTokenLifetime: got %v, want 1h", cfg.Auth.RuntimeTokenLifetime.Duration)

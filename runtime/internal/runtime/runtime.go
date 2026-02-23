@@ -269,6 +269,15 @@ func (r *Runtime) handleEndpointConfigUpdate(env protocol.Envelope) error {
 		return fmt.Errorf("unmarshal endpoint config update: %w", err)
 	}
 
+	// Log security details before applying config override.
+	if update.Security != nil {
+		r.logger.Info("applying endpoint config override",
+			"endpoint_id", update.EndpointID,
+			"permission_mode", update.Security.PermissionMode,
+			"cwd", update.Security.Cwd,
+		)
+	}
+
 	err := r.sessions.UpdateEndpointConfig(update.EndpointID, update.Security, update.Limits)
 
 	ack := protocol.EndpointConfigAck{
@@ -372,6 +381,8 @@ func (r *Runtime) handlePermissionResponse(env protocol.Envelope) error {
 
 	if ok {
 		ch <- resp.Approved
+	} else {
+		r.logger.Warn("permission response for unknown request_id", "request_id", resp.RequestID)
 	}
 	return nil
 }

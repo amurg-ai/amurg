@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
+import { tokenGetter } from "@/api/client";
 
 interface VoiceInputProps {
   onResult: (transcript: string) => void;
@@ -14,17 +15,25 @@ interface VoiceConfig {
   whisperUrl: string;
 }
 
+function defaultWhisperUrl(): string {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${location.host}/asr`;
+}
+
 function loadConfig(): VoiceConfig {
   try {
     const s = localStorage.getItem("amurg-voice");
     if (s) {
       const p = JSON.parse(s);
-      return { mode: p.mode || "browser", whisperUrl: p.whisperUrl || "" };
+      return {
+        mode: p.mode || "browser",
+        whisperUrl: p.whisperUrl || defaultWhisperUrl(),
+      };
     }
   } catch {
     /* ignore */
   }
-  return { mode: "browser", whisperUrl: "" };
+  return { mode: "browser", whisperUrl: defaultWhisperUrl() };
 }
 
 function saveConfig(c: VoiceConfig) {
@@ -65,6 +74,7 @@ export function VoiceInput({
   const rafRef = useRef(0);
   const wsRef = useRef<WebSocket | null>(null);
   const mrRef = useRef<MediaRecorder | null>(null);
+  const pcmCtxRef = useRef<AudioContext | null>(null);
   const holdRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isHoldRef = useRef(false);
   const interimRef = useRef("");
@@ -75,6 +85,21 @@ export function VoiceInput({
   const hasMic =
     typeof navigator !== "undefined" &&
     !!navigator.mediaDevices?.getUserMedia;
+
+  // Auto-detect Whisper availability and default to it.
+  useEffect(() => {
+    // Only auto-switch if user hasn't explicitly chosen a mode.
+    if (localStorage.getItem("amurg-voice")) return;
+    fetch("/api/voice/config")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.whisper_available) {
+          handleConfig({ mode: "whisper", whisperUrl: defaultWhisperUrl() });
+        }
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     recRef.current = recording;
@@ -132,19 +157,26 @@ export function VoiceInput({
     }
     mrRef.current = null;
 
-    // Whisper WebSocket — delay close to receive final result.
+    // PCM AudioContext (whisper mode)
+    pcmCtxRef.current?.close().catch(() => {});
+    pcmCtxRef.current = null;
+
+    // Whisper WebSocket — send empty message to signal end-of-stream,
+    // then delay close to receive final transcription.
     const ws = wsRef.current;
     if (ws) {
       wsRef.current = null;
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(new ArrayBuffer(0));
+      }
       setTimeout(() => {
-        // If interim text wasn't resolved by server, promote it.
         if (interimRef.current) {
           onResult(interimRef.current);
           interimRef.current = "";
           onInterim?.("");
         }
         ws.close();
-      }, 800);
+      }, 1200);
     } else {
       // Browser mode: promote remaining interim immediately.
       if (interimRef.current) {
@@ -180,9 +212,19 @@ export function VoiceInput({
 
     if (config.mode === "whisper" && config.whisperUrl) {
       // ── Whisper WebSocket mode ──
+      // Authenticate the WebSocket with the user's JWT token.
+      const token = await tokenGetter();
+      if (!token) {
+        onError?.("Not authenticated");
+        stopMonitor();
+        setRec(false);
+        return;
+      }
+      const sep = config.whisperUrl.includes("?") ? "&" : "?";
+      const wsUrl = `${config.whisperUrl}${sep}token=${encodeURIComponent(token)}`;
       let ws: WebSocket;
       try {
-        ws = new WebSocket(config.whisperUrl);
+        ws = new WebSocket(wsUrl);
       } catch {
         onError?.("Failed to connect to whisper server");
         stopMonitor();
@@ -194,28 +236,23 @@ export function VoiceInput({
       ws.onmessage = (ev) => {
         try {
           const d = JSON.parse(ev.data);
-          const text = (
-            d.text ??
-            d.transcript ??
-            d.buffer ??
-            d.segments
-              ?.map((s: { text: string }) => s.text)
-              .join(" ") ??
-            ""
-          )
-            .toString()
-            .trim();
-          if (!text) return;
 
-          const isFinal = d.is_final !== false && d.type !== "partial";
-          if (isFinal) {
-            interimRef.current = "";
-            onResult(text);
-            onInterim?.("");
-          } else {
-            interimRef.current = text;
-            onInterim?.(text);
-          }
+          // Skip config messages from WhisperLiveKit.
+          if (d.type === "config" || d.type === "ready_to_stop") return;
+
+          // Extract text from WhisperLiveKit format.
+          // `lines` is cumulative (all finalized segments), `buffer_transcription` is the current partial.
+          const lines = Array.isArray(d.lines)
+            ? d.lines.map((l: { text: string }) => l.text).filter(Boolean).join(" ")
+            : "";
+          const buf = typeof d.buffer_transcription === "string" ? d.buffer_transcription : "";
+          const text = (lines + " " + buf).trim();
+
+          // Always treat as interim — WhisperLiveKit `lines` is cumulative,
+          // so calling onResult (which appends) would duplicate text.
+          // The final text is promoted to onResult in stop() when recording ends.
+          interimRef.current = text;
+          onInterim?.(text || "");
         } catch {
           /* ignore bad JSON */
         }
@@ -226,17 +263,44 @@ export function VoiceInput({
           ws.close();
           return;
         }
-        const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-          ? "audio/webm;codecs=opus"
-          : "audio/webm";
-        const mr = new MediaRecorder(stream, { mimeType: mime });
-        mrRef.current = mr;
-        mr.ondataavailable = (e) => {
-          if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-            ws.send(e.data);
+        // WhisperLiveKit with --pcm-input expects int16 PCM (s16le) at 16kHz.
+        // We capture at the native rate and resample + convert in the processor.
+        const audioCtx = new AudioContext();
+        pcmCtxRef.current = audioCtx;
+        const nativeRate = audioCtx.sampleRate;
+        const targetRate = 16000;
+        const source = audioCtx.createMediaStreamSource(stream);
+        const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+        processor.onaudioprocess = (e) => {
+          if (ws.readyState !== WebSocket.OPEN) return;
+          const input = e.inputBuffer.getChannelData(0);
+          let floats: Float32Array;
+          if (nativeRate === targetRate) {
+            floats = input;
+          } else {
+            // Linear interpolation resample to 16kHz.
+            const ratio = nativeRate / targetRate;
+            const outLen = Math.floor(input.length / ratio);
+            floats = new Float32Array(outLen);
+            for (let i = 0; i < outLen; i++) {
+              const srcIdx = i * ratio;
+              const lo = Math.floor(srcIdx);
+              const hi = Math.min(lo + 1, input.length - 1);
+              const frac = srcIdx - lo;
+              floats[i] = input[lo] * (1 - frac) + input[hi] * frac;
+            }
           }
+          // Convert float32 [-1,1] to int16 (s16le) for WhisperLiveKit.
+          const buf = new ArrayBuffer(floats.length * 2);
+          const view = new DataView(buf);
+          for (let i = 0; i < floats.length; i++) {
+            const s = Math.max(-1, Math.min(1, floats[i]));
+            view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+          }
+          ws.send(buf);
         };
-        mr.start(250); // Send chunks every 250ms
+        source.connect(processor);
+        processor.connect(audioCtx.destination);
       };
 
       ws.onerror = () => {
@@ -360,6 +424,7 @@ export function VoiceInput({
       if (holdRef.current) clearTimeout(holdRef.current);
       srRef.current?.stop();
       if (mrRef.current?.state !== "inactive") mrRef.current?.stop();
+      pcmCtxRef.current?.close().catch(() => {});
       wsRef.current?.close();
       stopMonitor();
     },
