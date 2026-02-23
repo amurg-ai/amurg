@@ -42,9 +42,36 @@ services:
     networks:
       - backend
 
+  # Optional: local Whisper server for voice-to-text.
+  # Enable with: docker compose --profile voice up -d
+  whisper:
+    image: mosacloud/whisper-livekit:latest
+    command: ["--model", "small", "--pcm-input"]
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    profiles:
+      - voice
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+        # Uncomment for NVIDIA GPU acceleration:
+        # reservations:
+        #   devices:
+        #     - driver: nvidia
+        #       count: 1
+        #       capabilities: [gpu]
+    volumes:
+      - whisper-models:/root/.cache
+    networks:
+      - backend
+
 networks:
   frontend:
   backend:
 
 volumes:
   hub-data:
+  whisper-models:

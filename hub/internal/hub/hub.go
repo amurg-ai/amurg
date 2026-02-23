@@ -91,6 +91,13 @@ func New(cfg *config.Config, logger *slog.Logger) (*Hub, error) {
 			logger.Warn("default admin credentials detected (admin/admin) — change immediately in production")
 		}
 	}
+	for _, origin := range cfg.Server.AllowedOrigins {
+		if origin == "*" {
+			logger.Warn("CORS allowed_origins contains wildcard '*' — restrict to specific origins in production")
+			break
+		}
+	}
+
 	if cfg.Server.UIStaticDir != "" {
 		if _, err := os.Stat(cfg.Server.UIStaticDir); os.IsNotExist(err) {
 			logger.Warn("UI static directory does not exist", "path", cfg.Server.UIStaticDir)
@@ -116,9 +123,12 @@ func (h *Hub) Run(ctx context.Context) error {
 	// Start idle reaper.
 	h.router.StartIdleReaper(ctx, h.cfg.Session.IdleTimeout.Duration, profileTimeouts)
 
+	// Start rate limiter cleanup tasks.
+	h.api.StartBackgroundTasks(ctx)
+
 	// Start retention purger.
 	if h.cfg.Storage.Retention.Duration > 0 {
-		go h.runRetentionPurger(ctx, h.cfg.Storage.Retention.Duration)
+		go h.runRetentionPurger(ctx, h.cfg.Storage.Retention.Duration, h.cfg.Storage.AuditRetention.Duration)
 	}
 
 	errCh := make(chan error, 1)
@@ -157,7 +167,7 @@ func (h *Hub) Run(ctx context.Context) error {
 	}
 }
 
-func (h *Hub) runRetentionPurger(ctx context.Context, retention time.Duration) {
+func (h *Hub) runRetentionPurger(ctx context.Context, retention, auditRetention time.Duration) {
 	ticker := time.NewTicker(1 * time.Hour)
 	defer ticker.Stop()
 	for {
@@ -165,13 +175,14 @@ func (h *Hub) runRetentionPurger(ctx context.Context, retention time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			cutoff := time.Now().Add(-retention)
-			if n, err := h.store.PurgeOldMessages(ctx, cutoff); err != nil {
+			msgCutoff := time.Now().Add(-retention)
+			if n, err := h.store.PurgeOldMessages(ctx, msgCutoff); err != nil {
 				h.logger.Warn("retention purge: messages failed", "error", err)
 			} else if n > 0 {
 				h.logger.Info("retention purge: deleted old messages", "count", n)
 			}
-			if n, err := h.store.PurgeOldAuditEvents(ctx, cutoff); err != nil {
+			auditCutoff := time.Now().Add(-auditRetention)
+			if n, err := h.store.PurgeOldAuditEvents(ctx, auditCutoff); err != nil {
 				h.logger.Warn("retention purge: audit events failed", "error", err)
 			} else if n > 0 {
 				h.logger.Info("retention purge: deleted old audit events", "count", n)

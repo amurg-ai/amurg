@@ -1,7 +1,8 @@
 {
   "server": {
     "addr": ":8080",
-    "ui_static_dir": "/var/lib/amurg/ui"
+    "ui_static_dir": "/var/lib/amurg/ui",
+    "whisper_url": "ws://whisper:8000/asr"
   },
   "auth": {
     "jwt_secret": "change-me-to-a-random-secret-at-least-32-chars",

@@ -7,8 +7,10 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -16,6 +18,17 @@ import (
 	"github.com/amurg-ai/amurg/hub/internal/store"
 	"github.com/amurg-ai/amurg/pkg/protocol"
 )
+
+// sanitizeFilename removes path separators and unsafe characters from a filename
+// for use in Content-Disposition headers.
+func sanitizeFilename(name string) string {
+	name = filepath.Base(name)
+	name = strings.ReplaceAll(name, "\\", "_")
+	if name == "." || name == ".." {
+		name = "download"
+	}
+	return name
+}
 
 // handleUploadFile handles POST /api/sessions/{sessionID}/files
 // Accepts multipart file upload, saves to hub disk, persists a file message,
@@ -186,7 +199,22 @@ func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 		mimeType = "application/octet-stream"
 	}
 
+	// Reject symlinks to prevent path traversal.
+	fi, err := os.Lstat(filePath)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "file not found")
+		return
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		writeError(w, http.StatusForbidden, "access denied")
+		return
+	}
+
+	safeName := sanitizeFilename(fileName)
 	w.Header().Set("Content-Type", mimeType)
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'")
+	w.Header().Set("Content-Disposition",
+		fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, safeName, url.PathEscape(safeName)))
 	http.ServeFile(w, r, filePath)
 }

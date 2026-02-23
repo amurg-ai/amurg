@@ -2,11 +2,30 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"time"
 )
+
+// knownWeakSecrets is a blocklist of secrets that must never be used in production.
+var knownWeakSecrets = map[string]bool{
+	"local-dev-secret-for-testing-only-32chars!": true,
+	"changeme": true,
+	"secret":   true,
+}
+
+// GenerateRandomSecret returns a cryptographically random 64-character hex string
+// suitable for use as a JWT secret.
+func GenerateRandomSecret() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate secret: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
 
 // Config is the top-level hub configuration.
 type Config struct {
@@ -28,6 +47,7 @@ type ServerConfig struct {
 	MaxBodyBytes    int64    `json:"max_body_bytes,omitempty"`   // max request body size; default 1MB
 	FileStoragePath string   `json:"file_storage_path,omitempty"` // path for uploaded files; default "./amurg-files"
 	MaxFileBytes    int64    `json:"max_file_bytes,omitempty"`    // max file size; default 10MB
+	WhisperURL      string   `json:"whisper_url,omitempty"`       // upstream Whisper WebSocket URL to proxy at /asr
 }
 
 // AuthConfig defines authentication settings.
@@ -57,9 +77,10 @@ type InitialAdmin struct {
 
 // StorageConfig defines database settings.
 type StorageConfig struct {
-	Driver   string `json:"driver"`   // "sqlite" (default)
-	DSN      string `json:"dsn"`      // e.g. "amurg.db" or ":memory:"
-	Retention Duration `json:"retention,omitempty"` // transcript retention
+	Driver         string   `json:"driver"`                    // "sqlite" (default)
+	DSN            string   `json:"dsn"`                       // e.g. "amurg.db" or ":memory:"
+	Retention      Duration `json:"retention,omitempty"`       // transcript retention
+	AuditRetention Duration `json:"audit_retention,omitempty"` // audit event retention; defaults to Retention
 }
 
 // SessionConfig defines session behavior.
@@ -140,6 +161,12 @@ func (c *Config) validate() error {
 	if c.Auth.JWTSecret == "" {
 		return fmt.Errorf("auth.jwt_secret is required")
 	}
+	if len(c.Auth.JWTSecret) < 32 {
+		return fmt.Errorf("auth.jwt_secret must be at least 32 characters")
+	}
+	if knownWeakSecrets[c.Auth.JWTSecret] {
+		return fmt.Errorf("auth.jwt_secret is a well-known weak secret — generate a new one")
+	}
 	return nil
 }
 
@@ -155,6 +182,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Storage.Retention.Duration == 0 {
 		c.Storage.Retention.Duration = 30 * 24 * time.Hour // 30 days
+	}
+	if c.Storage.AuditRetention.Duration == 0 {
+		c.Storage.AuditRetention.Duration = c.Storage.Retention.Duration
 	}
 	if c.Session.MaxPerUser == 0 {
 		c.Session.MaxPerUser = 20
@@ -173,9 +203,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Auth.DefaultEndpointAccess == "" {
 		c.Auth.DefaultEndpointAccess = "all"
-	}
-	if len(c.Server.AllowedOrigins) == 0 {
-		c.Server.AllowedOrigins = []string{"*"}
 	}
 	if c.Auth.RuntimeTokenLifetime.Duration == 0 {
 		c.Auth.RuntimeTokenLifetime.Duration = 1 * time.Hour

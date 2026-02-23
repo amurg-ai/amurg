@@ -269,7 +269,7 @@ func (s *SQLiteStore) GetUserByExternalID(ctx context.Context, externalID string
 
 func (s *SQLiteStore) ListUsers(ctx context.Context, orgID string) ([]User, error) {
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT id, org_id, external_id, username, password_hash, role, created_at FROM users WHERE org_id = ? ORDER BY created_at",
+		"SELECT id, org_id, external_id, username, role, created_at FROM users WHERE org_id = ? ORDER BY created_at",
 		orgID,
 	)
 	if err != nil {
@@ -280,7 +280,7 @@ func (s *SQLiteStore) ListUsers(ctx context.Context, orgID string) ([]User, erro
 	var users []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.OrgID, &u.ExternalID, &u.Username, &u.PasswordHash, &u.Role, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.OrgID, &u.ExternalID, &u.Username, &u.Role, &u.CreatedAt); err != nil {
 			return nil, err
 		}
 		users = append(users, u)

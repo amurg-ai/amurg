@@ -2,17 +2,21 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 	"github.com/amurg-ai/amurg/hub/internal/auth"
 	"github.com/amurg-ai/amurg/hub/internal/config"
 	"github.com/amurg-ai/amurg/hub/internal/router"
@@ -34,6 +38,9 @@ type Server struct {
 	maxBodyBytes          int64
 	fileStoragePath       string // path for uploaded files
 	maxFileBytes          int64  // max file upload size
+	whisperURL            string // upstream Whisper WebSocket URL for /asr proxy
+	loginRL               *rateLimiter
+	rl                    *rateLimiter
 }
 
 // NewServer creates a new API server.
@@ -50,11 +57,13 @@ func NewServer(s store.Store, ap auth.Provider, lp auth.LoginProvider, ra auth.R
 		maxBodyBytes:          cfg.Server.MaxBodyBytes,
 		fileStoragePath:       cfg.Server.FileStoragePath,
 		maxFileBytes:          cfg.Server.MaxFileBytes,
+		whisperURL:            cfg.Server.WhisperURL,
 	}
 
 	mux := chi.NewRouter()
 	mux.Use(chimw.Recoverer)
 	mux.Use(chimw.RealIP)
+	mux.Use(securityHeadersMiddleware)
 	mux.Use(makeCORSMiddleware(cfg.Server.AllowedOrigins))
 
 	// Health check routes (unauthenticated)
@@ -66,19 +75,27 @@ func NewServer(s store.Store, ap auth.Provider, lp auth.LoginProvider, ra auth.R
 
 	// Login route only registered when using builtin auth.
 	if lp != nil {
-		loginRL := newRateLimiter(5, 10)
-		mux.With(loginIPRateLimitMiddleware(loginRL)).Post("/api/auth/login", srv.handleLogin)
+		srv.loginRL = newRateLimiter(5, 10)
+		mux.With(loginIPRateLimitMiddleware(srv.loginRL)).Post("/api/auth/login", srv.handleLogin)
 	}
 
 	// WebSocket routes (auth handled inside)
 	mux.Get("/ws/runtime", rt.HandleRuntimeWS)
 	mux.Get("/ws/client", rt.HandleClientWS)
 
+	// Voice config — tells the UI whether Whisper is available.
+	mux.Get("/api/voice/config", srv.handleVoiceConfig)
+
+	// Whisper ASR WebSocket proxy (auth via ?token= query param, same as /ws/client).
+	if srv.whisperURL != "" {
+		mux.Get("/asr", srv.handleASRProxy)
+	}
+
 	// Authenticated API routes
-	rl := newRateLimiter(cfg.RateLimit.RequestsPerSecond, cfg.RateLimit.Burst)
+	srv.rl = newRateLimiter(cfg.RateLimit.RequestsPerSecond, cfg.RateLimit.Burst)
 	mux.Group(func(r chi.Router) {
 		r.Use(srv.authMiddleware)
-		r.Use(rateLimitMiddleware(rl))
+		r.Use(rateLimitMiddleware(srv.rl))
 
 		r.Get("/api/endpoints", srv.handleListEndpoints)
 		r.Get("/api/sessions", srv.handleListSessions)
@@ -131,6 +148,16 @@ func NewServer(s store.Store, ap auth.Provider, lp auth.LoginProvider, ra auth.R
 // Handler returns the HTTP handler.
 func (s *Server) Handler() http.Handler {
 	return s.mux
+}
+
+// StartBackgroundTasks starts periodic cleanup tasks for rate limiters.
+func (s *Server) StartBackgroundTasks(ctx context.Context) {
+	if s.loginRL != nil {
+		s.loginRL.StartCleanup(ctx, 5*time.Minute, 10*time.Minute)
+	}
+	if s.rl != nil {
+		s.rl.StartCleanup(ctx, 5*time.Minute, 10*time.Minute)
+	}
 }
 
 // --- Auth handlers ---
@@ -220,7 +247,23 @@ func (s *Server) handleListEndpoints(w http.ResponseWriter, r *http.Request) {
 		endpoints = filtered
 	}
 
-	writeJSON(w, http.StatusOK, endpoints)
+	// Enrich with runtime online status.
+	runtimes, _ := s.store.ListRuntimes(r.Context(), identity.OrgID)
+	onlineSet := make(map[string]bool, len(runtimes))
+	for _, rt := range runtimes {
+		onlineSet[rt.ID] = rt.Online
+	}
+
+	type endpointResponse struct {
+		store.Endpoint
+		Online bool `json:"online"`
+	}
+	result := make([]endpointResponse, len(endpoints))
+	for i, ep := range endpoints {
+		result[i] = endpointResponse{Endpoint: ep, Online: onlineSet[ep.RuntimeID]}
+	}
+
+	writeJSON(w, http.StatusOK, result)
 }
 
 // --- Session handlers ---
@@ -276,6 +319,8 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 				UserID: identity.UserID, EndpointID: req.EndpointID,
 				Detail: json.RawMessage(`{"reason":"max_sessions"}`), CreatedAt: time.Now(),
 			})
+			writeError(w, http.StatusTooManyRequests, "maximum sessions per user reached")
+			return
 		}
 		writeError(w, http.StatusInternalServerError, "failed to create session")
 		return
@@ -379,10 +424,6 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list users")
 		return
-	}
-	// Strip password hashes.
-	for i := range users {
-		users[i].PasswordHash = ""
 	}
 	writeJSON(w, http.StatusOK, users)
 }
@@ -734,6 +775,138 @@ func (s *Server) handleUpdateEndpointConfig(w http.ResponseWriter, r *http.Reque
 		"status":             "saved",
 		"pushed_to_runtime":  pushed,
 	})
+}
+
+// --- Voice / ASR handlers ---
+
+func (s *Server) handleVoiceConfig(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"whisper_available": s.whisperURL != "",
+	})
+}
+
+var asrUpgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+const (
+	// Max message from client: 64 KB covers ~2 seconds of 16kHz int16 PCM.
+	asrMaxClientMessage = 64 * 1024
+	// Max message from upstream Whisper: 16 KB (JSON transcription).
+	asrMaxUpstreamMessage = 16 * 1024
+	// Max concurrent ASR connections per user.
+	asrMaxPerUser = 3
+)
+
+// asrConns tracks active ASR connections per user for rate limiting.
+var (
+	asrConnsMu sync.Mutex
+	asrConns   = make(map[string]int) // userID → count
+)
+
+func (s *Server) handleASRProxy(w http.ResponseWriter, r *http.Request) {
+	// Authenticate via ?token= query param (same pattern as /ws/client).
+	tokenStr := r.URL.Query().Get("token")
+	if tokenStr == "" {
+		tokenStr = r.Header.Get("Authorization")
+		if len(tokenStr) > 7 && strings.HasPrefix(tokenStr, "Bearer ") {
+			tokenStr = tokenStr[7:]
+		}
+	}
+	if tokenStr == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	identity, err := s.authProvider.ValidateToken(r.Context(), tokenStr)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Per-user connection limit.
+	asrConnsMu.Lock()
+	if asrConns[identity.UserID] >= asrMaxPerUser {
+		asrConnsMu.Unlock()
+		http.Error(w, "too many voice connections", http.StatusTooManyRequests)
+		return
+	}
+	asrConns[identity.UserID]++
+	asrConnsMu.Unlock()
+	defer func() {
+		asrConnsMu.Lock()
+		asrConns[identity.UserID]--
+		if asrConns[identity.UserID] <= 0 {
+			delete(asrConns, identity.UserID)
+		}
+		asrConnsMu.Unlock()
+	}()
+
+	// Upgrade client connection.
+	clientConn, err := asrUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		s.logger.Warn("asr proxy: client upgrade failed", "error", err)
+		return
+	}
+	defer clientConn.Close()
+
+	clientConn.SetReadLimit(asrMaxClientMessage)
+
+	s.logger.Info("asr proxy: connected", "user", identity.Username)
+
+	// Connect to upstream Whisper server.
+	upstreamURL, err := url.Parse(s.whisperURL)
+	if err != nil {
+		s.logger.Warn("asr proxy: invalid whisper_url", "error", err)
+		clientConn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "bad upstream config"))
+		return
+	}
+
+	upstreamConn, _, err := websocket.DefaultDialer.Dial(upstreamURL.String(), nil)
+	if err != nil {
+		s.logger.Warn("asr proxy: upstream dial failed", "error", err)
+		clientConn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "whisper server unavailable"))
+		return
+	}
+	defer upstreamConn.Close()
+
+	upstreamConn.SetReadLimit(asrMaxUpstreamMessage)
+
+	// Bidirectional proxy.
+	done := make(chan struct{}, 2)
+
+	// Client → Upstream
+	go func() {
+		defer func() { done <- struct{}{} }()
+		for {
+			msgType, data, err := clientConn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if err := upstreamConn.WriteMessage(msgType, data); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Upstream → Client
+	go func() {
+		defer func() { done <- struct{}{} }()
+		for {
+			msgType, data, err := upstreamConn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if err := clientConn.WriteMessage(msgType, data); err != nil {
+				return
+			}
+		}
+	}()
+
+	<-done
+	s.logger.Info("asr proxy: disconnected", "user", identity.Username)
 }
 
 // --- Helpers ---
