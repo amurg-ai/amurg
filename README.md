@@ -311,6 +311,36 @@ Spawns a long-lived adapter process that communicates via JSON-Lines over stdin/
 
 The external adapter process receives JSON-Lines on stdin (`session.start`, `user.input`) and writes JSON-Lines to stdout (`output`, `turn.complete`, `file.output`). Each message includes a `session_id` field for multiplexing.
 
+## Voice Input
+
+The UI supports voice dictation with two backends — no server required for the default mode.
+
+### Modes
+
+| Mode | Backend | Setup required |
+|------|---------|----------------|
+| **Browser** (default) | Web Speech API (Chrome, Edge, Safari) | None — works out of the box |
+| **Local Whisper** | Self-hosted Whisper server via WebSocket | Run a Whisper ASR server, set the URL in settings |
+
+Switch modes via the gear icon next to the microphone button. Settings are saved in `localStorage` under the key `amurg-voice`.
+
+### How it works
+
+- **Hold to talk:** Press and hold the mic button. Release to stop.
+- **Tap to toggle:** Quick-tap the mic button to start, tap again to stop.
+- **Edit before send:** Transcribed text is appended to the input field. You can edit it before sending — nothing is sent automatically.
+- **Interim preview:** Partial transcription is shown above the input field in real time as you speak.
+
+### Local Whisper setup
+
+If you want private, offline speech recognition:
+
+1. Run a Whisper-compatible ASR server that accepts WebSocket connections and streams `audio/webm` chunks.
+2. Open the voice settings (gear icon next to the mic button).
+3. Select **Local Whisper** and enter the WebSocket URL (e.g., `ws://localhost:8000/asr`).
+
+The UI streams audio in 250ms chunks and expects JSON responses with a `text` or `transcript` field.
+
 ## Deployment
 
 ### Docker Compose (recommended)
