@@ -173,7 +173,7 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 		r.logger.Warn("runtime websocket upgrade failed", "error", err)
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Set read limit for runtime connections.
 	conn.SetReadLimit(r.maxRuntimeMessageSize)
@@ -242,23 +242,27 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 	r.mu.Lock()
 	if existing, ok := r.runtimes[hello.RuntimeID]; ok {
 		r.logger.Warn("runtime reconnect: closing previous connection", "runtime_id", hello.RuntimeID)
-		existing.conn.Close()
+		_ = existing.conn.Close()
 	}
 	r.runtimes[hello.RuntimeID] = rtConn
 	r.mu.Unlock()
 
 	// Update store.
 	ctx := context.Background()
-	r.store.UpsertRuntime(ctx, &store.Runtime{
+	if err := r.store.UpsertRuntime(ctx, &store.Runtime{
 		ID:       hello.RuntimeID,
 		OrgID:    orgID,
 		Name:     hello.RuntimeID,
 		Online:   true,
 		LastSeen: time.Now(),
-	})
+	}); err != nil {
+		r.logger.Warn("failed to upsert runtime", "runtime_id", hello.RuntimeID, "error", err)
+	}
 
 	// Register endpoints in store.
-	r.store.DeleteEndpointsByRuntime(ctx, hello.RuntimeID)
+	if err := r.store.DeleteEndpointsByRuntime(ctx, hello.RuntimeID); err != nil {
+		r.logger.Warn("failed to delete endpoints by runtime", "runtime_id", hello.RuntimeID, "error", err)
+	}
 	for _, ep := range hello.Endpoints {
 		capsJSON, _ := json.Marshal(ep.Caps)
 		tagsJSON, _ := json.Marshal(ep.Tags)
@@ -268,7 +272,7 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 				secJSON = string(b)
 			}
 		}
-		r.store.UpsertEndpoint(ctx, &store.Endpoint{
+		if err := r.store.UpsertEndpoint(ctx, &store.Endpoint{
 			ID:        ep.ID,
 			OrgID:     orgID,
 			RuntimeID: hello.RuntimeID,
@@ -277,7 +281,9 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 			Tags:      string(tagsJSON),
 			Caps:      string(capsJSON),
 			Security:  secJSON,
-		})
+		}); err != nil {
+			r.logger.Warn("failed to upsert endpoint", "endpoint_id", ep.ID, "error", err)
+		}
 	}
 
 	// Send ack.
@@ -294,12 +300,16 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 			var sec *protocol.SecurityProfile
 			if override.Security != "" && override.Security != "{}" {
 				sec = &protocol.SecurityProfile{}
-				json.Unmarshal([]byte(override.Security), sec)
+				if err := json.Unmarshal([]byte(override.Security), sec); err != nil {
+					r.logger.Warn("failed to unmarshal security override", "endpoint_id", ep.ID, "error", err)
+				}
 			}
 			var lim *protocol.EndpointLimits
 			if override.Limits != "" && override.Limits != "{}" {
 				lim = &protocol.EndpointLimits{}
-				json.Unmarshal([]byte(override.Limits), lim)
+				if err := json.Unmarshal([]byte(override.Limits), lim); err != nil {
+					r.logger.Warn("failed to unmarshal limits override", "endpoint_id", ep.ID, "error", err)
+				}
 			}
 			r.sendToConn(conn, protocol.TypeEndpointConfigUpdate, "", protocol.EndpointConfigUpdate{
 				EndpointID: ep.ID,
@@ -312,9 +322,11 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 
 	r.logger.Info("runtime connected", "runtime_id", hello.RuntimeID, "endpoints", len(hello.Endpoints))
 
-	r.store.LogAuditEvent(ctx, &store.AuditEvent{
+	if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{
 		ID: uuid.New().String(), OrgID: orgID, Action: "runtime.connect", RuntimeID: hello.RuntimeID, CreatedAt: time.Now(),
-	})
+	}); err != nil {
+		r.logger.Warn("failed to log audit event", "action", "runtime.connect", "error", err)
+	}
 
 	// Schedule token refresh if using time-limited tokens.
 	var refreshCancel context.CancelFunc

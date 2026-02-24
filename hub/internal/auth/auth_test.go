@@ -16,7 +16,7 @@ func newTestAuthService(t *testing.T) (*Service, store.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 
 	cfg := config.AuthConfig{
 		JWTSecret: "test-secret-at-least-32-chars-long",
@@ -175,7 +175,7 @@ func TestExpiredToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 
 	// Create a service with a very short (already past) expiry
 	cfg := config.AuthConfig{
