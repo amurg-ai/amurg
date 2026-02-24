@@ -1,13 +1,11 @@
 # Amurg
 
+[![CI](https://github.com/amurg-ai/amurg/actions/workflows/ci.yml/badge.svg)](https://github.com/amurg-ai/amurg/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/amurg-ai/amurg?label=release)](https://github.com/amurg-ai/amurg/releases)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8.svg)](https://go.dev/)
 
 **Self-hosted agent control plane. One surface. Full authority. No inbound ports.**
-
-## What is Amurg
-
-Amurg is a self-hosted system that lets you interact with any agent — CLI tools, batch jobs, HTTP services, or custom protocols — through a single mobile-friendly chat UI. Runtimes connect outbound to the hub, so you never expose inbound ports.
 
 ```
 ┌─────────┐     ┌─────────┐     ┌─────────┐     ┌─────────┐
@@ -16,23 +14,45 @@ Amurg is a self-hosted system that lets you interact with any agent — CLI tool
 └─────────┘     └─────────┘     └─────────┘     └─────────┘
 ```
 
+Amurg lets you interact with any agent — CLI tools, batch jobs, HTTP services, or custom protocols — through a single mobile-friendly chat UI. Runtimes connect outbound to the hub, so you never expose inbound ports.
+
+---
+
 ## Get Started
 
-### Quick Install (runtime binary)
-
-Install the runtime and configure it interactively:
+### 1. Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amurg-ai/amurg/main/scripts/install.sh | sh
+```
+
+<img src="https://amurg.ai/images/install-script.png" alt="Install script detecting OS, downloading binary, verifying checksum" width="600" />
+
+### 2. Configure
+
+The setup wizard walks you through hub connection, auth token, and agent endpoints:
+
+```bash
 amurg-runtime init
+```
+
+<img src="https://amurg.ai/images/runtime-init-wizard.png" alt="Interactive runtime setup wizard" width="600" />
+
+### 3. Run
+
+```bash
 amurg-runtime run
 ```
 
-This downloads a pre-built binary, walks you through setup (hub URL, auth token, agent endpoints), and starts the runtime.
+That's it. Your runtime connects to the hub and you can chat with your agents from any device.
 
-### Full Stack (Docker Compose)
+---
 
-Run both the hub and runtime together:
+## Self-Host the Hub
+
+For a full self-hosted stack, you also need the hub. Two options:
+
+### Docker Compose (recommended)
 
 ```bash
 git clone https://github.com/amurg-ai/amurg.git
@@ -40,9 +60,23 @@ cd amurg
 docker compose up -d
 ```
 
-The hub is now running on `http://localhost:8080`. Log in with `admin` / `admin`.
+The hub runs on `http://localhost:8080`. Log in with `admin` / `admin`.
 
-### Expose it to your phone
+### Standalone Binary
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/amurg-ai/amurg/main/scripts/install.sh | sh -s -- --binary=amurg-hub
+amurg-hub init
+amurg-hub run
+```
+
+<img src="https://amurg.ai/images/hub-init-wizard.png" alt="Hub setup wizard generating JWT secret, admin user, and runtime token" width="600" />
+
+The hub wizard auto-generates a JWT secret, admin credentials, and a runtime token.
+
+---
+
+## Expose to Your Phone
 
 **ngrok** (quickest):
 
@@ -58,20 +92,9 @@ cloudflared tunnel --url http://localhost:8080
 
 Open the printed URL on your phone and log in.
 
-### Production setup
-
-Before exposing to the internet, generate secure configs using the init wizards:
-
-```bash
-amurg-hub init       # generates JWT secret, admin credentials, runtime token
-amurg-runtime init   # configure hub connection and agent endpoints
-```
-
-The wizards auto-generate secrets and walk you through every setting.
-
 ## Documentation
 
-Full docs, configuration reference, adapter types, API reference, and deployment guides: **[amurg.ai](https://amurg.ai)**
+Full docs, configuration reference, adapter profiles, API reference, and deployment guides: **[amurg.ai/docs](https://amurg.ai/docs/)**
 
 ## Contributing
 
