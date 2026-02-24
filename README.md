@@ -18,9 +18,21 @@ Amurg is a self-hosted system that lets you interact with any agent — CLI tool
 
 ## Get Started
 
-This gets you Claude Code running through Amurg in a few minutes. You'll have a chat UI you can access from your phone.
+### Quick Install (runtime binary)
 
-### 1. Clone and start with Docker
+Install the runtime and configure it interactively:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/amurg-ai/amurg/main/scripts/install.sh | sh
+amurg-runtime init
+amurg-runtime run
+```
+
+This downloads a pre-built binary, walks you through setup (hub URL, auth token, agent endpoints), and starts the runtime.
+
+### Full Stack (Docker Compose)
+
+Run both the hub and runtime together:
 
 ```bash
 git clone https://github.com/amurg-ai/amurg.git
@@ -28,11 +40,9 @@ cd amurg
 docker compose up -d
 ```
 
-The hub is now running on `http://localhost:8080`. Open it in your browser and log in with `admin` / `admin`.
+The hub is now running on `http://localhost:8080`. Log in with `admin` / `admin`.
 
-### 2. Expose it to your phone
-
-Pick one:
+### Expose it to your phone
 
 **ngrok** (quickest):
 
@@ -48,14 +58,16 @@ cloudflared tunnel --url http://localhost:8080
 
 Open the printed URL on your phone and log in.
 
-### 3. Before you go public
+### Production setup
 
-The default config ships with placeholder secrets. Before exposing to the internet, edit the config files:
+Before exposing to the internet, generate secure configs using the init wizards:
 
-- **`hub/deploy/config.example.json`** — change `jwt_secret` and `initial_admin.password`
-- **`runtime/deploy/config.example.json`** — change `hub.token` to match the hub's `runtime_tokens[].token`
+```bash
+amurg-hub init       # generates JWT secret, admin credentials, runtime token
+amurg-runtime init   # configure hub connection and agent endpoints
+```
 
-Then restart: `docker compose up -d`.
+The wizards auto-generate secrets and walk you through every setting.
 
 ## Documentation
 

@@ -19,4 +19,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD pgrep amurg-runtime || exit 1
 
 ENTRYPOINT ["amurg-runtime"]
-CMD ["-config", "/etc/amurg/config.json"]
+CMD ["run", "--config", "/etc/amurg/config.json"]

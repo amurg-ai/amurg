@@ -2,6 +2,19 @@
 
 The Hub is the central server component. It handles authentication, message routing, session persistence, and serves the web UI.
 
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/amurg-ai/amurg/main/scripts/install.sh | sh -s -- --binary=amurg-hub
+```
+
+## Quick Setup
+
+```bash
+amurg-hub init    # interactive wizard — generates secrets, admin user, runtime token
+amurg-hub run     # start with generated config
+```
+
 ## Infrastructure Requirements
 
 | Resource | Minimum | Recommended |
@@ -50,12 +63,24 @@ cp hub/deploy/config.example.json hub/deploy/config.local.json
 | `logging.level` | Log level: debug, info, warn, error | `info` |
 | `logging.format` | Log format: text or json | `json` |
 
+## CLI Reference
+
+```
+amurg-hub run [config-file]       Start the hub
+amurg-hub run --config path       Start with explicit config path
+amurg-hub init                    Interactive setup wizard
+amurg-hub init --output path      Write config to specific path
+amurg-hub version                 Print version and exit
+```
+
+Running `amurg-hub` with no subcommand is equivalent to `amurg-hub run`.
+
 ## Run
 
 **Local development:**
 ```bash
 # Uses in-memory SQLite, debug logging, port 8090
-./bin/amurg-hub -config hub/deploy/config.local.json
+amurg-hub run --config hub/deploy/config.local.json
 ```
 
 **Production (Docker):**

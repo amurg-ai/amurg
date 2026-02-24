@@ -1,4 +1,4 @@
-.PHONY: all build build-runtime build-hub build-ui build-site clean test test-ui test-all lint dev-hub dev-runtime dev-ui dev-site
+.PHONY: all build build-runtime build-hub build-ui build-site clean test test-ui test-all lint dev-hub dev-runtime dev-ui dev-site release-snapshot
 
 GO := go
 GOFLAGS := -trimpath
@@ -46,16 +46,19 @@ fmt:
 	cd ui && npx prettier --write src/
 
 dev-hub:
-	$(GO) run ./hub/cmd/amurg-hub -config hub/deploy/config.local.json
+	$(GO) run ./hub/cmd/amurg-hub run --config hub/deploy/config.local.json
 
 dev-runtime:
-	$(GO) run ./runtime/cmd/amurg-runtime -config runtime/deploy/config.local.json
+	$(GO) run ./runtime/cmd/amurg-runtime run --config runtime/deploy/config.local.json
 
 dev-ui:
 	cd ui && npm run dev
 
 dev-site:
 	cd site && npm run dev
+
+release-snapshot:
+	goreleaser release --snapshot --clean
 
 docker-build:
 	docker compose build

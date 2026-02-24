@@ -1,0 +1,74 @@
+version: 2
+
+project_name: amurg
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: amurg-hub
+    main: ./hub/cmd/amurg-hub
+    binary: amurg-hub
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    flags:
+      - -trimpath
+
+  - id: amurg-runtime
+    main: ./runtime/cmd/amurg-runtime
+    binary: amurg-runtime
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    flags:
+      - -trimpath
+
+archives:
+  - id: amurg-hub
+    ids:
+      - amurg-hub
+    name_template: "amurg-hub_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+
+  - id: amurg-runtime
+    ids:
+      - amurg-runtime
+    name_template: "amurg-runtime_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+release:
+  github:
+    owner: amurg-ai
+    name: amurg
+  prerelease: auto
+  name_template: "v{{.Version}}"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"

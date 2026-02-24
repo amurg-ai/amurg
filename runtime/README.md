@@ -2,6 +2,19 @@
 
 The Runtime is a lightweight gateway deployed near agents. It connects outbound to the Hub, manages agent sessions, and forwards messages verbatim.
 
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/amurg-ai/amurg/main/scripts/install.sh | sh
+```
+
+## Quick Setup
+
+```bash
+amurg-runtime init    # interactive wizard — configures hub connection and endpoints
+amurg-runtime run     # start with generated config
+```
+
 ## Infrastructure Requirements
 
 | Resource | Minimum | Recommended |
@@ -119,11 +132,24 @@ Each endpoint defines an agent the runtime can manage. Four adapter profiles are
 
 See the [External Adapter Protocol](../specs.md) for the JSON-Lines message format.
 
+## CLI Reference
+
+```
+amurg-runtime run [config-file]       Start the runtime
+amurg-runtime run --config path       Start with explicit config path
+amurg-runtime init                    Interactive setup wizard
+amurg-runtime init --output path      Write config to specific path
+amurg-runtime init --systemd          Also generate a systemd unit file
+amurg-runtime version                 Print version and exit
+```
+
+Running `amurg-runtime` with no subcommand is equivalent to `amurg-runtime run`.
+
 ## Run
 
 **Local development:**
 ```bash
-./bin/amurg-runtime -config runtime/deploy/config.local.json
+amurg-runtime run --config runtime/deploy/config.local.json
 ```
 
 **Production (Docker):**
@@ -133,7 +159,7 @@ docker run -d \
   amurg-runtime
 ```
 
-**As a systemd service:**
+**As a systemd service** (generate with `amurg-runtime init --systemd`):
 ```ini
 [Unit]
 Description=Amurg Runtime
@@ -142,7 +168,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/amurg-runtime -config /etc/amurg/config.json
+ExecStart=/usr/local/bin/amurg-runtime run /etc/amurg/config.json
 Restart=always
 RestartSec=5
 User=amurg
