@@ -22,8 +22,16 @@ Amurg lets you interact with any agent — CLI tools, batch jobs, HTTP services,
 
 ### 1. Install
 
+**Linux / macOS:**
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amurg-ai/amurg/main/scripts/install.sh | sh
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/amurg-ai/amurg/main/scripts/install.ps1 | iex
 ```
 
 <img src="https://amurg.ai/images/install-script.png" alt="Install script detecting OS, downloading binary, verifying checksum" width="600" />
@@ -64,8 +72,18 @@ The hub runs on `http://localhost:8080`. Log in with `admin` / `admin`.
 
 ### Standalone Binary
 
+**Linux / macOS:**
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amurg-ai/amurg/main/scripts/install.sh | sh -s -- --binary=amurg-hub
+amurg-hub init
+amurg-hub run
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/amurg-ai/amurg/main/scripts/install.ps1 | iex -Binary amurg-hub
 amurg-hub init
 amurg-hub run
 ```

@@ -15,6 +15,7 @@ builds:
     goos:
       - linux
       - darwin
+      - windows
     goarch:
       - amd64
       - arm64
@@ -31,6 +32,7 @@ builds:
     goos:
       - linux
       - darwin
+      - windows
     goarch:
       - amd64
       - arm64
@@ -46,6 +48,10 @@ archives:
     name_template: "amurg-hub_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats:
       - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
 
   - id: amurg-runtime
     ids:
@@ -53,6 +59,10 @@ archives:
     name_template: "amurg-runtime_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats:
       - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
 
 checksum:
   name_template: "checksums.txt"
