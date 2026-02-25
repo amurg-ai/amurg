@@ -136,6 +136,39 @@ func (s *PostgresStore) migrate() error {
 		}
 	}
 
+	// Device codes and runtime tokens tables.
+	deviceCodeMigrations := []string{
+		`CREATE TABLE IF NOT EXISTS device_codes (
+			id TEXT PRIMARY KEY,
+			user_code TEXT UNIQUE NOT NULL,
+			polling_token TEXT UNIQUE NOT NULL,
+			org_id TEXT NOT NULL DEFAULT 'default',
+			status TEXT NOT NULL DEFAULT 'pending',
+			runtime_id TEXT NOT NULL DEFAULT '',
+			token TEXT NOT NULL DEFAULT '',
+			approved_by TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			expires_at TIMESTAMPTZ NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS runtime_tokens (
+			id TEXT PRIMARY KEY,
+			org_id TEXT NOT NULL DEFAULT 'default',
+			runtime_id TEXT NOT NULL,
+			token_hash TEXT NOT NULL,
+			name TEXT NOT NULL DEFAULT '',
+			created_by TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			last_used_at TIMESTAMPTZ
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_runtime_tokens_hash ON runtime_tokens(token_hash)`,
+		`CREATE INDEX IF NOT EXISTS idx_runtime_tokens_org ON runtime_tokens(org_id)`,
+	}
+	for _, m := range deviceCodeMigrations {
+		if _, err := s.db.Exec(m); err != nil {
+			return fmt.Errorf("migration failed: %w\n  SQL: %s", err, m)
+		}
+	}
+
 	return nil
 }
 
@@ -756,5 +789,116 @@ func (s *PostgresStore) ListEndpointConfigOverrides(ctx context.Context, orgID s
 
 func (s *PostgresStore) DeleteEndpointConfigOverride(ctx context.Context, endpointID string) error {
 	_, err := s.db.ExecContext(ctx, "DELETE FROM endpoint_config_overrides WHERE endpoint_id = $1", endpointID)
+	return err
+}
+
+// --- Device Codes ---
+
+func (s *PostgresStore) CreateDeviceCode(ctx context.Context, dc *DeviceCode) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO device_codes (id, user_code, polling_token, org_id, status, runtime_id, token, approved_by, created_at, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		dc.ID, dc.UserCode, dc.PollingToken, dc.OrgID, dc.Status, dc.RuntimeID, dc.Token, dc.ApprovedBy, dc.CreatedAt, dc.ExpiresAt,
+	)
+	return err
+}
+
+func (s *PostgresStore) GetDeviceCodeByUserCode(ctx context.Context, userCode string) (*DeviceCode, error) {
+	var dc DeviceCode
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, user_code, polling_token, org_id, status, runtime_id, token, approved_by, created_at, expires_at
+		 FROM device_codes WHERE user_code = $1`, userCode,
+	).Scan(&dc.ID, &dc.UserCode, &dc.PollingToken, &dc.OrgID, &dc.Status, &dc.RuntimeID, &dc.Token, &dc.ApprovedBy, &dc.CreatedAt, &dc.ExpiresAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return &dc, err
+}
+
+func (s *PostgresStore) GetDeviceCodeByPollingToken(ctx context.Context, pollingToken string) (*DeviceCode, error) {
+	var dc DeviceCode
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, user_code, polling_token, org_id, status, runtime_id, token, approved_by, created_at, expires_at
+		 FROM device_codes WHERE polling_token = $1`, pollingToken,
+	).Scan(&dc.ID, &dc.UserCode, &dc.PollingToken, &dc.OrgID, &dc.Status, &dc.RuntimeID, &dc.Token, &dc.ApprovedBy, &dc.CreatedAt, &dc.ExpiresAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return &dc, err
+}
+
+func (s *PostgresStore) UpdateDeviceCodeStatus(ctx context.Context, id, status, runtimeID, token, approvedBy string) error {
+	_, err := s.db.ExecContext(ctx,
+		"UPDATE device_codes SET status = $1, runtime_id = $2, token = $3, approved_by = $4 WHERE id = $5",
+		status, runtimeID, token, approvedBy, id,
+	)
+	return err
+}
+
+func (s *PostgresStore) PurgeExpiredDeviceCodes(ctx context.Context) (int64, error) {
+	result, err := s.db.ExecContext(ctx,
+		"DELETE FROM device_codes WHERE expires_at < $1 OR status IN ('approved', 'expired')",
+		time.Now(),
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// --- Runtime Tokens ---
+
+func (s *PostgresStore) CreateRuntimeToken(ctx context.Context, rt *RuntimeToken) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO runtime_tokens (id, org_id, runtime_id, token_hash, name, created_by, created_at, last_used_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		rt.ID, rt.OrgID, rt.RuntimeID, rt.TokenHash, rt.Name, rt.CreatedBy, rt.CreatedAt, rt.LastUsedAt,
+	)
+	return err
+}
+
+func (s *PostgresStore) GetRuntimeTokenByHash(ctx context.Context, tokenHash string) (*RuntimeToken, error) {
+	var rt RuntimeToken
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, org_id, runtime_id, token_hash, name, created_by, created_at, last_used_at
+		 FROM runtime_tokens WHERE token_hash = $1`, tokenHash,
+	).Scan(&rt.ID, &rt.OrgID, &rt.RuntimeID, &rt.TokenHash, &rt.Name, &rt.CreatedBy, &rt.CreatedAt, &rt.LastUsedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return &rt, err
+}
+
+func (s *PostgresStore) ListRuntimeTokens(ctx context.Context, orgID string) ([]RuntimeToken, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, org_id, runtime_id, token_hash, name, created_by, created_at, last_used_at
+		 FROM runtime_tokens WHERE org_id = $1 ORDER BY created_at DESC`, orgID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var tokens []RuntimeToken
+	for rows.Next() {
+		var rt RuntimeToken
+		if err := rows.Scan(&rt.ID, &rt.OrgID, &rt.RuntimeID, &rt.TokenHash, &rt.Name, &rt.CreatedBy, &rt.CreatedAt, &rt.LastUsedAt); err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, rt)
+	}
+	return tokens, rows.Err()
+}
+
+func (s *PostgresStore) RevokeRuntimeToken(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM runtime_tokens WHERE id = $1", id)
+	return err
+}
+
+func (s *PostgresStore) UpdateRuntimeTokenLastUsed(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx,
+		"UPDATE runtime_tokens SET last_used_at = $1 WHERE id = $2",
+		time.Now(), id,
+	)
 	return err
 }

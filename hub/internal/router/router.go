@@ -4,7 +4,9 @@ package router
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -203,8 +205,9 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Validate runtime token: try time-limited HMAC first, then static.
+	// Validate runtime token: try time-limited HMAC first, then static, then DB.
 	tokenValid := false
+	dbOrgID := "" // set by DB token lookup if matched
 	if r.runtimeAuth != nil && r.runtimeAuth.RuntimeTokenSecret() != "" {
 		runtimeID, err := r.runtimeAuth.ValidateTimeLimitedToken(hello.Token)
 		if err == nil && runtimeID == hello.RuntimeID {
@@ -214,16 +217,30 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 	if !tokenValid {
 		// Fall back to static token validation.
 		if r.runtimeAuth == nil || !r.runtimeAuth.ValidateRuntimeToken(hello.RuntimeID, hello.Token) {
-			r.sendToConn(conn, protocol.TypeHelloAck, "", protocol.HelloAck{
-				OK:    false,
-				Error: "invalid runtime credentials",
-			})
-			return
+			// Try DB-stored runtime token (device-code flow).
+			tokenHash := routerSha256hex(hello.Token)
+			if rt, err := r.store.GetRuntimeTokenByHash(context.Background(), tokenHash); err == nil && rt != nil && rt.RuntimeID == hello.RuntimeID {
+				tokenValid = true
+				dbOrgID = rt.OrgID
+				go func() { _ = r.store.UpdateRuntimeTokenLastUsed(context.Background(), rt.ID) }()
+			}
+		} else {
+			tokenValid = true
 		}
 	}
+	if !tokenValid {
+		r.sendToConn(conn, protocol.TypeHelloAck, "", protocol.HelloAck{
+			OK:    false,
+			Error: "invalid runtime credentials",
+		})
+		return
+	}
 
-	// Determine org_id: use hello.OrgID if set, default to "default".
-	orgID := hello.OrgID
+	// Determine org_id: prefer DB token org, then hello.OrgID, then "default".
+	orgID := dbOrgID
+	if orgID == "" {
+		orgID = hello.OrgID
+	}
 	if orgID == "" {
 		orgID = "default"
 	}
@@ -1315,4 +1332,9 @@ func (r *Router) sendToConn(conn *websocket.Conn, msgType, sessionID string, pay
 	}
 
 	_ = conn.WriteMessage(websocket.TextMessage, data)
+}
+
+func routerSha256hex(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
 }
