@@ -67,16 +67,16 @@ function PermissionRequestCard({
         )}
 
         {/* Actions */}
-        <div className="flex items-center gap-3 mt-2">
+        <div className="flex flex-wrap items-center gap-3 mt-2">
           <button
             onClick={() => onRespond(sessionId, requestId, true, alwaysAllow)}
-            className="px-3 py-1 bg-green-700 hover:bg-green-600 text-white text-xs font-medium rounded transition-colors"
+            className="px-4 py-2 bg-green-700 hover:bg-green-600 text-white text-sm font-medium rounded-lg transition-colors"
           >
             Approve
           </button>
           <button
             onClick={() => onRespond(sessionId, requestId, false)}
-            className="px-3 py-1 bg-red-700 hover:bg-red-600 text-white text-xs font-medium rounded transition-colors"
+            className="px-4 py-2 bg-red-700 hover:bg-red-600 text-white text-sm font-medium rounded-lg transition-colors"
           >
             Deny
           </button>
@@ -85,7 +85,7 @@ function PermissionRequestCard({
               type="checkbox"
               checked={alwaysAllow}
               onChange={(e) => setAlwaysAllow(e.target.checked)}
-              className="rounded border-amber-600 bg-amber-950 text-teal-500 focus:ring-teal-500 focus:ring-offset-0 w-3.5 h-3.5"
+              className="rounded border-amber-600 bg-amber-950 text-teal-500 focus:ring-teal-500 focus:ring-offset-0 w-4 h-4"
             />
             Always allow <span className="font-mono">{tool}</span> this session
           </label>

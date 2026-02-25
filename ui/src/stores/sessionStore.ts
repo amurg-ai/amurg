@@ -59,6 +59,7 @@ interface SessionState {
   loadSessions: () => Promise<void>;
   createSession: (endpointId: string) => Promise<SessionInfo>;
   selectSession: (sessionId: string) => Promise<void>;
+  deselectSession: () => void;
   sendMessage: (content: string) => void;
   stopSession: () => void;
   closeSession: (sessionId: string) => Promise<void>;
@@ -365,6 +366,14 @@ export const useSessionStore = create<SessionState>((set, get) => {
         0
       );
       socket.subscribe(sessionId, maxSeq);
+    },
+
+    deselectSession: () => {
+      const { activeSessionId } = get();
+      if (activeSessionId) {
+        socket.unsubscribe(activeSessionId);
+      }
+      set({ activeSessionId: null });
     },
 
     sendMessage: (content: string) => {

@@ -1,61 +1,7 @@
 import { useEffect, useState } from "react";
 import { useSessionStore } from "@/stores/sessionStore";
 import { PROFILE_DISPLAY } from "@/types";
-import type { SecurityProfile } from "@/types";
-
-function SecurityBadge({ security }: { security?: string | SecurityProfile }) {
-  if (!security) return null;
-
-  let parsed: SecurityProfile;
-  if (typeof security === "string") {
-    try {
-      parsed = JSON.parse(security);
-    } catch {
-      return null;
-    }
-  } else {
-    parsed = security;
-  }
-
-  // Don't show badge for empty security config
-  if (!parsed.permission_mode && !parsed.allowed_tools?.length) return null;
-
-  const mode = parsed.permission_mode || "auto";
-
-  let icon: string;
-  let color: string;
-  let label: string;
-
-  switch (mode) {
-    case "strict":
-      icon = "\uD83D\uDD12"; // lock
-      color = "text-amber-400";
-      label = "Strict permissions";
-      break;
-    case "skip":
-      icon = "\u26A0\uFE0F"; // warning
-      color = "text-red-400";
-      label = "Permissions skipped";
-      break;
-    default:
-      icon = "\uD83D\uDEE1\uFE0F"; // shield
-      color = "text-teal-400";
-      label = "Auto permissions";
-  }
-
-  const details: string[] = [];
-  if (parsed.allowed_tools?.length) details.push(`Tools: ${parsed.allowed_tools.join(", ")}`);
-  if (parsed.allowed_paths?.length) details.push(`Paths: ${parsed.allowed_paths.join(", ")}`);
-  if (parsed.cwd) details.push(`CWD: ${parsed.cwd}`);
-
-  const tooltip = `${label}${details.length ? "\n" + details.join("\n") : ""}`;
-
-  return (
-    <span className={`${color} text-xs`} title={tooltip}>
-      {icon}
-    </span>
-  );
-}
+import { SecurityBadge } from "@/components/SecurityBadge";
 
 interface EndpointPickerProps {
   onClose: () => void;
@@ -96,7 +42,7 @@ export function EndpointPicker({ onClose }: EndpointPickerProps) {
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md bg-slate-800 rounded-2xl border border-slate-700 shadow-xl"
+        className="w-full max-w-md bg-slate-800 rounded-2xl border border-slate-700 shadow-xl animate-fade-in"
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
@@ -109,7 +55,7 @@ export function EndpointPicker({ onClose }: EndpointPickerProps) {
           <div className="flex items-center gap-2">
             <button
               onClick={handleRefresh}
-              className="text-slate-400 hover:text-slate-200 p-1"
+              className="text-slate-400 hover:text-slate-200 p-2 rounded-lg"
               title="Refresh"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -119,7 +65,7 @@ export function EndpointPicker({ onClose }: EndpointPickerProps) {
             </button>
             <button
               onClick={onClose}
-              className="text-slate-400 hover:text-slate-200 p-1"
+              className="text-slate-400 hover:text-slate-200 p-2 rounded-lg"
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -155,14 +101,17 @@ export function EndpointPicker({ onClose }: EndpointPickerProps) {
                     key={ep.id}
                     onClick={() => handleSelect(ep.id)}
                     disabled={!!creating}
-                    className="w-full text-left px-4 py-3 rounded-xl bg-slate-700/50 hover:bg-slate-700
-                               border border-slate-600/50 hover:border-slate-500 transition-colors
+                    className="w-full text-left px-4 py-4 rounded-xl bg-slate-700/50 hover:bg-slate-700
+                               border border-slate-600/50 hover:border-teal-500/50
+                               hover:shadow-md hover:shadow-teal-900/10
+                               active:scale-[0.99]
+                               transition-all duration-150
                                disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <div className="flex items-center gap-3">
                       <span
                         className={`
-                          inline-flex items-center justify-center w-10 h-10 rounded-lg text-lg
+                          inline-flex items-center justify-center w-12 h-12 rounded-xl text-xl
                           ${profile.color} text-white
                         `}
                       >

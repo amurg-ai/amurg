@@ -107,7 +107,7 @@ export function MessageInput() {
 
   return (
     <div
-      className={`border-t border-slate-700 bg-slate-800/50 px-4 py-2 ${dragOver ? "ring-2 ring-teal-500/50 bg-teal-900/10" : ""}`}
+      className={`border-t border-slate-700 bg-slate-800/50 px-3 sm:px-4 py-3 ${dragOver ? "ring-2 ring-teal-500/50 bg-teal-900/10" : ""}`}
       onDrop={handleDrop}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -143,10 +143,10 @@ export function MessageInput() {
           type="button"
           onClick={() => fileInputRef.current?.click()}
           disabled={!activeSessionId || uploading}
-          className="flex-shrink-0 pt-2 text-slate-500 hover:text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          className="flex-shrink-0 p-2 text-slate-500 hover:text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors rounded-lg"
           title="Attach file"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5">
             <path fillRule="evenodd" d="M15.621 4.379a3 3 0 0 0-4.242 0l-7 7a3 3 0 0 0 4.241 4.243h.001l.497-.5a.75.75 0 0 1 1.064 1.057l-.498.501a4.5 4.5 0 0 1-6.364-6.364l7-7a4.5 4.5 0 0 1 6.368 6.36l-3.455 3.553A2.625 2.625 0 1 1 9.52 9.52l3.45-3.451a.75.75 0 1 1 1.061 1.06l-3.45 3.451a1.125 1.125 0 0 0 1.587 1.595l3.454-3.553a3 3 0 0 0 0-4.242Z" clipRule="evenodd" />
           </svg>
         </button>

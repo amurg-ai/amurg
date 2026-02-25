@@ -83,7 +83,13 @@ export function MessageList() {
   if (sessionMessages.length === 0 && !isResponding) {
     return (
       <div className="flex items-center justify-center h-full text-slate-500">
-        <p>Send a message to start the execution</p>
+        <div className="text-center animate-fade-in">
+          <svg className="w-10 h-10 mx-auto mb-3 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+              d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+          <p className="text-sm text-slate-400">Send a message to start the execution</p>
+        </div>
       </div>
     );
   }

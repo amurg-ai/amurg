@@ -17,7 +17,7 @@ export function SessionList({ onSelect }: SessionListProps) {
   }
 
   return (
-    <div className="space-y-1 p-2">
+    <div className="space-y-0.5 p-2">
       {sessions.map((session) => {
         const isActive = session.id === activeSessionId;
         const profile = PROFILE_DISPLAY[session.profile] || {
@@ -35,18 +35,18 @@ export function SessionList({ onSelect }: SessionListProps) {
               onSelect();
             }}
             className={`
-              w-full text-left px-3 py-2.5 rounded-lg transition-colors text-sm
+              w-full text-left px-3 py-3 rounded-lg transition-all duration-150 text-sm
               ${
                 isActive
-                  ? "bg-slate-700 text-slate-100"
-                  : "text-slate-300 hover:bg-slate-700/50"
+                  ? "bg-teal-900/30 text-slate-100 border-l-2 border-teal-400"
+                  : "text-slate-300 hover:bg-slate-700/50 border-l-2 border-transparent"
               }
             `}
           >
             <div className="flex items-center gap-2">
               <span
                 className={`
-                  inline-flex items-center justify-center w-6 h-6 rounded text-xs
+                  inline-flex items-center justify-center w-8 h-8 rounded-lg text-sm
                   ${profile.color} text-white
                 `}
               >
