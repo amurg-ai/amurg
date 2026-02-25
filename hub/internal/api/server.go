@@ -3,6 +3,9 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -41,6 +44,7 @@ type Server struct {
 	whisperURL            string // upstream Whisper WebSocket URL for /asr proxy
 	loginRL               *rateLimiter
 	rl                    *rateLimiter
+	deviceCodeRL          *rateLimiter
 }
 
 // NewServer creates a new API server.
@@ -78,6 +82,11 @@ func NewServer(s store.Store, ap auth.Provider, lp auth.LoginProvider, ra auth.R
 		srv.loginRL = newRateLimiter(5, 10)
 		mux.With(loginIPRateLimitMiddleware(srv.loginRL)).Post("/api/auth/login", srv.handleLogin)
 	}
+
+	// Device-code registration (unauthenticated, rate-limited by IP)
+	srv.deviceCodeRL = newRateLimiter(3, 5)
+	mux.With(loginIPRateLimitMiddleware(srv.deviceCodeRL)).Post("/api/runtime/register", srv.handleRuntimeRegister)
+	mux.With(loginIPRateLimitMiddleware(srv.deviceCodeRL)).Post("/api/runtime/register/poll", srv.handleRuntimeRegisterPoll)
 
 	// WebSocket routes (auth handled inside)
 	mux.Get("/ws/runtime", rt.HandleRuntimeWS)
@@ -124,6 +133,7 @@ func NewServer(s store.Store, ap auth.Provider, lp auth.LoginProvider, ra auth.R
 			r.Get("/api/admin/endpoints", srv.handleAdminListEndpoints)
 			r.Get("/api/admin/endpoints/{endpointID}/config", srv.handleGetEndpointConfig)
 			r.Put("/api/admin/endpoints/{endpointID}/config", srv.handleUpdateEndpointConfig)
+			r.Post("/api/runtime/register/approve", srv.handleRuntimeRegisterApprove)
 		})
 	})
 
@@ -157,6 +167,9 @@ func (s *Server) StartBackgroundTasks(ctx context.Context) {
 	}
 	if s.rl != nil {
 		s.rl.StartCleanup(ctx, 5*time.Minute, 10*time.Minute)
+	}
+	if s.deviceCodeRL != nil {
+		s.deviceCodeRL.StartCleanup(ctx, 5*time.Minute, 10*time.Minute)
 	}
 }
 
@@ -921,6 +934,173 @@ func (s *Server) handleASRProxy(w http.ResponseWriter, r *http.Request) {
 
 	<-done
 	s.logger.Info("asr proxy: disconnected", "user", identity.Username)
+}
+
+// --- Device-code registration handlers ---
+
+func (s *Server) handleRuntimeRegister(w http.ResponseWriter, r *http.Request) {
+	userCode := generateUserCode()
+	pollingToken := generateHexToken(32)
+	id := uuid.New().String()
+	dc := &store.DeviceCode{
+		ID:           id,
+		UserCode:     userCode,
+		PollingToken: pollingToken,
+		OrgID:        "default",
+		Status:       "pending",
+		CreatedAt:    time.Now(),
+		ExpiresAt:    time.Now().Add(5 * time.Minute),
+	}
+	if err := s.store.CreateDeviceCode(r.Context(), dc); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create device code")
+		return
+	}
+	go func() { _, _ = s.store.PurgeExpiredDeviceCodes(context.Background()) }()
+
+	scheme := "https"
+	if r.TLS == nil {
+		scheme = "http"
+	}
+	if fwd := r.Header.Get("X-Forwarded-Proto"); fwd != "" {
+		scheme = fwd
+	}
+	verificationURL := fmt.Sprintf("%s://%s/connect", scheme, r.Host)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user_code":        userCode,
+		"verification_url": verificationURL,
+		"polling_token":    pollingToken,
+		"expires_in":       300,
+		"interval":         5,
+	})
+}
+
+func (s *Server) handleRuntimeRegisterPoll(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, s.maxBodyBytes)
+	var req struct {
+		PollingToken string `json:"polling_token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.PollingToken == "" {
+		writeError(w, http.StatusBadRequest, "polling_token is required")
+		return
+	}
+
+	dc, err := s.store.GetDeviceCodeByPollingToken(r.Context(), req.PollingToken)
+	if err != nil || dc == nil {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "expired"})
+		return
+	}
+
+	if time.Now().After(dc.ExpiresAt) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "expired"})
+		return
+	}
+
+	switch dc.Status {
+	case "approved":
+		token := dc.Token
+		_ = s.store.UpdateDeviceCodeStatus(r.Context(), dc.ID, "approved", dc.RuntimeID, "", dc.ApprovedBy)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":     "approved",
+			"token":      token,
+			"runtime_id": dc.RuntimeID,
+			"org_id":     dc.OrgID,
+		})
+	case "pending":
+		writeJSON(w, http.StatusOK, map[string]string{"status": "pending"})
+	default:
+		writeJSON(w, http.StatusOK, map[string]string{"status": dc.Status})
+	}
+}
+
+func (s *Server) handleRuntimeRegisterApprove(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, s.maxBodyBytes)
+	identity := getIdentityFromContext(r.Context())
+
+	var req struct {
+		UserCode    string `json:"user_code"`
+		RuntimeName string `json:"runtime_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UserCode == "" {
+		writeError(w, http.StatusBadRequest, "user_code is required")
+		return
+	}
+
+	dc, err := s.store.GetDeviceCodeByUserCode(r.Context(), req.UserCode)
+	if err != nil || dc == nil {
+		writeError(w, http.StatusNotFound, "device code not found")
+		return
+	}
+	if dc.Status != "pending" {
+		writeError(w, http.StatusConflict, "device code already "+dc.Status)
+		return
+	}
+	if time.Now().After(dc.ExpiresAt) {
+		writeError(w, http.StatusGone, "device code expired")
+		return
+	}
+
+	runtimeID := "runtime-" + generateHexToken(4)
+	if req.RuntimeName == "" {
+		req.RuntimeName = runtimeID
+	}
+	token := generateHexToken(32)
+	tokenHash := sha256hex(token)
+
+	if err := s.store.CreateRuntimeToken(r.Context(), &store.RuntimeToken{
+		ID:        uuid.New().String(),
+		OrgID:     identity.OrgID,
+		RuntimeID: runtimeID,
+		TokenHash: tokenHash,
+		Name:      req.RuntimeName,
+		CreatedBy: identity.UserID,
+		CreatedAt: time.Now(),
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create runtime token")
+		return
+	}
+
+	if err := s.store.UpdateDeviceCodeStatus(r.Context(), dc.ID, "approved", runtimeID, token, identity.UserID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to approve device code")
+		return
+	}
+
+	_ = s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
+		ID:        uuid.New().String(),
+		OrgID:     identity.OrgID,
+		Action:    "runtime.device_code_approved",
+		UserID:    identity.UserID,
+		RuntimeID: runtimeID,
+		Detail:    json.RawMessage(fmt.Sprintf(`{"runtime_name":%q,"user_code":%q}`, req.RuntimeName, req.UserCode)),
+		CreatedAt: time.Now(),
+	})
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"runtime_id": runtimeID,
+	})
+}
+
+func generateUserCode() string {
+	const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // no I,O,0,1 to avoid confusion
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	code := make([]byte, 8)
+	for i := range code {
+		code[i] = chars[int(b[i])%len(chars)]
+	}
+	return string(code[:4]) + "-" + string(code[4:])
+}
+
+func generateHexToken(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func sha256hex(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
 }
 
 // --- Helpers ---

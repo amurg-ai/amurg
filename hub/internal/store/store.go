@@ -73,6 +73,20 @@ type Store interface {
 	ListEndpointConfigOverrides(ctx context.Context, orgID string) ([]EndpointConfigOverride, error)
 	DeleteEndpointConfigOverride(ctx context.Context, endpointID string) error
 
+	// Device Codes
+	CreateDeviceCode(ctx context.Context, dc *DeviceCode) error
+	GetDeviceCodeByUserCode(ctx context.Context, userCode string) (*DeviceCode, error)
+	GetDeviceCodeByPollingToken(ctx context.Context, pollingToken string) (*DeviceCode, error)
+	UpdateDeviceCodeStatus(ctx context.Context, id, status, runtimeID, token, approvedBy string) error
+	PurgeExpiredDeviceCodes(ctx context.Context) (int64, error)
+
+	// Runtime Tokens
+	CreateRuntimeToken(ctx context.Context, rt *RuntimeToken) error
+	GetRuntimeTokenByHash(ctx context.Context, tokenHash string) (*RuntimeToken, error)
+	ListRuntimeTokens(ctx context.Context, orgID string) ([]RuntimeToken, error)
+	RevokeRuntimeToken(ctx context.Context, id string) error
+	UpdateRuntimeTokenLastUsed(ctx context.Context, id string) error
+
 	// Health
 	Ping(ctx context.Context) error
 
@@ -166,6 +180,32 @@ type AuditEvent struct {
 	EndpointID string          `json:"endpoint_id,omitempty"`
 	Detail     json.RawMessage `json:"detail,omitempty"`
 	CreatedAt  time.Time       `json:"created_at"`
+}
+
+// DeviceCode represents a device authorization code for runtime registration.
+type DeviceCode struct {
+	ID           string    `json:"id"`
+	UserCode     string    `json:"user_code"`
+	PollingToken string    `json:"polling_token"`
+	OrgID        string    `json:"org_id"`
+	Status       string    `json:"status"` // pending, approved, expired
+	RuntimeID    string    `json:"runtime_id"`
+	Token        string    `json:"token"`
+	ApprovedBy   string    `json:"approved_by"`
+	CreatedAt    time.Time `json:"created_at"`
+	ExpiresAt    time.Time `json:"expires_at"`
+}
+
+// RuntimeToken represents a long-lived authentication token for a runtime.
+type RuntimeToken struct {
+	ID         string     `json:"id"`
+	OrgID      string     `json:"org_id"`
+	RuntimeID  string     `json:"runtime_id"`
+	TokenHash  string     `json:"token_hash"`
+	Name       string     `json:"name"`
+	CreatedBy  string     `json:"created_by"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 }
 
 // AuditFilter specifies criteria for filtering audit events.

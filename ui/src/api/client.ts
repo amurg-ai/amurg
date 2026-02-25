@@ -158,4 +158,10 @@ export const api = {
 
   getFileUrl: (fileId: string, sessionId: string): string =>
     `${BASE}/api/files/${fileId}?session_id=${sessionId}`,
+
+  approveRuntimeRegistration: (userCode: string, runtimeName: string) =>
+    request<{ ok: boolean; runtime_id: string }>("/api/runtime/register/approve", {
+      method: "POST",
+      body: JSON.stringify({ user_code: userCode, runtime_name: runtimeName }),
+    }),
 };

@@ -68,6 +68,13 @@ func (w *Wizard) Run(outputPath string) error {
 	}
 	_, _ = fmt.Fprintln(w.p.Out)
 
+	// Runtime token secret for time-limited tokens.
+	runtimeSecret := os.Getenv("AMURG_RUNTIME_TOKEN_SECRET")
+	if runtimeSecret == "" {
+		runtimeSecret, _ = config.GenerateRandomSecret()
+	}
+	cfg.Auth.RuntimeTokenSecret = runtimeSecret
+
 	// Runtime token.
 	_, _ = fmt.Fprintln(w.p.Out, "Runtime Authentication")
 	runtimeID := w.p.Ask("  Runtime ID to authorize", "default-runtime")

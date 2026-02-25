@@ -126,17 +126,17 @@ function EndpointConfigEditor({
 
       <div className="space-y-4">
         <h4 className="text-sm font-medium text-slate-300 border-b border-slate-700 pb-1">Security</h4>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <label className="space-y-1">
             <span className="text-xs text-slate-400">Working Directory</span>
             <input type="text" value={cwd} onChange={e => setCwd(e.target.value)}
               placeholder="/path/to/project"
-              className="w-full bg-slate-700 text-slate-200 text-sm rounded px-3 py-1.5 border border-slate-600 focus:border-teal-500 focus:outline-none" />
+              className="w-full bg-slate-700 text-slate-200 text-sm rounded px-3 py-2 border border-slate-600 focus:border-teal-500 focus:outline-none" />
           </label>
           <label className="space-y-1">
             <span className="text-xs text-slate-400">Permission Mode</span>
             <select value={permissionMode} onChange={e => setPermissionMode(e.target.value)}
-              className="w-full bg-slate-700 text-slate-200 text-sm rounded px-3 py-1.5 border border-slate-600 focus:border-teal-500 focus:outline-none">
+              className="w-full bg-slate-700 text-slate-200 text-sm rounded px-3 py-2 border border-slate-600 focus:border-teal-500 focus:outline-none">
               <option value="">Default</option>
               <option value="skip">Skip</option>
               <option value="strict">Strict</option>
@@ -144,50 +144,50 @@ function EndpointConfigEditor({
             </select>
           </label>
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <label className="space-y-1">
             <span className="text-xs text-slate-400">Allowed Paths (one per line)</span>
             <textarea value={allowedPaths} onChange={e => setAllowedPaths(e.target.value)} rows={3}
-              className="w-full bg-slate-700 text-slate-200 text-sm rounded px-3 py-1.5 border border-slate-600 focus:border-teal-500 focus:outline-none font-mono" />
+              className="w-full bg-slate-700 text-slate-200 text-sm rounded px-3 py-2 border border-slate-600 focus:border-teal-500 focus:outline-none font-mono" />
           </label>
           <label className="space-y-1">
             <span className="text-xs text-slate-400">Denied Paths (one per line)</span>
             <textarea value={deniedPaths} onChange={e => setDeniedPaths(e.target.value)} rows={3}
-              className="w-full bg-slate-700 text-slate-200 text-sm rounded px-3 py-1.5 border border-slate-600 focus:border-teal-500 focus:outline-none font-mono" />
+              className="w-full bg-slate-700 text-slate-200 text-sm rounded px-3 py-2 border border-slate-600 focus:border-teal-500 focus:outline-none font-mono" />
           </label>
         </div>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <label className="space-y-1">
             <span className="text-xs text-slate-400">Allowed Tools (one per line)</span>
             <textarea value={allowedTools} onChange={e => setAllowedTools(e.target.value)} rows={3}
-              className="w-full bg-slate-700 text-slate-200 text-sm rounded px-3 py-1.5 border border-slate-600 focus:border-teal-500 focus:outline-none font-mono" />
+              className="w-full bg-slate-700 text-slate-200 text-sm rounded px-3 py-2 border border-slate-600 focus:border-teal-500 focus:outline-none font-mono" />
           </label>
           <label className="space-y-1">
             <span className="text-xs text-slate-400">Env Whitelist (one per line)</span>
             <textarea value={envWhitelist} onChange={e => setEnvWhitelist(e.target.value)} rows={3}
-              className="w-full bg-slate-700 text-slate-200 text-sm rounded px-3 py-1.5 border border-slate-600 focus:border-teal-500 focus:outline-none font-mono" />
+              className="w-full bg-slate-700 text-slate-200 text-sm rounded px-3 py-2 border border-slate-600 focus:border-teal-500 focus:outline-none font-mono" />
           </label>
         </div>
 
         <h4 className="text-sm font-medium text-slate-300 border-b border-slate-700 pb-1 pt-2">Limits</h4>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <label className="space-y-1">
             <span className="text-xs text-slate-400">Max Sessions</span>
-            <input type="number" value={maxSessions} onChange={e => setMaxSessions(e.target.value)}
+            <input type="number" inputMode="numeric" pattern="[0-9]*" value={maxSessions} onChange={e => setMaxSessions(e.target.value)}
               placeholder="10"
-              className="w-full bg-slate-700 text-slate-200 text-sm rounded px-3 py-1.5 border border-slate-600 focus:border-teal-500 focus:outline-none" />
+              className="w-full bg-slate-700 text-slate-200 text-sm rounded px-3 py-2 border border-slate-600 focus:border-teal-500 focus:outline-none" />
           </label>
           <label className="space-y-1">
             <span className="text-xs text-slate-400">Session Timeout</span>
             <input type="text" value={sessionTimeout} onChange={e => setSessionTimeout(e.target.value)}
               placeholder="30m"
-              className="w-full bg-slate-700 text-slate-200 text-sm rounded px-3 py-1.5 border border-slate-600 focus:border-teal-500 focus:outline-none" />
+              className="w-full bg-slate-700 text-slate-200 text-sm rounded px-3 py-2 border border-slate-600 focus:border-teal-500 focus:outline-none" />
           </label>
           <label className="space-y-1">
             <span className="text-xs text-slate-400">Idle Timeout</span>
             <input type="text" value={idleTimeout} onChange={e => setIdleTimeout(e.target.value)}
               placeholder="5m"
-              className="w-full bg-slate-700 text-slate-200 text-sm rounded px-3 py-1.5 border border-slate-600 focus:border-teal-500 focus:outline-none" />
+              className="w-full bg-slate-700 text-slate-200 text-sm rounded px-3 py-2 border border-slate-600 focus:border-teal-500 focus:outline-none" />
           </label>
         </div>
       </div>
@@ -329,7 +329,15 @@ function RuntimesTab() {
 
   return (
     <div>
-      <div className="flex justify-end px-4 pt-3">
+      <div className="flex justify-end gap-2 px-4 pt-3">
+        <a
+          href="/connect"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="px-3 py-1 text-xs bg-teal-600 hover:bg-teal-700 text-white rounded-lg transition-colors"
+        >
+          Connect Runtime
+        </a>
         <RefreshButton onClick={load} />
       </div>
       {runtimes.length === 0 ? (
@@ -552,7 +560,7 @@ function AuditTab() {
         <select
           value={actionFilter}
           onChange={(e) => setActionFilter(e.target.value)}
-          className="bg-slate-700 text-slate-200 text-xs rounded px-2 py-1.5 border border-slate-600 focus:border-teal-500 focus:outline-none"
+          className="bg-slate-700 text-slate-200 text-sm sm:text-xs rounded px-2 py-2 sm:py-1.5 border border-slate-600 focus:border-teal-500 focus:outline-none"
         >
           <option value="">All actions</option>
           <option value="login.">Login</option>
@@ -650,11 +658,11 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
+      className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/60 md:px-4"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-4xl max-h-[80vh] bg-slate-800 rounded-2xl border border-slate-700 shadow-xl flex flex-col"
+        className="w-full max-w-4xl h-[90vh] md:h-auto md:max-h-[80vh] bg-slate-800 rounded-t-2xl md:rounded-2xl border-0 md:border border-slate-700 shadow-xl flex flex-col animate-slide-up md:animate-fade-in"
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
@@ -664,7 +672,7 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
           <h2 className="text-lg font-semibold text-slate-100">Admin Dashboard</h2>
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-slate-200 p-1"
+            className="text-slate-400 hover:text-slate-200 p-2 rounded-lg"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -673,7 +681,7 @@ export function AdminPanel({ onClose }: AdminPanelProps) {
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-slate-700 px-4 shrink-0">
+        <div className="flex border-b border-slate-700 px-4 shrink-0 overflow-x-auto scrollbar-hide">
           {TABS.map((tab) => (
             <button
               key={tab.key}

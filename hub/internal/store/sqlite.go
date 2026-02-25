@@ -191,6 +191,39 @@ func (s *SQLiteStore) migrate() error {
 		}
 	}
 
+	// Device codes and runtime tokens tables.
+	deviceCodeMigrations := []string{
+		`CREATE TABLE IF NOT EXISTS device_codes (
+			id TEXT PRIMARY KEY,
+			user_code TEXT UNIQUE NOT NULL,
+			polling_token TEXT UNIQUE NOT NULL,
+			org_id TEXT NOT NULL DEFAULT 'default',
+			status TEXT NOT NULL DEFAULT 'pending',
+			runtime_id TEXT NOT NULL DEFAULT '',
+			token TEXT NOT NULL DEFAULT '',
+			approved_by TEXT NOT NULL DEFAULT '',
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			expires_at DATETIME NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS runtime_tokens (
+			id TEXT PRIMARY KEY,
+			org_id TEXT NOT NULL DEFAULT 'default',
+			runtime_id TEXT NOT NULL,
+			token_hash TEXT NOT NULL,
+			name TEXT NOT NULL DEFAULT '',
+			created_by TEXT NOT NULL DEFAULT '',
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			last_used_at DATETIME
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_runtime_tokens_hash ON runtime_tokens(token_hash)`,
+		`CREATE INDEX IF NOT EXISTS idx_runtime_tokens_org ON runtime_tokens(org_id)`,
+	}
+	for _, m := range deviceCodeMigrations {
+		if _, err := s.db.Exec(m); err != nil {
+			return fmt.Errorf("migration failed: %w\n  SQL: %s", err, m)
+		}
+	}
+
 	return nil
 }
 
@@ -804,5 +837,116 @@ func (s *SQLiteStore) ListEndpointConfigOverrides(ctx context.Context, orgID str
 
 func (s *SQLiteStore) DeleteEndpointConfigOverride(ctx context.Context, endpointID string) error {
 	_, err := s.db.ExecContext(ctx, "DELETE FROM endpoint_config_overrides WHERE endpoint_id = ?", endpointID)
+	return err
+}
+
+// --- Device Codes ---
+
+func (s *SQLiteStore) CreateDeviceCode(ctx context.Context, dc *DeviceCode) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO device_codes (id, user_code, polling_token, org_id, status, runtime_id, token, approved_by, created_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		dc.ID, dc.UserCode, dc.PollingToken, dc.OrgID, dc.Status, dc.RuntimeID, dc.Token, dc.ApprovedBy, dc.CreatedAt, dc.ExpiresAt,
+	)
+	return err
+}
+
+func (s *SQLiteStore) GetDeviceCodeByUserCode(ctx context.Context, userCode string) (*DeviceCode, error) {
+	var dc DeviceCode
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, user_code, polling_token, org_id, status, runtime_id, token, approved_by, created_at, expires_at
+		 FROM device_codes WHERE user_code = ?`, userCode,
+	).Scan(&dc.ID, &dc.UserCode, &dc.PollingToken, &dc.OrgID, &dc.Status, &dc.RuntimeID, &dc.Token, &dc.ApprovedBy, &dc.CreatedAt, &dc.ExpiresAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return &dc, err
+}
+
+func (s *SQLiteStore) GetDeviceCodeByPollingToken(ctx context.Context, pollingToken string) (*DeviceCode, error) {
+	var dc DeviceCode
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, user_code, polling_token, org_id, status, runtime_id, token, approved_by, created_at, expires_at
+		 FROM device_codes WHERE polling_token = ?`, pollingToken,
+	).Scan(&dc.ID, &dc.UserCode, &dc.PollingToken, &dc.OrgID, &dc.Status, &dc.RuntimeID, &dc.Token, &dc.ApprovedBy, &dc.CreatedAt, &dc.ExpiresAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return &dc, err
+}
+
+func (s *SQLiteStore) UpdateDeviceCodeStatus(ctx context.Context, id, status, runtimeID, token, approvedBy string) error {
+	_, err := s.db.ExecContext(ctx,
+		"UPDATE device_codes SET status = ?, runtime_id = ?, token = ?, approved_by = ? WHERE id = ?",
+		status, runtimeID, token, approvedBy, id,
+	)
+	return err
+}
+
+func (s *SQLiteStore) PurgeExpiredDeviceCodes(ctx context.Context) (int64, error) {
+	result, err := s.db.ExecContext(ctx,
+		"DELETE FROM device_codes WHERE expires_at < ? OR status IN ('approved', 'expired')",
+		time.Now(),
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// --- Runtime Tokens ---
+
+func (s *SQLiteStore) CreateRuntimeToken(ctx context.Context, rt *RuntimeToken) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO runtime_tokens (id, org_id, runtime_id, token_hash, name, created_by, created_at, last_used_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		rt.ID, rt.OrgID, rt.RuntimeID, rt.TokenHash, rt.Name, rt.CreatedBy, rt.CreatedAt, rt.LastUsedAt,
+	)
+	return err
+}
+
+func (s *SQLiteStore) GetRuntimeTokenByHash(ctx context.Context, tokenHash string) (*RuntimeToken, error) {
+	var rt RuntimeToken
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, org_id, runtime_id, token_hash, name, created_by, created_at, last_used_at
+		 FROM runtime_tokens WHERE token_hash = ?`, tokenHash,
+	).Scan(&rt.ID, &rt.OrgID, &rt.RuntimeID, &rt.TokenHash, &rt.Name, &rt.CreatedBy, &rt.CreatedAt, &rt.LastUsedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return &rt, err
+}
+
+func (s *SQLiteStore) ListRuntimeTokens(ctx context.Context, orgID string) ([]RuntimeToken, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, org_id, runtime_id, token_hash, name, created_by, created_at, last_used_at
+		 FROM runtime_tokens WHERE org_id = ? ORDER BY created_at DESC`, orgID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var tokens []RuntimeToken
+	for rows.Next() {
+		var rt RuntimeToken
+		if err := rows.Scan(&rt.ID, &rt.OrgID, &rt.RuntimeID, &rt.TokenHash, &rt.Name, &rt.CreatedBy, &rt.CreatedAt, &rt.LastUsedAt); err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, rt)
+	}
+	return tokens, rows.Err()
+}
+
+func (s *SQLiteStore) RevokeRuntimeToken(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM runtime_tokens WHERE id = ?", id)
+	return err
+}
+
+func (s *SQLiteStore) UpdateRuntimeTokenLastUsed(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx,
+		"UPDATE runtime_tokens SET last_used_at = ? WHERE id = ?",
+		time.Now(), id,
+	)
 	return err
 }
