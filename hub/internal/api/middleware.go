@@ -32,17 +32,6 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) adminMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		identity := getIdentityFromContext(r.Context())
-		if identity == nil || identity.Role != "admin" {
-			writeError(w, http.StatusForbidden, "admin access required")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
 func getIdentityFromContext(ctx context.Context) *auth.Identity {
 	identity, _ := ctx.Value(identityKey).(*auth.Identity)
 	return identity

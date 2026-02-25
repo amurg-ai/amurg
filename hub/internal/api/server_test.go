@@ -69,20 +69,6 @@ func createTestUserAndGetToken(t *testing.T, authSvc *auth.Service, s store.Stor
 	return token
 }
 
-func createAdminAndGetToken(t *testing.T, authSvc *auth.Service) string {
-	t.Helper()
-	ctx := context.Background()
-	_, err := authSvc.Register(ctx, "adminuser", "adminpassword123", "admin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	token, err := authSvc.Login(ctx, "adminuser", "adminpassword123")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return token
-}
-
 // seedEndpointAndRuntime inserts a runtime and endpoint into the store so that
 // session creation and endpoint listing work properly.
 func seedEndpointAndRuntime(t *testing.T, s store.Store) (runtimeID, endpointID string) {
@@ -282,9 +268,6 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 	if resp["username"] != "testuser" {
 		t.Errorf("expected username 'testuser', got %q", resp["username"])
 	}
-	if resp["role"] != "user" {
-		t.Errorf("expected role 'user', got %q", resp["role"])
-	}
 }
 
 func TestAuthMiddleware_NoToken(t *testing.T) {
@@ -364,39 +347,27 @@ func TestAuthMiddleware_ExpiredToken(t *testing.T) {
 	}
 }
 
-func TestAdminMiddleware(t *testing.T) {
+func TestAuthenticatedRoutes_RequireAuth(t *testing.T) {
 	srv, authSvc, s := setupTestServer(t)
 	token := createTestUserAndGetToken(t, authSvc, s)
 
-	// Try accessing an admin-only route (GET /api/users) with a non-admin token.
+	// Authenticated user should be able to access /api/users.
 	req := httptest.NewRequest(http.MethodGet, "/api/users", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 	srv.mux.ServeHTTP(w, req)
 
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("expected status 403 for non-admin, got %d; body: %s", w.Code, w.Body.String())
-	}
-
-	var resp map[string]string
-	parseJSONResponse(t, w, &resp)
-
-	if resp["error"] != "admin access required" {
-		t.Errorf("expected 'admin access required', got %q", resp["error"])
-	}
-}
-
-func TestAdminMiddleware_AdminAllowed(t *testing.T) {
-	srv, authSvc, _ := setupTestServer(t)
-	adminToken := createAdminAndGetToken(t, authSvc)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/users", nil)
-	req.Header.Set("Authorization", "Bearer "+adminToken)
-	w := httptest.NewRecorder()
-	srv.mux.ServeHTTP(w, req)
-
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected status 200 for admin, got %d; body: %s", w.Code, w.Body.String())
+		t.Fatalf("expected status 200 for authenticated user, got %d; body: %s", w.Code, w.Body.String())
+	}
+
+	// Unauthenticated request should be rejected.
+	req2 := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	w2 := httptest.NewRecorder()
+	srv.mux.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401 for unauthenticated, got %d; body: %s", w2.Code, w2.Body.String())
 	}
 }
 
@@ -709,9 +680,9 @@ func TestCORS_Preflight(t *testing.T) {
 	}
 }
 
-func TestCreateUser_AdminOnly(t *testing.T) {
-	srv, authSvc, _ := setupTestServer(t)
-	adminToken := createAdminAndGetToken(t, authSvc)
+func TestCreateUser(t *testing.T) {
+	srv, authSvc, s := setupTestServer(t)
+	token := createTestUserAndGetToken(t, authSvc, s)
 
 	body, _ := json.Marshal(map[string]string{
 		"username": "newuser",
@@ -719,7 +690,7 @@ func TestCreateUser_AdminOnly(t *testing.T) {
 		"role":     "user",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/users", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	srv.mux.ServeHTTP(w, req)
@@ -739,11 +710,11 @@ func TestCreateUser_AdminOnly(t *testing.T) {
 	}
 }
 
-func TestGetMessages_AdminCanAccessAnySession(t *testing.T) {
+func TestGetMessages_OtherUserDenied(t *testing.T) {
 	srv, authSvc, s := setupTestServer(t)
 
 	ctx := context.Background()
-	// Create a regular user and a session.
+	// Create a user who owns the session.
 	owner, err := authSvc.Register(ctx, "sesowner", "sesownerpassword123", "user")
 	if err != nil {
 		t.Fatal(err)
@@ -767,15 +738,22 @@ func TestGetMessages_AdminCanAccessAnySession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Admin should be able to access any session's messages.
-	adminToken := createAdminAndGetToken(t, authSvc)
+	// A different user should NOT be able to access another user's session messages.
+	_, err = authSvc.Register(ctx, "otheruser", "otherpassword123", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherToken, err := authSvc.Login(ctx, "otheruser", "otherpassword123")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/sessions/%s/messages", sessID), nil)
-	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Authorization", "Bearer "+otherToken)
 	w := httptest.NewRecorder()
 	srv.mux.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected admin to get 200, got %d; body: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected other user to get 403, got %d; body: %s", w.Code, w.Body.String())
 	}
 }

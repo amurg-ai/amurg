@@ -1,28 +1,13 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/api/client";
-import { useSessionStore } from "@/stores/sessionStore";
 
 export function ConnectRuntime() {
-  const user = useSessionStore((s) => s.user);
   const [userCode, setUserCode] = useState("");
   const [runtimeName, setRuntimeName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<{ runtime_id: string } | null>(null);
-
-  if (!user || user.role !== "admin") {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-900 px-4">
-        <div className="w-full max-w-sm text-center">
-          <p className="text-red-400">Access denied. Admin role required.</p>
-          <Link to="/" className="text-teal-400 hover:text-teal-300 text-sm mt-4 inline-block">
-            Back to home
-          </Link>
-        </div>
-      </div>
-    );
-  }
 
   const handleCodeChange = (value: string) => {
     // Strip non-alphanumeric except hyphen, uppercase
