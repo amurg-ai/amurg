@@ -202,6 +202,11 @@ func (w *Wizard) doDeviceCodeRound(httpBase string) (string, string, string, err
 		return "", "", "", fmt.Errorf("device code request failed with status %d", resp.StatusCode)
 	}
 
+	ct := resp.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "application/json") {
+		return "", "", "", fmt.Errorf("hub at %s does not support device-code registration (got %s response). Make sure your hub is up to date", httpBase, ct)
+	}
+
 	var dcResp deviceCodeResponse
 	if err := json.NewDecoder(resp.Body).Decode(&dcResp); err != nil {
 		return "", "", "", fmt.Errorf("decode device code response: %w", err)
