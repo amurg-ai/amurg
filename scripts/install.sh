@@ -12,6 +12,7 @@ REPO="amurg-ai/amurg"
 BINARY="amurg-runtime"
 VERSION=""
 INSTALL_DIR=""
+TMP_DIR=""
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -98,29 +99,28 @@ do_install() {
     local archive_url="${base_url}/${archive}"
     local checksum_url="${base_url}/checksums.txt"
 
-    local tmp_dir
-    tmp_dir=$(mktemp -d)
-    trap 'rm -rf "$tmp_dir"' EXIT
+    TMP_DIR=$(mktemp -d)
+    trap 'rm -rf "$TMP_DIR"' EXIT
 
     info "Downloading ${BINARY} v${VERSION} for ${OS}/${ARCH}..."
-    download "$archive_url" "${tmp_dir}/${archive}" \
+    download "$archive_url" "${TMP_DIR}/${archive}" \
         || fatal "Download failed. Check that v${VERSION} exists at https://github.com/${REPO}/releases"
 
     info "Verifying checksum..."
-    download "$checksum_url" "${tmp_dir}/checksums.txt" \
+    download "$checksum_url" "${TMP_DIR}/checksums.txt" \
         || fatal "Failed to download checksums."
 
     local expected
-    expected=$(grep "${archive}" "${tmp_dir}/checksums.txt" | awk '{print $1}')
+    expected=$(grep "${archive}" "${TMP_DIR}/checksums.txt" | awk '{print $1}')
     if [ -z "$expected" ]; then
         fatal "Checksum not found for ${archive} in checksums.txt"
     fi
 
     local actual
     if command -v sha256sum > /dev/null 2>&1; then
-        actual=$(sha256sum "${tmp_dir}/${archive}" | awk '{print $1}')
+        actual=$(sha256sum "${TMP_DIR}/${archive}" | awk '{print $1}')
     elif command -v shasum > /dev/null 2>&1; then
-        actual=$(shasum -a 256 "${tmp_dir}/${archive}" | awk '{print $1}')
+        actual=$(shasum -a 256 "${TMP_DIR}/${archive}" | awk '{print $1}')
     else
         fatal "Neither sha256sum nor shasum found. Cannot verify checksum."
     fi
@@ -130,10 +130,10 @@ do_install() {
     fi
 
     info "Extracting..."
-    tar -xzf "${tmp_dir}/${archive}" -C "${tmp_dir}"
+    tar -xzf "${TMP_DIR}/${archive}" -C "${TMP_DIR}"
 
     info "Installing to ${INSTALL_DIR}/${BINARY}..."
-    install -m 755 "${tmp_dir}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
+    install -m 755 "${TMP_DIR}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
 
     # Warn if install dir is not in PATH.
     case ":$PATH:" in
