@@ -115,26 +115,22 @@ func NewServer(s store.Store, ap auth.Provider, lp auth.LoginProvider, ra auth.R
 		r.Post("/api/sessions/{sessionID}/close", srv.handleCloseSession)
 		r.Get("/api/me", srv.handleGetMe)
 
-		// Admin routes
-		r.Group(func(r chi.Router) {
-			r.Use(srv.adminMiddleware)
-			r.Get("/api/runtimes", srv.handleListRuntimes)
-			r.Get("/api/users", srv.handleListUsers)
-			// User management only available with builtin auth.
-			if lp != nil {
-				r.Post("/api/users", srv.handleCreateUser)
-			}
-			r.Post("/api/permissions", srv.handleGrantPermission)
-			r.Delete("/api/permissions", srv.handleRevokePermission)
-			r.Get("/api/users/{userID}/permissions", srv.handleListUserPermissions)
-			r.Get("/api/admin/sessions", srv.handleAdminListSessions)
-			r.Post("/api/admin/sessions/{sessionID}/close", srv.handleAdminCloseSession)
-			r.Get("/api/admin/audit", srv.handleAdminListAuditEvents)
-			r.Get("/api/admin/endpoints", srv.handleAdminListEndpoints)
-			r.Get("/api/admin/endpoints/{endpointID}/config", srv.handleGetEndpointConfig)
-			r.Put("/api/admin/endpoints/{endpointID}/config", srv.handleUpdateEndpointConfig)
-			r.Post("/api/runtime/register/approve", srv.handleRuntimeRegisterApprove)
-		})
+		r.Get("/api/runtimes", srv.handleListRuntimes)
+		r.Get("/api/users", srv.handleListUsers)
+		// User management only available with builtin auth.
+		if lp != nil {
+			r.Post("/api/users", srv.handleCreateUser)
+		}
+		r.Post("/api/permissions", srv.handleGrantPermission)
+		r.Delete("/api/permissions", srv.handleRevokePermission)
+		r.Get("/api/users/{userID}/permissions", srv.handleListUserPermissions)
+		r.Get("/api/admin/sessions", srv.handleAdminListSessions)
+		r.Post("/api/admin/sessions/{sessionID}/close", srv.handleAdminCloseSession)
+		r.Get("/api/admin/audit", srv.handleAdminListAuditEvents)
+		r.Get("/api/admin/endpoints", srv.handleAdminListEndpoints)
+		r.Get("/api/admin/endpoints/{endpointID}/config", srv.handleGetEndpointConfig)
+		r.Put("/api/admin/endpoints/{endpointID}/config", srv.handleUpdateEndpointConfig)
+		r.Post("/api/runtime/register/approve", srv.handleRuntimeRegisterApprove)
 	})
 
 	// Serve UI static files if configured.
@@ -226,7 +222,6 @@ func (s *Server) handleGetMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"id":       identity.UserID,
 		"username": identity.Username,
-		"role":     identity.Role,
 	})
 }
 
@@ -244,8 +239,8 @@ func (s *Server) handleListEndpoints(w http.ResponseWriter, r *http.Request) {
 		endpoints = []store.Endpoint{}
 	}
 
-	// Admins see all; regular users filtered by permissions when access mode is "none".
-	if identity.Role != "admin" && s.defaultEndpointAccess == "none" {
+	// Filter by permissions when access mode is "none".
+	if s.defaultEndpointAccess == "none" {
 		permitted, err := s.store.ListUserEndpoints(r.Context(), identity.UserID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to check permissions")
@@ -311,7 +306,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check endpoint access when mode is "none".
-	if identity.Role != "admin" && s.defaultEndpointAccess == "none" {
+	if s.defaultEndpointAccess == "none" {
 		hasAccess, err := s.store.HasEndpointAccess(r.Context(), identity.UserID, req.EndpointID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to check permissions")
@@ -360,7 +355,7 @@ func (s *Server) handleGetMessages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
-	if sess.UserID != identity.UserID && identity.Role != "admin" {
+	if sess.UserID != identity.UserID {
 		writeError(w, http.StatusForbidden, "access denied")
 		return
 	}
