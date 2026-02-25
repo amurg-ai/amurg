@@ -99,7 +99,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 	defer func() {
 		r.logger.Info("shutting down runtime")
 		r.sessions.CloseAll()
-		r.hubClient.Close()
+		_ = r.hubClient.Close()
 	}()
 
 	return r.hubClient.Connect(ctx)
@@ -191,7 +191,7 @@ func (r *Runtime) handleUserMessage(env protocol.Envelope) error {
 	}
 
 	// Signal turn started.
-	r.hubClient.Send(protocol.TypeTurnStarted, msg.SessionID, protocol.TurnStarted{
+	_ = r.hubClient.Send(protocol.TypeTurnStarted, msg.SessionID, protocol.TurnStarted{
 		SessionID:    msg.SessionID,
 		InResponseTo: msg.MessageID,
 	})
@@ -201,7 +201,7 @@ func (r *Runtime) handleUserMessage(env protocol.Envelope) error {
 		r.logger.Warn("send to agent failed", "session_id", msg.SessionID, "error", err)
 
 		// Send turn completed with error.
-		r.hubClient.Send(protocol.TypeTurnCompleted, msg.SessionID, protocol.TurnCompleted{
+		_ = r.hubClient.Send(protocol.TypeTurnCompleted, msg.SessionID, protocol.TurnCompleted{
 			SessionID:    msg.SessionID,
 			InResponseTo: msg.MessageID,
 		})
@@ -301,7 +301,7 @@ func (r *Runtime) handleAgentOutput(sessionID string, output adapter.Output, fin
 		if output.ExitCode != nil {
 			tc.ExitCode = output.ExitCode
 		}
-		r.hubClient.Send(protocol.TypeTurnCompleted, sessionID, tc)
+		_ = r.hubClient.Send(protocol.TypeTurnCompleted, sessionID, tc)
 		return
 	}
 
@@ -314,7 +314,7 @@ func (r *Runtime) handleAgentOutput(sessionID string, output adapter.Output, fin
 			mimeType = "application/octet-stream"
 		}
 
-		r.hubClient.Send(protocol.TypeFileAvailable, sessionID, protocol.FileAvailable{
+		_ = r.hubClient.Send(protocol.TypeFileAvailable, sessionID, protocol.FileAvailable{
 			SessionID: sessionID,
 			Metadata: protocol.FileMetadata{
 				FileID:   fileID,
@@ -327,7 +327,7 @@ func (r *Runtime) handleAgentOutput(sessionID string, output adapter.Output, fin
 		return
 	}
 
-	r.hubClient.Send(protocol.TypeAgentOutput, sessionID, protocol.AgentOutput{
+	_ = r.hubClient.Send(protocol.TypeAgentOutput, sessionID, protocol.AgentOutput{
 		SessionID: sessionID,
 		Channel:   output.Channel,
 		Content:   string(output.Data),
@@ -350,7 +350,7 @@ func (r *Runtime) handlePermissionRequest(sessionID, tool, description, resource
 	}()
 
 	// Send permission request to hub.
-	r.hubClient.Send(protocol.TypePermissionRequest, sessionID, protocol.PermissionRequest{
+	_ = r.hubClient.Send(protocol.TypePermissionRequest, sessionID, protocol.PermissionRequest{
 		SessionID:   sessionID,
 		RequestID:   requestID,
 		Tool:        tool,

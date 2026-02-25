@@ -76,7 +76,7 @@ func (s *httpSession) Send(ctx context.Context, input []byte) error {
 			s.output <- Output{Channel: "system", Data: []byte(fmt.Sprintf("HTTP error: %v", err))}
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		if resp.StatusCode >= 400 {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
@@ -127,7 +127,7 @@ func (s *httpSession) Stop() error {
 }
 
 func (s *httpSession) Close() error {
-	s.Stop()
+	_ = s.Stop()
 	if s.done != nil {
 		<-s.done
 	}

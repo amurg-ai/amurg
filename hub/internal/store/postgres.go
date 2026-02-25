@@ -28,7 +28,7 @@ func NewPostgres(dsn string) (*PostgresStore, error) {
 
 	s := &PostgresStore{db: db}
 	if err := s.migrate(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
@@ -221,7 +221,7 @@ func (s *PostgresStore) ListUsers(ctx context.Context, orgID string) ([]User, er
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var users []User
 	for rows.Next() {
@@ -264,7 +264,7 @@ func (s *PostgresStore) ListRuntimes(ctx context.Context, orgID string) ([]Runti
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var runtimes []Runtime
 	for rows.Next() {
@@ -315,7 +315,7 @@ func (s *PostgresStore) ListEndpoints(ctx context.Context, orgID string) ([]Endp
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var endpoints []Endpoint
 	for rows.Next() {
@@ -336,7 +336,7 @@ func (s *PostgresStore) ListEndpointsByRuntime(ctx context.Context, runtimeID st
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var endpoints []Endpoint
 	for rows.Next() {
@@ -389,7 +389,7 @@ func (s *PostgresStore) ListSessionsByUser(ctx context.Context, userID string) (
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var sessions []Session
 	for rows.Next() {
@@ -441,7 +441,7 @@ func (s *PostgresStore) GetMessages(ctx context.Context, sessionID string, after
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var messages []Message
 	for rows.Next() {
@@ -480,7 +480,7 @@ func (s *PostgresStore) ListActiveSessions(ctx context.Context, orgID string) ([
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var sessions []Session
 	for rows.Next() {
@@ -528,7 +528,7 @@ func (s *PostgresStore) ListUserEndpoints(ctx context.Context, userID string) ([
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var ids []string
 	for rows.Next() {
@@ -574,7 +574,7 @@ func (s *PostgresStore) ListAuditEvents(ctx context.Context, orgID string, limit
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var events []AuditEvent
 	for rows.Next() {
@@ -637,7 +637,7 @@ func (s *PostgresStore) ListAuditEventsFiltered(ctx context.Context, orgID strin
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var events []AuditEvent
 	for rows.Next() {
@@ -668,7 +668,7 @@ func (s *PostgresStore) ListAllSessions(ctx context.Context, orgID string) ([]Se
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var sessions []Session
 	for rows.Next() {
@@ -741,7 +741,7 @@ func (s *PostgresStore) ListEndpointConfigOverrides(ctx context.Context, orgID s
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var overrides []EndpointConfigOverride
 	for rows.Next() {

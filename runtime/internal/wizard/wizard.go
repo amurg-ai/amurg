@@ -50,38 +50,38 @@ func New(p *cli.Prompter) *Wizard {
 
 // Run executes the interactive wizard and writes the config file.
 func (w *Wizard) Run(outputPath string, generateSystemd bool) error {
-	fmt.Fprintln(w.p.Out)
-	fmt.Fprintln(w.p.Out, "  Amurg Runtime — Configuration Wizard")
-	fmt.Fprintln(w.p.Out, strings.Repeat("─", 42))
-	fmt.Fprintln(w.p.Out)
+	_, _ = fmt.Fprintln(w.p.Out)
+	_, _ = fmt.Fprintln(w.p.Out, "  Amurg Runtime — Configuration Wizard")
+	_, _ = fmt.Fprintln(w.p.Out, strings.Repeat("─", 42))
+	_, _ = fmt.Fprintln(w.p.Out)
 
 	cfg := &config.Config{}
 
 	// Hub connection.
-	fmt.Fprintln(w.p.Out, "Hub Connection")
+	_, _ = fmt.Fprintln(w.p.Out, "Hub Connection")
 	cfg.Hub.URL = w.p.Ask("  Hub WebSocket URL", "ws://localhost:8080/ws/runtime")
 	cfg.Hub.Token = w.p.Ask("  Authentication token", "")
-	fmt.Fprintln(w.p.Out)
+	_, _ = fmt.Fprintln(w.p.Out)
 
 	// Runtime settings.
-	fmt.Fprintln(w.p.Out, "Runtime Settings")
+	_, _ = fmt.Fprintln(w.p.Out, "Runtime Settings")
 	defaultID := "runtime-" + uuid.New().String()[:8]
 	cfg.Runtime.ID = w.p.Ask("  Runtime ID", defaultID)
 	cfg.Runtime.LogLevel = w.p.Ask("  Log level (debug/info/warn/error)", "info")
-	fmt.Fprintln(w.p.Out)
+	_, _ = fmt.Fprintln(w.p.Out)
 
 	// Endpoints.
-	fmt.Fprintln(w.p.Out, "Endpoints")
+	_, _ = fmt.Fprintln(w.p.Out, "Endpoints")
 	numEndpoints := w.p.AskInt("  How many endpoints to configure?", 1)
 
 	for i := range numEndpoints {
-		fmt.Fprintf(w.p.Out, "\n  ── Endpoint %d of %d ──\n", i+1, numEndpoints)
+		_, _ = fmt.Fprintf(w.p.Out, "\n  ── Endpoint %d of %d ──\n", i+1, numEndpoints)
 		ep := w.configureEndpoint(i)
 		cfg.Endpoints = append(cfg.Endpoints, ep)
 	}
 
 	// Output path.
-	fmt.Fprintln(w.p.Out)
+	_, _ = fmt.Fprintln(w.p.Out)
 	if outputPath == "" {
 		outputPath = w.p.Ask("Config file output path", "./amurg-runtime.json")
 	}
@@ -95,7 +95,7 @@ func (w *Wizard) Run(outputPath string, generateSystemd bool) error {
 		return fmt.Errorf("write config: %w", err)
 	}
 
-	fmt.Fprintf(w.p.Out, "\n  Config written to %s\n", outputPath)
+	_, _ = fmt.Fprintf(w.p.Out, "\n  Config written to %s\n", outputPath)
 
 	// Optional systemd unit.
 	if generateSystemd {
@@ -104,9 +104,9 @@ func (w *Wizard) Run(outputPath string, generateSystemd bool) error {
 		}
 	}
 
-	fmt.Fprintln(w.p.Out)
-	fmt.Fprintln(w.p.Out, "  Next steps:")
-	fmt.Fprintf(w.p.Out, "    amurg-runtime run %s\n\n", outputPath)
+	_, _ = fmt.Fprintln(w.p.Out)
+	_, _ = fmt.Fprintln(w.p.Out, "  Next steps:")
+	_, _ = fmt.Fprintf(w.p.Out, "    amurg-runtime run %s\n\n", outputPath)
 
 	return nil
 }
@@ -244,8 +244,8 @@ WantedBy=multi-user.target
 		return fmt.Errorf("write systemd unit: %w", err)
 	}
 
-	fmt.Fprintf(w.p.Out, "  Systemd unit written to %s\n", unitPath)
-	fmt.Fprintln(w.p.Out, "  Enable with: sudo systemctl enable --now amurg-runtime")
+	_, _ = fmt.Fprintf(w.p.Out, "  Systemd unit written to %s\n", unitPath)
+	_, _ = fmt.Fprintln(w.p.Out, "  Enable with: sudo systemctl enable --now amurg-runtime")
 	return nil
 }
 

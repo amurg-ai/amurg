@@ -33,7 +33,6 @@ type Session struct {
 
 	agent   adapter.AgentSession
 	state   atomic.Value // State
-	cancel  context.CancelFunc
 	logger  *slog.Logger
 	onOutput OutputHandler
 

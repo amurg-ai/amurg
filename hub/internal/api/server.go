@@ -183,10 +183,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	token, err := s.loginProvider.Login(r.Context(), req.Username, req.Password)
 	if err != nil {
-		s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
+		if err := s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
 			ID: uuid.New().String(), OrgID: "default", Action: "login.failed",
 			Detail: json.RawMessage(fmt.Sprintf(`{"username":%q}`, req.Username)), CreatedAt: time.Now(),
-		})
+		}); err != nil {
+			s.logger.Warn("failed to log audit event", "action", "login.failed", "error", err)
+		}
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
@@ -197,9 +199,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if user != nil {
 		userID = user.ID
 	}
-	s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
+	if err := s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
 		ID: uuid.New().String(), OrgID: "default", Action: "login.success", UserID: userID, CreatedAt: time.Now(),
-	})
+	}); err != nil {
+		s.logger.Warn("failed to log audit event", "action", "login.success", "error", err)
+	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})
 }
@@ -301,11 +305,13 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !hasAccess {
-			s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
+			if err := s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
 				ID: uuid.New().String(), OrgID: identity.OrgID, Action: "session.create_denied",
 				UserID: identity.UserID, EndpointID: req.EndpointID,
 				Detail: json.RawMessage(`{"reason":"no_access"}`), CreatedAt: time.Now(),
-			})
+			}); err != nil {
+				s.logger.Warn("failed to log audit event", "action", "session.create_denied", "error", err)
+			}
 			writeError(w, http.StatusForbidden, "no access to this endpoint")
 			return
 		}
@@ -314,11 +320,13 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	sess, err := s.router.CreateSession(r.Context(), identity.UserID, req.EndpointID)
 	if err != nil {
 		if strings.Contains(err.Error(), "max sessions") {
-			s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
+			if err := s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
 				ID: uuid.New().String(), OrgID: identity.OrgID, Action: "session.create_denied",
 				UserID: identity.UserID, EndpointID: req.EndpointID,
 				Detail: json.RawMessage(`{"reason":"max_sessions"}`), CreatedAt: time.Now(),
-			})
+			}); err != nil {
+				s.logger.Warn("failed to log audit event", "action", "session.create_denied", "error", err)
+			}
 			writeError(w, http.StatusTooManyRequests, "maximum sessions per user reached")
 			return
 		}
@@ -395,10 +403,12 @@ func (s *Server) handleCloseSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to close session")
 		return
 	}
-	s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
+	if err := s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
 		ID: uuid.New().String(), OrgID: identity.OrgID, Action: "session.close",
 		UserID: identity.UserID, SessionID: sessionID, EndpointID: sess.EndpointID, CreatedAt: time.Now(),
-	})
+	}); err != nil {
+		s.logger.Warn("failed to log audit event", "action", "session.close", "error", err)
+	}
 
 	// Broadcast session.closed to subscribers.
 	s.router.BroadcastSessionClosed(sessionID)
@@ -538,10 +548,12 @@ func (s *Server) handleAdminCloseSession(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	identity := getIdentityFromContext(r.Context())
-	s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
+	if err := s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
 		ID: uuid.New().String(), OrgID: identity.OrgID, Action: "session.admin_close",
 		UserID: identity.UserID, SessionID: sessionID, EndpointID: sess.EndpointID, CreatedAt: time.Now(),
-	})
+	}); err != nil {
+		s.logger.Warn("failed to log audit event", "action", "session.admin_close", "error", err)
+	}
 	s.router.BroadcastSessionClosed(sessionID)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "closed"})
 }
@@ -764,12 +776,14 @@ func (s *Server) handleUpdateEndpointConfig(w http.ResponseWriter, r *http.Reque
 	pushed := s.router.PushEndpointConfigUpdate(endpointID, req.Security, req.Limits)
 
 	// Audit log.
-	s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
+	if err := s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
 		ID: uuid.New().String(), OrgID: identity.OrgID, Action: "endpoint.config_update",
 		UserID: identity.UserID, EndpointID: endpointID,
 		Detail:    json.RawMessage(fmt.Sprintf(`{"pushed_to_runtime":%t}`, pushed)),
 		CreatedAt: time.Now(),
-	})
+	}); err != nil {
+		s.logger.Warn("failed to log audit event", "action", "endpoint.config_update", "error", err)
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":             "saved",
@@ -848,7 +862,7 @@ func (s *Server) handleASRProxy(w http.ResponseWriter, r *http.Request) {
 		s.logger.Warn("asr proxy: client upgrade failed", "error", err)
 		return
 	}
-	defer clientConn.Close()
+	defer func() { _ = clientConn.Close() }()
 
 	clientConn.SetReadLimit(asrMaxClientMessage)
 
@@ -858,7 +872,7 @@ func (s *Server) handleASRProxy(w http.ResponseWriter, r *http.Request) {
 	upstreamURL, err := url.Parse(s.whisperURL)
 	if err != nil {
 		s.logger.Warn("asr proxy: invalid whisper_url", "error", err)
-		clientConn.WriteMessage(websocket.CloseMessage,
+		_ = clientConn.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "bad upstream config"))
 		return
 	}
@@ -866,11 +880,11 @@ func (s *Server) handleASRProxy(w http.ResponseWriter, r *http.Request) {
 	upstreamConn, _, err := websocket.DefaultDialer.Dial(upstreamURL.String(), nil)
 	if err != nil {
 		s.logger.Warn("asr proxy: upstream dial failed", "error", err)
-		clientConn.WriteMessage(websocket.CloseMessage,
+		_ = clientConn.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "whisper server unavailable"))
 		return
 	}
-	defer upstreamConn.Close()
+	defer func() { _ = upstreamConn.Close() }()
 
 	upstreamConn.SetReadLimit(asrMaxUpstreamMessage)
 
@@ -914,7 +928,7 @@ func (s *Server) handleASRProxy(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {

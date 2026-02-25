@@ -103,8 +103,8 @@ func (s *jobSession) Send(ctx context.Context, input []byte) error {
 
 	// Write input and close stdin.
 	go func() {
-		stdin.Write(input)
-		stdin.Close()
+		_, _ = stdin.Write(input)
+		_ = stdin.Close()
 	}()
 
 	// Stream output.
@@ -149,7 +149,7 @@ func (s *jobSession) Stop() error {
 }
 
 func (s *jobSession) Close() error {
-	s.Stop()
+	_ = s.Stop()
 	if s.done != nil {
 		<-s.done
 	}

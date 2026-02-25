@@ -344,10 +344,14 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 		r.mu.Lock()
 		delete(r.runtimes, hello.RuntimeID)
 		r.mu.Unlock()
-		r.store.SetRuntimeOnline(ctx, hello.RuntimeID, false)
-		r.store.LogAuditEvent(ctx, &store.AuditEvent{
+		if err := r.store.SetRuntimeOnline(ctx, hello.RuntimeID, false); err != nil {
+			r.logger.Warn("failed to set runtime offline", "runtime_id", hello.RuntimeID, "error", err)
+		}
+		if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{
 			ID: uuid.New().String(), OrgID: orgID, Action: "runtime.disconnect", RuntimeID: hello.RuntimeID, CreatedAt: time.Now(),
-		})
+		}); err != nil {
+			r.logger.Warn("failed to log audit event", "action", "runtime.disconnect", "error", err)
+		}
 		r.logger.Info("runtime disconnected", "runtime_id", hello.RuntimeID)
 	}()
 
@@ -393,7 +397,7 @@ func (r *Router) HandleClientWS(w http.ResponseWriter, req *http.Request) {
 		r.logger.Warn("client websocket upgrade failed", "error", err)
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	connID := uuid.New().String()
 	cc := &clientConn{
@@ -409,7 +413,7 @@ func (r *Router) HandleClientWS(w http.ResponseWriter, req *http.Request) {
 	if r.clientsByUser[identity.UserID] >= r.maxClientConnsPerUser {
 		r.mu.Unlock()
 		r.logger.Warn("too many WebSocket connections for user", "user", identity.Username, "limit", r.maxClientConnsPerUser)
-		conn.WriteMessage(websocket.CloseMessage,
+		_ = conn.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "too many connections"))
 		return
 	}
@@ -467,19 +471,27 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 	case protocol.TypeSessionCreated:
 		data, _ := json.Marshal(env.Payload)
 		var resp protocol.SessionCreated
-		json.Unmarshal(data, &resp)
+		if err := json.Unmarshal(data, &resp); err != nil {
+			r.logger.Warn("unmarshal session.created failed", "error", err)
+			return
+		}
 
 		if resp.OK {
 			ctx := context.Background()
 			if resp.NativeHandle != "" {
-				r.store.SetSessionNativeHandle(ctx, resp.SessionID, resp.NativeHandle)
+				if err := r.store.SetSessionNativeHandle(ctx, resp.SessionID, resp.NativeHandle); err != nil {
+					r.logger.Warn("failed to set session native handle", "session_id", resp.SessionID, "error", err)
+				}
 			}
 		}
 
 	case protocol.TypeAgentOutput:
 		data, _ := json.Marshal(env.Payload)
 		var output protocol.AgentOutput
-		json.Unmarshal(data, &output)
+		if err := json.Unmarshal(data, &output); err != nil {
+			r.logger.Warn("unmarshal agent.output failed", "error", err)
+			return
+		}
 
 		// Verify session ownership.
 		ctx := context.Background()
@@ -517,11 +529,16 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 	case protocol.TypeTurnStarted:
 		data, _ := json.Marshal(env.Payload)
 		var ts protocol.TurnStarted
-		json.Unmarshal(data, &ts)
+		if err := json.Unmarshal(data, &ts); err != nil {
+			r.logger.Warn("unmarshal turn.started failed", "error", err)
+			return
+		}
 		r.broadcastToSession(ts.SessionID, protocol.TypeTurnStarted, ts)
 
 		ctx := context.Background()
-		r.store.UpdateSessionState(ctx, ts.SessionID, "responding")
+		if err := r.store.UpdateSessionState(ctx, ts.SessionID, "responding"); err != nil {
+			r.logger.Warn("failed to update session state", "session_id", ts.SessionID, "error", err)
+		}
 
 		r.mu.Lock()
 		r.turnStartTimes[ts.SessionID] = time.Now()
@@ -530,11 +547,16 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 	case protocol.TypeTurnCompleted:
 		data, _ := json.Marshal(env.Payload)
 		var tc protocol.TurnCompleted
-		json.Unmarshal(data, &tc)
+		if err := json.Unmarshal(data, &tc); err != nil {
+			r.logger.Warn("unmarshal turn.completed failed", "error", err)
+			return
+		}
 		r.broadcastToSession(tc.SessionID, protocol.TypeTurnCompleted, tc)
 
 		ctx := context.Background()
-		r.store.UpdateSessionState(ctx, tc.SessionID, "active")
+		if err := r.store.UpdateSessionState(ctx, tc.SessionID, "active"); err != nil {
+			r.logger.Warn("failed to update session state", "session_id", tc.SessionID, "error", err)
+		}
 
 		r.mu.Lock()
 		startTime, hasTiming := r.turnStartTimes[tc.SessionID]
@@ -561,21 +583,27 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 			}
 		}
 
-		r.store.LogAuditEvent(ctx, &store.AuditEvent{
+		if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{
 			ID: uuid.New().String(), OrgID: orgID, Action: "turn.completed",
 			SessionID: tc.SessionID, EndpointID: endpointID, Detail: detailJSON, CreatedAt: time.Now(),
-		})
+		}); err != nil {
+			r.logger.Warn("failed to log audit event", "action", "turn.completed", "error", err)
+		}
 
 	case protocol.TypeStopAck:
 		data, _ := json.Marshal(env.Payload)
 		var ack protocol.StopAck
-		json.Unmarshal(data, &ack)
+		if err := json.Unmarshal(data, &ack); err != nil {
+			r.logger.Warn("unmarshal stop ack failed", "error", err)
+		}
 		r.broadcastToSession(ack.SessionID, protocol.TypeStopAck, ack)
 
 	case protocol.TypePermissionRequest:
 		data, _ := json.Marshal(env.Payload)
 		var req protocol.PermissionRequest
-		json.Unmarshal(data, &req)
+		if err := json.Unmarshal(data, &req); err != nil {
+			r.logger.Warn("unmarshal permission request failed", "error", err)
+		}
 
 		// Track pending permission.
 		r.mu.Lock()
@@ -599,12 +627,14 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 			permOrgID = sess.OrgID
 			permEndpointID = sess.EndpointID
 		}
-		r.store.LogAuditEvent(ctx, &store.AuditEvent{
+		if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{
 			ID: uuid.New().String(), OrgID: permOrgID, Action: "permission.requested",
 			SessionID: req.SessionID, EndpointID: permEndpointID,
 			Detail:    json.RawMessage(fmt.Sprintf(`{"tool":%q,"resource":%q,"request_id":%q}`, req.Tool, req.Resource, req.RequestID)),
 			CreatedAt: time.Now(),
-		})
+		}); err != nil {
+			r.logger.Warn("failed to log audit event", "action", "permission.requested", "error", err)
+		}
 
 		// Relay to subscribed UI clients.
 		r.broadcastToSession(req.SessionID, protocol.TypePermissionRequest, req)
@@ -612,7 +642,9 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 	case protocol.TypeFileAvailable:
 		data, _ := json.Marshal(env.Payload)
 		var fileMsg protocol.FileAvailable
-		json.Unmarshal(data, &fileMsg)
+		if err := json.Unmarshal(data, &fileMsg); err != nil {
+			r.logger.Warn("unmarshal file available failed", "error", err)
+		}
 
 		// Sanitize path components to prevent path traversal.
 		safeSessionID := filepath.Base(fileMsg.SessionID)
@@ -698,7 +730,9 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 	case protocol.TypeEndpointConfigAck:
 		data, _ := json.Marshal(env.Payload)
 		var ack protocol.EndpointConfigAck
-		json.Unmarshal(data, &ack)
+		if err := json.Unmarshal(data, &ack); err != nil {
+			r.logger.Warn("unmarshal endpoint config ack failed", "error", err)
+		}
 		if ack.OK {
 			r.logger.Info("endpoint config update acknowledged", "endpoint_id", ack.EndpointID, "runtime", runtimeID)
 		} else {
@@ -718,7 +752,9 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 	case protocol.TypeUserMessage:
 		data, _ := json.Marshal(env.Payload)
 		var msg protocol.UserMessage
-		json.Unmarshal(data, &msg)
+		if err := json.Unmarshal(data, &msg); err != nil {
+			r.logger.Warn("unmarshal user message failed", "error", err)
+		}
 
 		ctx := context.Background()
 
@@ -778,10 +814,12 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 			return
 		}
 
-		r.store.LogAuditEvent(ctx, &store.AuditEvent{
+		if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{
 			ID: uuid.New().String(), OrgID: cc.orgID, Action: "message.sent", UserID: cc.userID,
 			SessionID: msg.SessionID, EndpointID: sess.EndpointID, CreatedAt: time.Now(),
-		})
+		}); err != nil {
+			r.logger.Warn("failed to log audit event", "action", "message.sent", "error", err)
+		}
 
 		// Forward to runtime.
 		r.sendToRuntime(sess.RuntimeID, protocol.TypeUserMessage, msg.SessionID, msg)
@@ -789,7 +827,9 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 	case protocol.TypeClientSubscribe:
 		data, _ := json.Marshal(env.Payload)
 		var sub protocol.ClientSubscribe
-		json.Unmarshal(data, &sub)
+		if err := json.Unmarshal(data, &sub); err != nil {
+			r.logger.Warn("unmarshal client subscribe failed", "error", err)
+		}
 
 		// Verify session ownership before subscribing.
 		ctx := context.Background()
@@ -838,7 +878,9 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 	case protocol.TypeClientUnsubscribe:
 		data, _ := json.Marshal(env.Payload)
 		var unsub protocol.ClientUnsubscribe
-		json.Unmarshal(data, &unsub)
+		if err := json.Unmarshal(data, &unsub); err != nil {
+			r.logger.Warn("unmarshal client unsubscribe failed", "error", err)
+		}
 
 		r.mu.Lock()
 		if subs, ok := r.subscribers[unsub.SessionID]; ok {
@@ -852,22 +894,28 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 	case protocol.TypeStopRequest:
 		data, _ := json.Marshal(env.Payload)
 		var req protocol.StopRequest
-		json.Unmarshal(data, &req)
+		if err := json.Unmarshal(data, &req); err != nil {
+			r.logger.Warn("unmarshal stop request failed", "error", err)
+		}
 
 		ctx := context.Background()
 		sess, _ := r.store.GetSession(ctx, req.SessionID)
 		if sess != nil && sess.UserID == cc.userID {
 			r.sendToRuntime(sess.RuntimeID, protocol.TypeStopRequest, req.SessionID, req)
-			r.store.LogAuditEvent(ctx, &store.AuditEvent{
+			if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{
 				ID: uuid.New().String(), OrgID: cc.orgID, Action: "session.stop", UserID: cc.userID,
 				SessionID: req.SessionID, EndpointID: sess.EndpointID, CreatedAt: time.Now(),
-			})
+			}); err != nil {
+				r.logger.Warn("failed to log audit event", "action", "session.stop", "error", err)
+			}
 		}
 
 	case protocol.TypePermissionResponse:
 		data, _ := json.Marshal(env.Payload)
 		var resp protocol.PermissionResponse
-		json.Unmarshal(data, &resp)
+		if err := json.Unmarshal(data, &resp); err != nil {
+			r.logger.Warn("unmarshal permission response failed", "error", err)
+		}
 
 		ctx := context.Background()
 
@@ -898,12 +946,14 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 		if resp.Approved {
 			action = "permission.granted"
 		}
-		r.store.LogAuditEvent(ctx, &store.AuditEvent{
+		if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{
 			ID: uuid.New().String(), OrgID: cc.orgID, Action: action,
 			UserID: cc.userID, SessionID: resp.SessionID, EndpointID: sess.EndpointID,
 			Detail:    json.RawMessage(fmt.Sprintf(`{"request_id":%q,"approved":%t}`, resp.RequestID, resp.Approved)),
 			CreatedAt: time.Now(),
-		})
+		}); err != nil {
+			r.logger.Warn("failed to log audit event", "action", action, "error", err)
+		}
 
 		// Relay to runtime.
 		r.sendToRuntime(pp.runtimeID, protocol.TypePermissionResponse, resp.SessionID, resp)
@@ -981,10 +1031,12 @@ func (r *Router) CreateSession(ctx context.Context, userID, endpointID string) (
 		UserID:     userID,
 	})
 
-	r.store.LogAuditEvent(ctx, &store.AuditEvent{
+	if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{
 		ID: uuid.New().String(), OrgID: ep.OrgID, Action: "session.create", UserID: userID,
 		RuntimeID: ep.RuntimeID, SessionID: sess.ID, EndpointID: endpointID, CreatedAt: time.Now(),
-	})
+	}); err != nil {
+		r.logger.Warn("failed to log audit event", "action", "session.create", "error", err)
+	}
 
 	return sess, nil
 }
@@ -1049,7 +1101,9 @@ func (r *Router) sendToClient(cc *clientConn, msgType, sessionID string, payload
 
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
-	cc.conn.WriteMessage(websocket.TextMessage, data)
+	if err := cc.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		r.logger.Debug("send to client failed", "conn_id", cc.id, "error", err)
+	}
 }
 
 // StartIdleReaper starts a background goroutine that closes sessions idle longer than timeout.
@@ -1083,12 +1137,16 @@ func (r *Router) StartIdleReaper(ctx context.Context, defaultTimeout time.Durati
 					}
 					cutoff := now.Add(-timeout)
 					if sess.UpdatedAt.Before(cutoff) {
-						r.store.UpdateSessionState(ctx, sess.ID, "closed")
-						r.store.LogAuditEvent(ctx, &store.AuditEvent{
+						if err := r.store.UpdateSessionState(ctx, sess.ID, "closed"); err != nil {
+							r.logger.Warn("idle reaper: update session state failed", "session_id", sess.ID, "error", err)
+						}
+						if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{
 							ID: uuid.New().String(), Action: "session.idle_close",
 							OrgID: sess.OrgID, SessionID: sess.ID, UserID: sess.UserID,
 							EndpointID: sess.EndpointID, CreatedAt: time.Now(),
-						})
+						}); err != nil {
+							r.logger.Warn("idle reaper: log audit event failed", "session_id", sess.ID, "error", err)
+						}
 						r.broadcastToSession(sess.ID, protocol.TypeSessionClosed, map[string]string{
 							"session_id": sess.ID,
 						})
@@ -1158,12 +1216,14 @@ func (r *Router) handlePermissionTimeout(requestID string) {
 		endpointID = sess.EndpointID
 	}
 
-	r.store.LogAuditEvent(ctx, &store.AuditEvent{
+	if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{
 		ID: uuid.New().String(), OrgID: orgID, Action: "permission.timeout",
 		SessionID: pp.sessionID, EndpointID: endpointID,
 		Detail:    json.RawMessage(fmt.Sprintf(`{"request_id":%q}`, requestID)),
 		CreatedAt: time.Now(),
-	})
+	}); err != nil {
+		r.logger.Warn("failed to log audit event", "action", "permission.timeout", "error", err)
+	}
 
 	// Send denied response to runtime.
 	denied := protocol.PermissionResponse{
@@ -1254,5 +1314,5 @@ func (r *Router) sendToConn(conn *websocket.Conn, msgType, sessionID string, pay
 		return
 	}
 
-	conn.WriteMessage(websocket.TextMessage, data)
+	_ = conn.WriteMessage(websocket.TextMessage, data)
 }

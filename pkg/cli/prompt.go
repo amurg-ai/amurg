@@ -43,9 +43,9 @@ func (p *Prompter) readLine() string {
 // Returns the default if the user presses Enter without typing.
 func (p *Prompter) Ask(question, defaultVal string) string {
 	if defaultVal != "" {
-		fmt.Fprintf(p.Out, "%s [%s]: ", question, defaultVal)
+		_, _ = fmt.Fprintf(p.Out, "%s [%s]: ", question, defaultVal)
 	} else {
-		fmt.Fprintf(p.Out, "%s: ", question)
+		_, _ = fmt.Fprintf(p.Out, "%s: ", question)
 	}
 	line := p.readLine()
 	if line != "" {
@@ -57,12 +57,12 @@ func (p *Prompter) Ask(question, defaultVal string) string {
 // AskPassword reads a line without echoing. Falls back to plain read if
 // stdin is not a terminal (e.g. during tests or piped input).
 func (p *Prompter) AskPassword(question string) string {
-	fmt.Fprintf(p.Out, "%s: ", question)
+	_, _ = fmt.Fprintf(p.Out, "%s: ", question)
 
 	// Try to read without echo if stdin is a real terminal.
 	if f, ok := p.In.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
 		b, err := term.ReadPassword(int(f.Fd()))
-		fmt.Fprintln(p.Out) // newline after hidden input
+		_, _ = fmt.Fprintln(p.Out) // newline after hidden input
 		if err == nil {
 			return strings.TrimSpace(string(b))
 		}
@@ -80,19 +80,19 @@ func (p *Prompter) AskInt(question string, defaultVal int) int {
 		if err == nil && n > 0 {
 			return n
 		}
-		fmt.Fprintf(p.Out, "  Please enter a positive number.\n")
+		_, _ = fmt.Fprintf(p.Out, "  Please enter a positive number.\n")
 	}
 }
 
 // Choose presents a numbered list of options and returns the selected value.
 func (p *Prompter) Choose(question string, options []string, defaultIdx int) string {
-	fmt.Fprintf(p.Out, "%s\n", question)
+	_, _ = fmt.Fprintf(p.Out, "%s\n", question)
 	for i, opt := range options {
 		marker := "  "
 		if i == defaultIdx {
 			marker = "> "
 		}
-		fmt.Fprintf(p.Out, "%s%d) %s\n", marker, i+1, opt)
+		_, _ = fmt.Fprintf(p.Out, "%s%d) %s\n", marker, i+1, opt)
 	}
 
 	for {
@@ -101,7 +101,7 @@ func (p *Prompter) Choose(question string, options []string, defaultIdx int) str
 		if err == nil && n >= 1 && n <= len(options) {
 			return options[n-1]
 		}
-		fmt.Fprintf(p.Out, "  Please enter a number between 1 and %d.\n", len(options))
+		_, _ = fmt.Fprintf(p.Out, "  Please enter a number between 1 and %d.\n", len(options))
 	}
 }
 

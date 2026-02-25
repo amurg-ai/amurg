@@ -143,7 +143,7 @@ func (s *externalSession) Send(ctx context.Context, input []byte) error {
 		startMsg := externalMsg{Type: "session.start", SessionID: s.sessionID}
 		if data, err := json.Marshal(startMsg); err == nil {
 			data = append(data, '\n')
-			s.stdin.Write(data)
+			_, _ = s.stdin.Write(data)
 		}
 		msgType = "user.input"
 	}
@@ -177,7 +177,7 @@ func (s *externalSession) Stop() error {
 	msg := externalMsg{Type: "stop", SessionID: s.sessionID}
 	if data, err := json.Marshal(msg); err == nil {
 		data = append(data, '\n')
-		s.stdin.Write(data)
+		_, _ = s.stdin.Write(data)
 	}
 	return nil
 }
@@ -195,11 +195,11 @@ func (s *externalSession) Close() error {
 	msg := externalMsg{Type: "session.close", SessionID: s.sessionID}
 	if data, err := json.Marshal(msg); err == nil {
 		data = append(data, '\n')
-		s.stdin.Write(data)
+		_, _ = s.stdin.Write(data)
 	}
-	s.stdin.Close()
+	_ = s.stdin.Close()
 	if s.cmd.Process != nil {
-		s.cmd.Process.Kill()
+		_ = s.cmd.Process.Kill()
 	}
 	<-s.done
 	return nil
@@ -267,7 +267,7 @@ func (s *externalSession) readLoop(r io.Reader) {
 					if data, err := json.Marshal(resp); err == nil {
 						data = append(data, '\n')
 						s.mu.Lock()
-						s.stdin.Write(data)
+						_, _ = s.stdin.Write(data)
 						s.mu.Unlock()
 					}
 				}()

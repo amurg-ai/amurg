@@ -24,7 +24,7 @@ func setupTestServer(t *testing.T) (*Server, *auth.Service, store.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 
 	cfg := &config.Config{
 		Server: config.ServerConfig{
@@ -312,7 +312,7 @@ func TestAuthMiddleware_ExpiredToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 
 	cfg := &config.Config{
 		Server: config.ServerConfig{
@@ -582,7 +582,7 @@ func TestRateLimiting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 
 	cfg := &config.Config{
 		Server: config.ServerConfig{

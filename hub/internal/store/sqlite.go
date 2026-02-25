@@ -32,17 +32,17 @@ func NewSQLite(dsn string) (*SQLiteStore, error) {
 
 	// Enable WAL mode for better concurrent read/write.
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("set WAL mode: %w", err)
 	}
 	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("enable foreign keys: %w", err)
 	}
 
 	s := &SQLiteStore{db: db}
 	if err := s.migrate(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
@@ -275,7 +275,7 @@ func (s *SQLiteStore) ListUsers(ctx context.Context, orgID string) ([]User, erro
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var users []User
 	for rows.Next() {
@@ -318,7 +318,7 @@ func (s *SQLiteStore) ListRuntimes(ctx context.Context, orgID string) ([]Runtime
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var runtimes []Runtime
 	for rows.Next() {
@@ -369,7 +369,7 @@ func (s *SQLiteStore) ListEndpoints(ctx context.Context, orgID string) ([]Endpoi
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var endpoints []Endpoint
 	for rows.Next() {
@@ -390,7 +390,7 @@ func (s *SQLiteStore) ListEndpointsByRuntime(ctx context.Context, runtimeID stri
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var endpoints []Endpoint
 	for rows.Next() {
@@ -443,7 +443,7 @@ func (s *SQLiteStore) ListSessionsByUser(ctx context.Context, userID string) ([]
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var sessions []Session
 	for rows.Next() {
@@ -495,7 +495,7 @@ func (s *SQLiteStore) GetMessages(ctx context.Context, sessionID string, afterSe
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var messages []Message
 	for rows.Next() {
@@ -534,7 +534,7 @@ func (s *SQLiteStore) ListActiveSessions(ctx context.Context, orgID string) ([]S
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var sessions []Session
 	for rows.Next() {
@@ -582,7 +582,7 @@ func (s *SQLiteStore) ListUserEndpoints(ctx context.Context, userID string) ([]s
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var ids []string
 	for rows.Next() {
@@ -628,7 +628,7 @@ func (s *SQLiteStore) ListAuditEvents(ctx context.Context, orgID string, limit, 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var events []AuditEvent
 	for rows.Next() {
@@ -685,7 +685,7 @@ func (s *SQLiteStore) ListAuditEventsFiltered(ctx context.Context, orgID string,
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var events []AuditEvent
 	for rows.Next() {
@@ -716,7 +716,7 @@ func (s *SQLiteStore) ListAllSessions(ctx context.Context, orgID string) ([]Sess
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var sessions []Session
 	for rows.Next() {
@@ -789,7 +789,7 @@ func (s *SQLiteStore) ListEndpointConfigOverrides(ctx context.Context, orgID str
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var overrides []EndpointConfigOverride
 	for rows.Next() {

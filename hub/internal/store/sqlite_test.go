@@ -15,7 +15,7 @@ func newTestStore(t *testing.T) *SQLiteStore {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 	return s
 }
 
@@ -570,7 +570,7 @@ func TestCountActiveSessionsByUser(t *testing.T) {
 	}
 
 	// Close one
-	s.UpdateSessionState(ctx, sess2.ID, "closed")
+	_ = s.UpdateSessionState(ctx, sess2.ID, "closed")
 	count, _ = s.CountActiveSessionsByUser(ctx, user.ID)
 	if count != 2 {
 		t.Fatalf("CountActiveSessionsByUser after close: got %d, want 2", count)

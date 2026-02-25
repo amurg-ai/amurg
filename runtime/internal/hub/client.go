@@ -100,7 +100,7 @@ func (c *Client) connectOnce(ctx context.Context) error {
 		c.mu.Lock()
 		c.conn = nil
 		c.mu.Unlock()
-		conn.Close()
+		_ = conn.Close()
 	}()
 
 	// Send hello with latest token.
@@ -125,7 +125,7 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			conn.WriteMessage(websocket.CloseMessage,
+			_ = conn.WriteMessage(websocket.CloseMessage,
 				websocket.FormatCloseMessage(websocket.CloseNormalClosure, "shutdown"))
 			return ctx.Err()
 		default:

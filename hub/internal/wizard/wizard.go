@@ -25,10 +25,10 @@ func New(p *cli.Prompter) *Wizard {
 
 // Run executes the interactive wizard and writes the config file.
 func (w *Wizard) Run(outputPath string) error {
-	fmt.Fprintln(w.p.Out)
-	fmt.Fprintln(w.p.Out, "  Amurg Hub — Configuration Wizard")
-	fmt.Fprintln(w.p.Out, strings.Repeat("─", 38))
-	fmt.Fprintln(w.p.Out)
+	_, _ = fmt.Fprintln(w.p.Out)
+	_, _ = fmt.Fprintln(w.p.Out, "  Amurg Hub — Configuration Wizard")
+	_, _ = fmt.Fprintln(w.p.Out, strings.Repeat("─", 38))
+	_, _ = fmt.Fprintln(w.p.Out)
 
 	cfg := &config.Config{}
 
@@ -38,25 +38,25 @@ func (w *Wizard) Run(outputPath string) error {
 		return fmt.Errorf("generate JWT secret: %w", err)
 	}
 	cfg.Auth.JWTSecret = secret
-	fmt.Fprintf(w.p.Out, "  Generated JWT secret: %s\n\n", secret)
+	_, _ = fmt.Fprintf(w.p.Out, "  Generated JWT secret: %s\n\n", secret)
 
 	// Server settings.
-	fmt.Fprintln(w.p.Out, "Server")
+	_, _ = fmt.Fprintln(w.p.Out, "Server")
 	cfg.Server.Addr = w.p.Ask("  Listen address", ":8080")
-	fmt.Fprintln(w.p.Out)
+	_, _ = fmt.Fprintln(w.p.Out)
 
 	// Admin user.
-	fmt.Fprintln(w.p.Out, "Admin User")
+	_, _ = fmt.Fprintln(w.p.Out, "Admin User")
 	adminUser := w.p.Ask("  Username", "admin")
 	adminPass := w.p.AskPassword("  Password")
 	cfg.Auth.InitialAdmin = &config.InitialAdmin{
 		Username: adminUser,
 		Password: adminPass,
 	}
-	fmt.Fprintln(w.p.Out)
+	_, _ = fmt.Fprintln(w.p.Out)
 
 	// Storage.
-	fmt.Fprintln(w.p.Out, "Storage")
+	_, _ = fmt.Fprintln(w.p.Out, "Storage")
 	driver := w.p.Choose("  Database driver", []string{"sqlite", "postgres"}, 0)
 	cfg.Storage.Driver = driver
 
@@ -66,10 +66,10 @@ func (w *Wizard) Run(outputPath string) error {
 	case "postgres":
 		cfg.Storage.DSN = w.p.Ask("  PostgreSQL DSN", "postgres://user:pass@localhost:5432/amurg?sslmode=disable")
 	}
-	fmt.Fprintln(w.p.Out)
+	_, _ = fmt.Fprintln(w.p.Out)
 
 	// Runtime token.
-	fmt.Fprintln(w.p.Out, "Runtime Authentication")
+	_, _ = fmt.Fprintln(w.p.Out, "Runtime Authentication")
 	runtimeID := w.p.Ask("  Runtime ID to authorize", "default-runtime")
 	runtimeToken, err := generateToken()
 	if err != nil {
@@ -79,11 +79,11 @@ func (w *Wizard) Run(outputPath string) error {
 		{RuntimeID: runtimeID, Token: runtimeToken, Name: "Default Runtime"},
 	}
 
-	fmt.Fprintln(w.p.Out)
-	fmt.Fprintln(w.p.Out, "  Copy these values to your runtime config:")
-	fmt.Fprintf(w.p.Out, "    Runtime ID:  %s\n", runtimeID)
-	fmt.Fprintf(w.p.Out, "    Token:       %s\n", runtimeToken)
-	fmt.Fprintln(w.p.Out)
+	_, _ = fmt.Fprintln(w.p.Out)
+	_, _ = fmt.Fprintln(w.p.Out, "  Copy these values to your runtime config:")
+	_, _ = fmt.Fprintf(w.p.Out, "    Runtime ID:  %s\n", runtimeID)
+	_, _ = fmt.Fprintf(w.p.Out, "    Token:       %s\n", runtimeToken)
+	_, _ = fmt.Fprintln(w.p.Out)
 
 	// Output path.
 	if outputPath == "" {
@@ -99,10 +99,10 @@ func (w *Wizard) Run(outputPath string) error {
 		return fmt.Errorf("write config: %w", err)
 	}
 
-	fmt.Fprintf(w.p.Out, "\n  Config written to %s\n", outputPath)
-	fmt.Fprintln(w.p.Out)
-	fmt.Fprintln(w.p.Out, "  Next steps:")
-	fmt.Fprintf(w.p.Out, "    amurg-hub run %s\n\n", outputPath)
+	_, _ = fmt.Fprintf(w.p.Out, "\n  Config written to %s\n", outputPath)
+	_, _ = fmt.Fprintln(w.p.Out)
+	_, _ = fmt.Fprintln(w.p.Out, "  Next steps:")
+	_, _ = fmt.Fprintf(w.p.Out, "    amurg-hub run %s\n\n", outputPath)
 
 	return nil
 }

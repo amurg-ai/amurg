@@ -286,7 +286,7 @@ func (s *claudeCodeSession) Close() error {
 	s.mu.Unlock()
 
 	if cmd != nil && cmd.Process != nil {
-		cmd.Process.Kill()
+		_ = cmd.Process.Kill()
 	}
 	if done != nil {
 		<-done

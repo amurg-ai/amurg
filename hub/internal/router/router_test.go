@@ -18,7 +18,7 @@ func setupTestRouter(t *testing.T) (*Router, store.Store, *auth.Service) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 
 	cfg := config.AuthConfig{
 		JWTSecret:            "test-secret-at-least-32-chars-long",
@@ -221,7 +221,7 @@ func TestIdleReaper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 
 	cfg := config.AuthConfig{
 		JWTSecret:            "test-secret-at-least-32-chars-long",
@@ -339,7 +339,7 @@ func TestRouter_NewDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 
 	cfg := config.AuthConfig{
 		JWTSecret:            "test-secret-at-least-32-chars-long",

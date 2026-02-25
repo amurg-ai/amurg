@@ -113,10 +113,10 @@ func (s *cliSession) Stop() error {
 }
 
 func (s *cliSession) Close() error {
-	s.stdin.Close()
+	_ = s.stdin.Close()
 	if s.cmd.Process != nil {
 		// Ensure process is terminated.
-		s.cmd.Process.Kill()
+		_ = s.cmd.Process.Kill()
 	}
 	<-s.done
 	return nil

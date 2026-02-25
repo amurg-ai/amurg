@@ -37,13 +37,13 @@ func New(cfg *config.Config, logger *slog.Logger) (*Hub, error) {
 	// Create auth provider based on config.
 	authProvider, err := auth.NewProvider(cfg.Auth, db)
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("init auth provider: %w", err)
 	}
 
 	// Bootstrap (creates admin user for builtin provider).
 	if err := authProvider.Bootstrap(context.Background()); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("bootstrap auth: %w", err)
 	}
 
@@ -151,18 +151,18 @@ func (h *Hub) Run(ctx context.Context) error {
 
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			h.logger.Warn("graceful shutdown failed, forcing close", "error", err)
-			srv.Close()
+			_ = srv.Close()
 		} else {
 			h.logger.Info("http server stopped gracefully")
 		}
 
 		h.logger.Info("closing store")
-		h.store.Close()
+		_ = h.store.Close()
 		h.logger.Info("shutdown complete")
 		return ctx.Err()
 
 	case err := <-errCh:
-		h.store.Close()
+		_ = h.store.Close()
 		return err
 	}
 }

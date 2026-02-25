@@ -61,7 +61,7 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing file field")
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	if header.Size > s.maxFileBytes {
 		writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("file exceeds maximum size of %d bytes", s.maxFileBytes))
@@ -132,12 +132,14 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Audit log.
-	s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
+	if err := s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
 		ID: uuid.New().String(), OrgID: identity.OrgID, Action: "file.upload",
 		UserID: identity.UserID, SessionID: sessionID, EndpointID: sess.EndpointID,
 		Detail:    json.RawMessage(fmt.Sprintf(`{"file_id":%q,"name":%q,"size":%d}`, fileID, fileName, len(data))),
 		CreatedAt: time.Now(),
-	})
+	}); err != nil {
+		s.logger.Warn("failed to log audit event", "action", "file.upload", "error", err)
+	}
 
 	// Send file to runtime via WebSocket (base64 encoded).
 	s.router.SendFileToRuntime(sess.RuntimeID, sessionID, protocol.FileUpload{
