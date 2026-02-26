@@ -3,7 +3,7 @@ import { useSessionStore } from "@/stores/sessionStore";
 import { SessionList } from "@/components/SessionList";
 import { MessageList } from "@/components/MessageList";
 import { MessageInput } from "@/components/MessageInput";
-import { EndpointPicker } from "@/components/EndpointPicker";
+import { AgentPicker } from "@/components/AgentPicker";
 import { AdminPanel } from "@/components/AdminPanel";
 import { ToastContainer } from "@/components/Toast";
 import { PermissionBanner } from "@/components/PermissionBanner";
@@ -292,10 +292,10 @@ export function Chat() {
                 </svg>
               </button>
 
-              {/* Left: endpoint name + state */}
+              {/* Left: agent name + state */}
               <div className="flex items-center gap-2 min-w-0 flex-1">
                 <span className="text-sm text-slate-200 font-medium truncate">
-                  {activeSession.endpoint_name || PROFILE_DISPLAY[activeSession.profile]?.label || activeSession.profile}
+                  {activeSession.agent_name || PROFILE_DISPLAY[activeSession.profile]?.label || activeSession.profile}
                   {activeSession.seq != null && <span className="text-slate-500"> #{activeSession.seq}</span>}
                 </span>
                 <StateIndicator state={activeSession.state} isResponding={isResponding} />
@@ -367,8 +367,8 @@ export function Chat() {
         {activeSessionId && <MessageInput />}
       </div>
 
-      {/* Endpoint picker modal */}
-      {pickerOpen && <EndpointPicker onClose={() => setPickerOpen(false)} />}
+      {/* Agent picker modal */}
+      {pickerOpen && <AgentPicker onClose={() => setPickerOpen(false)} />}
 
       {/* Admin panel modal */}
       {adminOpen && <AdminPanel onClose={() => setAdminOpen(false)} />}

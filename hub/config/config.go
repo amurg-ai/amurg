@@ -72,7 +72,7 @@ type AuthConfig struct {
 	RuntimeTokenSecret     string              `json:"runtime_token_secret,omitempty"`     // HMAC secret for time-limited tokens
 	RuntimeTokenLifetime   Duration            `json:"runtime_token_lifetime,omitempty"`   // lifetime for generated tokens (default 1h)
 	InitialAdmin           *InitialAdmin       `json:"initial_admin,omitempty"`
-	DefaultEndpointAccess  string              `json:"default_endpoint_access,omitempty"` // "all" (default) or "none"
+	DefaultAgentAccess     string              `json:"default_agent_access,omitempty"` // "all" (default) or "none"
 }
 
 // RuntimeTokenEntry maps a runtime ID to its auth token.
@@ -218,8 +218,8 @@ func (c *Config) applyDefaults() {
 	if c.Logging.Format == "" {
 		c.Logging.Format = "json"
 	}
-	if c.Auth.DefaultEndpointAccess == "" {
-		c.Auth.DefaultEndpointAccess = "all"
+	if c.Auth.DefaultAgentAccess == "" {
+		c.Auth.DefaultAgentAccess = "all"
 	}
 	if c.Auth.RuntimeTokenLifetime.Duration == 0 {
 		c.Auth.RuntimeTokenLifetime.Duration = 1 * time.Hour

@@ -15,10 +15,10 @@ import (
 // It sends user messages as HTTP requests and streams/buffers the response.
 type HTTPAdapter struct{}
 
-func (a *HTTPAdapter) Start(ctx context.Context, cfg config.EndpointConfig) (AgentSession, error) {
+func (a *HTTPAdapter) Start(ctx context.Context, cfg config.AgentConfig) (AgentSession, error) {
 	httpCfg := cfg.HTTP
 	if httpCfg == nil {
-		return nil, fmt.Errorf("generic-http endpoint %s: missing http config", cfg.ID)
+		return nil, fmt.Errorf("generic-http agent %s: missing http config", cfg.ID)
 	}
 
 	method := httpCfg.Method

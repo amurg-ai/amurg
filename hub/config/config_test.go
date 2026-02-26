@@ -35,7 +35,7 @@ func TestLoadConfig(t *testing.T) {
 				"username": "admin",
 				"password": "admin123"
 			},
-			"default_endpoint_access": "none"
+			"default_agent_access": "none"
 		},
 		"storage": {
 			"driver": "sqlite",
@@ -101,8 +101,8 @@ func TestLoadConfig(t *testing.T) {
 	if cfg.Auth.InitialAdmin.Username != "admin" {
 		t.Errorf("InitialAdmin.Username: got %q", cfg.Auth.InitialAdmin.Username)
 	}
-	if cfg.Auth.DefaultEndpointAccess != "none" {
-		t.Errorf("Auth.DefaultEndpointAccess: got %q, want %q", cfg.Auth.DefaultEndpointAccess, "none")
+	if cfg.Auth.DefaultAgentAccess != "none" {
+		t.Errorf("Auth.DefaultAgentAccess: got %q, want %q", cfg.Auth.DefaultAgentAccess, "none")
 	}
 
 	// Storage
@@ -245,8 +245,8 @@ func TestApplyDefaults(t *testing.T) {
 	if cfg.Logging.Format != "json" {
 		t.Errorf("default Logging.Format: got %q, want %q", cfg.Logging.Format, "json")
 	}
-	if cfg.Auth.DefaultEndpointAccess != "all" {
-		t.Errorf("default DefaultEndpointAccess: got %q, want %q", cfg.Auth.DefaultEndpointAccess, "all")
+	if cfg.Auth.DefaultAgentAccess != "all" {
+		t.Errorf("default DefaultAgentAccess: got %q, want %q", cfg.Auth.DefaultAgentAccess, "all")
 	}
 	if len(cfg.Server.AllowedOrigins) != 0 {
 		t.Errorf("default AllowedOrigins: got %v, want []", cfg.Server.AllowedOrigins)

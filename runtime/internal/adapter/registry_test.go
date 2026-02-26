@@ -11,7 +11,7 @@ import (
 // dummyAdapter implements Adapter for testing.
 type dummyAdapter struct{}
 
-func (d *dummyAdapter) Start(_ context.Context, _ config.EndpointConfig) (AgentSession, error) {
+func (d *dummyAdapter) Start(_ context.Context, _ config.AgentConfig) (AgentSession, error) {
 	return nil, nil
 }
 

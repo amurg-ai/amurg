@@ -97,7 +97,7 @@ func TestLoad_ValidConfig(t *testing.T) {
 			"max_sessions": 5,
 			"idle_timeout": "10s"
 		},
-		"endpoints": [
+		"agents": [
 			{
 				"id": "ep-1",
 				"name": "Test",
@@ -131,11 +131,11 @@ func TestLoad_ValidConfig(t *testing.T) {
 	if cfg.Runtime.IdleTimeout.Duration != 10*time.Second {
 		t.Errorf("wrong idle timeout: %v", cfg.Runtime.IdleTimeout.Duration)
 	}
-	if len(cfg.Endpoints) != 1 {
-		t.Fatalf("expected 1 endpoint, got %d", len(cfg.Endpoints))
+	if len(cfg.Agents) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(cfg.Agents))
 	}
-	if cfg.Endpoints[0].ID != "ep-1" {
-		t.Errorf("wrong endpoint ID: %s", cfg.Endpoints[0].ID)
+	if cfg.Agents[0].ID != "ep-1" {
+		t.Errorf("wrong agent ID: %s", cfg.Agents[0].ID)
 	}
 }
 
@@ -148,7 +148,7 @@ func TestLoad_AppliesDefaults(t *testing.T) {
 		"runtime": {
 			"id": "test-runtime"
 		},
-		"endpoints": [
+		"agents": [
 			{
 				"id": "ep-1",
 				"name": "Test",
@@ -190,7 +190,7 @@ func TestLoad_MissingHubURL(t *testing.T) {
 	cfgJSON := `{
 		"hub": {"token": "test"},
 		"runtime": {"id": "r1"},
-		"endpoints": [{"id": "e1", "name": "n", "profile": "p"}]
+		"agents": [{"id": "e1", "name": "n", "profile": "p"}]
 	}`
 	path := writeTemp(t, cfgJSON)
 	_, err := Load(path)
@@ -203,7 +203,7 @@ func TestLoad_MissingHubToken(t *testing.T) {
 	cfgJSON := `{
 		"hub": {"url": "ws://localhost"},
 		"runtime": {"id": "r1"},
-		"endpoints": [{"id": "e1", "name": "n", "profile": "p"}]
+		"agents": [{"id": "e1", "name": "n", "profile": "p"}]
 	}`
 	path := writeTemp(t, cfgJSON)
 	_, err := Load(path)
@@ -216,7 +216,7 @@ func TestLoad_MissingRuntimeID(t *testing.T) {
 	cfgJSON := `{
 		"hub": {"url": "ws://localhost", "token": "t"},
 		"runtime": {},
-		"endpoints": [{"id": "e1", "name": "n", "profile": "p"}]
+		"agents": [{"id": "e1", "name": "n", "profile": "p"}]
 	}`
 	path := writeTemp(t, cfgJSON)
 	_, err := Load(path)
@@ -225,50 +225,50 @@ func TestLoad_MissingRuntimeID(t *testing.T) {
 	}
 }
 
-func TestLoad_NoEndpoints(t *testing.T) {
+func TestLoad_NoAgents(t *testing.T) {
 	cfgJSON := `{
 		"hub": {"url": "ws://localhost", "token": "t"},
 		"runtime": {"id": "r1"},
-		"endpoints": []
+		"agents": []
 	}`
 	path := writeTemp(t, cfgJSON)
 	_, err := Load(path)
 	if err == nil {
-		t.Fatal("expected validation error for no endpoints")
+		t.Fatal("expected validation error for no agents")
 	}
 }
 
-func TestLoad_MissingEndpointID(t *testing.T) {
+func TestLoad_MissingAgentID(t *testing.T) {
 	cfgJSON := `{
 		"hub": {"url": "ws://localhost", "token": "t"},
 		"runtime": {"id": "r1"},
-		"endpoints": [{"name": "n", "profile": "p"}]
+		"agents": [{"name": "n", "profile": "p"}]
 	}`
 	path := writeTemp(t, cfgJSON)
 	_, err := Load(path)
 	if err == nil {
-		t.Fatal("expected validation error for missing endpoint ID")
+		t.Fatal("expected validation error for missing agent ID")
 	}
 }
 
-func TestLoad_MissingEndpointProfile(t *testing.T) {
+func TestLoad_MissingAgentProfile(t *testing.T) {
 	cfgJSON := `{
 		"hub": {"url": "ws://localhost", "token": "t"},
 		"runtime": {"id": "r1"},
-		"endpoints": [{"id": "e1", "name": "n"}]
+		"agents": [{"id": "e1", "name": "n"}]
 	}`
 	path := writeTemp(t, cfgJSON)
 	_, err := Load(path)
 	if err == nil {
-		t.Fatal("expected validation error for missing endpoint profile")
+		t.Fatal("expected validation error for missing agent profile")
 	}
 }
 
-func TestLoad_DuplicateEndpointID(t *testing.T) {
+func TestLoad_DuplicateAgentID(t *testing.T) {
 	cfgJSON := `{
 		"hub": {"url": "ws://localhost", "token": "t"},
 		"runtime": {"id": "r1"},
-		"endpoints": [
+		"agents": [
 			{"id": "e1", "name": "first", "profile": "p"},
 			{"id": "e1", "name": "second", "profile": "p"}
 		]
@@ -276,7 +276,7 @@ func TestLoad_DuplicateEndpointID(t *testing.T) {
 	path := writeTemp(t, cfgJSON)
 	_, err := Load(path)
 	if err == nil {
-		t.Fatal("expected validation error for duplicate endpoint ID")
+		t.Fatal("expected validation error for duplicate agent ID")
 	}
 }
 

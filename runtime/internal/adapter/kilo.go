@@ -17,7 +17,7 @@ import (
 // spawning a new process per Send() call.
 type KiloAdapter struct{}
 
-func (a *KiloAdapter) Start(ctx context.Context, cfg config.EndpointConfig) (AgentSession, error) {
+func (a *KiloAdapter) Start(ctx context.Context, cfg config.AgentConfig) (AgentSession, error) {
 	kiloCfg := cfg.Kilo
 	if kiloCfg == nil {
 		kiloCfg = &config.KiloConfig{}

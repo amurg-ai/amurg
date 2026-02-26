@@ -17,7 +17,7 @@ import (
 // spawning a new process per Send() call.
 type CodexAdapter struct{}
 
-func (a *CodexAdapter) Start(ctx context.Context, cfg config.EndpointConfig) (AgentSession, error) {
+func (a *CodexAdapter) Start(ctx context.Context, cfg config.AgentConfig) (AgentSession, error) {
 	cxCfg := cfg.Codex
 	if cxCfg == nil {
 		cxCfg = &config.CodexConfig{}

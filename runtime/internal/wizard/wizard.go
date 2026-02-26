@@ -125,14 +125,14 @@ func (w *Wizard) Run(outputPath string, generateSystemd bool) (string, bool, err
 	cfg.Runtime.LogLevel = w.p.Ask("  Log level (debug/info/warn/error)", "info")
 	_, _ = fmt.Fprintln(w.p.Out)
 
-	// Endpoints.
-	_, _ = fmt.Fprintln(w.p.Out, "Endpoints")
-	numEndpoints := w.p.AskInt("  How many endpoints to configure?", 1)
+	// Agents.
+	_, _ = fmt.Fprintln(w.p.Out, "Agents")
+	numAgents := w.p.AskInt("  How many agents to configure?", 1)
 
-	for i := range numEndpoints {
-		_, _ = fmt.Fprintf(w.p.Out, "\n  ── Endpoint %d of %d ──\n", i+1, numEndpoints)
-		ep := w.configureEndpoint(i)
-		cfg.Endpoints = append(cfg.Endpoints, ep)
+	for i := range numAgents {
+		_, _ = fmt.Fprintf(w.p.Out, "\n  ── Agent %d of %d ──\n", i+1, numAgents)
+		agent := w.configureAgent(i)
+		cfg.Agents = append(cfg.Agents, agent)
 	}
 
 	// Output path.
@@ -301,7 +301,7 @@ func wsToHTTP(wsURL string) string {
 	return u
 }
 
-func (w *Wizard) configureEndpoint(index int) config.EndpointConfig {
+func (w *Wizard) configureAgent(index int) config.AgentConfig {
 	// Build display options.
 	options := make([]string, len(orderedProfiles))
 	for i, p := range orderedProfiles {
@@ -320,11 +320,11 @@ func (w *Wizard) configureEndpoint(index int) config.EndpointConfig {
 	}
 	profile := orderedProfiles[profileIdx]
 
-	name := w.p.Ask("  Endpoint name", profileDescriptions[profile])
-	epID := fmt.Sprintf("%s-%d", profile, index+1)
+	name := w.p.Ask("  Agent name", profileDescriptions[profile])
+	agentID := fmt.Sprintf("%s-%d", profile, index+1)
 
-	ep := config.EndpointConfig{
-		ID:      epID,
+	agent := config.AgentConfig{
+		ID:      agentID,
 		Name:    name,
 		Profile: profile,
 	}
@@ -340,7 +340,7 @@ func (w *Wizard) configureEndpoint(index int) config.EndpointConfig {
 		if perm != "" {
 			cc.PermissionMode = perm
 		}
-		ep.ClaudeCode = cc
+		agent.ClaudeCode = cc
 
 	case protocol.ProfileGitHubCopilot:
 		cp := &config.CopilotConfig{}
@@ -348,7 +348,7 @@ func (w *Wizard) configureEndpoint(index int) config.EndpointConfig {
 		if model != "" {
 			cp.Model = model
 		}
-		ep.Copilot = cp
+		agent.Copilot = cp
 
 	case protocol.ProfileCodex:
 		cx := &config.CodexConfig{}
@@ -356,7 +356,7 @@ func (w *Wizard) configureEndpoint(index int) config.EndpointConfig {
 		if model != "" {
 			cx.Model = model
 		}
-		ep.Codex = cx
+		agent.Codex = cx
 
 	case protocol.ProfileKilo:
 		kc := &config.KiloConfig{}
@@ -368,12 +368,12 @@ func (w *Wizard) configureEndpoint(index int) config.EndpointConfig {
 		if provider != "" {
 			kc.Provider = provider
 		}
-		ep.Kilo = kc
+		agent.Kilo = kc
 
 	case protocol.ProfileGenericCLI:
 		command := w.p.Ask("  Command", "")
 		argsStr := w.p.Ask("  Arguments (space-separated)", "")
-		ep.CLI = &config.CLIConfig{
+		agent.CLI = &config.CLIConfig{
 			Command: command,
 			Args:    splitArgs(argsStr),
 		}
@@ -381,27 +381,27 @@ func (w *Wizard) configureEndpoint(index int) config.EndpointConfig {
 	case protocol.ProfileGenericJob:
 		command := w.p.Ask("  Command", "")
 		argsStr := w.p.Ask("  Arguments (space-separated)", "")
-		ep.Job = &config.JobConfig{
+		agent.Job = &config.JobConfig{
 			Command: command,
 			Args:    splitArgs(argsStr),
 		}
 
 	case protocol.ProfileGenericHTTP:
 		baseURL := w.p.Ask("  Base URL", "")
-		ep.HTTP = &config.HTTPConfig{
+		agent.HTTP = &config.HTTPConfig{
 			BaseURL: baseURL,
 		}
 
 	case protocol.ProfileExternal:
 		command := w.p.Ask("  Command", "")
 		argsStr := w.p.Ask("  Arguments (space-separated)", "")
-		ep.External = &config.ExternalConfig{
+		agent.External = &config.ExternalConfig{
 			Command: command,
 			Args:    splitArgs(argsStr),
 		}
 	}
 
-	return ep
+	return agent
 }
 
 func (w *Wizard) writeSystemdUnit(configPath string) error {

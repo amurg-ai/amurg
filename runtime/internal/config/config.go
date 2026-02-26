@@ -12,7 +12,7 @@ import (
 type Config struct {
 	Hub       HubConfig       `json:"hub"`
 	Runtime   RuntimeConfig   `json:"runtime"`
-	Endpoints []EndpointConfig `json:"endpoints"`
+	Agents []AgentConfig `json:"agents"`
 }
 
 // HubConfig defines how the runtime connects to the hub.
@@ -38,7 +38,7 @@ type RuntimeConfig struct {
 	AllowRemotePermissionSkip bool  `json:"allow_remote_permission_skip,omitempty"`
 }
 
-// SecurityConfig defines security constraints for an endpoint.
+// SecurityConfig defines security constraints for an agent.
 type SecurityConfig struct {
 	AllowedPaths   []string `json:"allowed_paths,omitempty"`
 	DeniedPaths    []string `json:"denied_paths,omitempty"`
@@ -48,13 +48,13 @@ type SecurityConfig struct {
 	EnvWhitelist   []string `json:"env_whitelist,omitempty"`
 }
 
-// EndpointConfig defines a single agent endpoint.
-type EndpointConfig struct {
+// AgentConfig defines a single agent configuration.
+type AgentConfig struct {
 	ID       string            `json:"id"`
 	Name     string            `json:"name"`
 	Profile  string            `json:"profile"`
 	Tags     map[string]string `json:"tags,omitempty"`
-	Limits   *EndpointLimits   `json:"limits,omitempty"`
+	Limits   *AgentLimits      `json:"limits,omitempty"`
 	Security *SecurityConfig   `json:"security,omitempty"`
 
 	// Profile-specific settings (parsed by the adapter)
@@ -68,8 +68,8 @@ type EndpointConfig struct {
 	External   *ExternalConfig   `json:"external,omitempty"`
 }
 
-// EndpointLimits are per-endpoint operational limits.
-type EndpointLimits struct {
+// AgentLimits are per-agent operational limits.
+type AgentLimits struct {
 	MaxSessions    int      `json:"max_sessions,omitempty"`
 	SessionTimeout Duration `json:"session_timeout,omitempty"`
 	MaxOutputBytes int64    `json:"max_output_bytes,omitempty"`
@@ -210,27 +210,27 @@ func (c *Config) validate() error {
 	if c.Runtime.ID == "" {
 		return fmt.Errorf("runtime.id is required")
 	}
-	if len(c.Endpoints) == 0 {
-		return fmt.Errorf("at least one endpoint is required")
+	if len(c.Agents) == 0 {
+		return fmt.Errorf("at least one agent is required")
 	}
 	seen := make(map[string]bool)
-	for i, ep := range c.Endpoints {
-		if ep.ID == "" {
-			return fmt.Errorf("endpoints[%d].id is required", i)
+	for i, agent := range c.Agents {
+		if agent.ID == "" {
+			return fmt.Errorf("agents[%d].id is required", i)
 		}
-		if seen[ep.ID] {
-			return fmt.Errorf("duplicate endpoint id: %s", ep.ID)
+		if seen[agent.ID] {
+			return fmt.Errorf("duplicate agent id: %s", agent.ID)
 		}
-		seen[ep.ID] = true
-		if ep.Profile == "" {
-			return fmt.Errorf("endpoints[%d].profile is required", i)
+		seen[agent.ID] = true
+		if agent.Profile == "" {
+			return fmt.Errorf("agents[%d].profile is required", i)
 		}
-		if ep.Security != nil && ep.Security.PermissionMode != "" {
-			switch ep.Security.PermissionMode {
+		if agent.Security != nil && agent.Security.PermissionMode != "" {
+			switch agent.Security.PermissionMode {
 			case "skip", "strict", "auto":
 				// valid
 			default:
-				return fmt.Errorf("endpoints[%d].security.permission_mode must be skip, strict, or auto", i)
+				return fmt.Errorf("agents[%d].security.permission_mode must be skip, strict, or auto", i)
 			}
 		}
 	}

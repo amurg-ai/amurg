@@ -48,7 +48,7 @@ type Server struct {
 	router                *router.Router
 	logger                *slog.Logger
 	mux                   *chi.Mux
-	defaultEndpointAccess string // "all" or "none"
+	defaultAgentAccess string // "all" or "none"
 	startTime             time.Time
 	maxBodyBytes          int64
 	authProviderName      string // "builtin" or "clerk"
@@ -77,7 +77,7 @@ func NewServer(s store.Store, ap auth.Provider, lp auth.LoginProvider, ra auth.R
 		enforcer:              opts.Enforcer,
 		router:                rt,
 		logger:                logger.With("component", "api"),
-		defaultEndpointAccess: cfg.Auth.DefaultEndpointAccess,
+		defaultAgentAccess: cfg.Auth.DefaultAgentAccess,
 		startTime:             time.Now(),
 		maxBodyBytes:          cfg.Server.MaxBodyBytes,
 		authProviderName:      authName,
@@ -134,7 +134,7 @@ func NewServer(s store.Store, ap auth.Provider, lp auth.LoginProvider, ra auth.R
 		}
 		r.Use(rateLimitMiddleware(srv.rl))
 
-		r.Get("/api/endpoints", srv.handleListEndpoints)
+		r.Get("/api/agents", srv.handleListAgents)
 		r.Get("/api/sessions", srv.handleListSessions)
 		r.Post("/api/sessions", srv.handleCreateSession)
 		r.Get("/api/sessions/{sessionID}/messages", srv.handleGetMessages)
@@ -155,9 +155,9 @@ func NewServer(s store.Store, ap auth.Provider, lp auth.LoginProvider, ra auth.R
 		r.Get("/api/admin/sessions", srv.handleAdminListSessions)
 		r.Post("/api/admin/sessions/{sessionID}/close", srv.handleAdminCloseSession)
 		r.Get("/api/admin/audit", srv.handleAdminListAuditEvents)
-		r.Get("/api/admin/endpoints", srv.handleAdminListEndpoints)
-		r.Get("/api/admin/endpoints/{endpointID}/config", srv.handleGetEndpointConfig)
-		r.Put("/api/admin/endpoints/{endpointID}/config", srv.handleUpdateEndpointConfig)
+		r.Get("/api/admin/agents", srv.handleAdminListAgents)
+		r.Get("/api/admin/agents/{agentID}/config", srv.handleGetAgentConfig)
+		r.Put("/api/admin/agents/{agentID}/config", srv.handleUpdateAgentConfig)
 		r.Post("/api/runtime/register/approve", srv.handleRuntimeRegisterApprove)
 	})
 
@@ -265,23 +265,23 @@ func (s *Server) handleGetMe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// --- Endpoint handlers ---
+// --- Agent handlers ---
 
-func (s *Server) handleListEndpoints(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	identity := getIdentityFromContext(r.Context())
 
-	endpoints, err := s.store.ListEndpoints(r.Context(), identity.OrgID)
+	agents, err := s.store.ListAgents(r.Context(), identity.OrgID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list endpoints")
+		writeError(w, http.StatusInternalServerError, "failed to list agents")
 		return
 	}
-	if endpoints == nil {
-		endpoints = []store.Endpoint{}
+	if agents == nil {
+		agents = []store.Agent{}
 	}
 
 	// Filter by permissions when access mode is "none".
-	if s.defaultEndpointAccess == "none" {
-		permitted, err := s.store.ListUserEndpoints(r.Context(), identity.UserID)
+	if s.defaultAgentAccess == "none" {
+		permitted, err := s.store.ListUserAgents(r.Context(), identity.UserID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to check permissions")
 			return
@@ -290,13 +290,13 @@ func (s *Server) handleListEndpoints(w http.ResponseWriter, r *http.Request) {
 		for _, id := range permitted {
 			permSet[id] = true
 		}
-		filtered := make([]store.Endpoint, 0)
-		for _, ep := range endpoints {
-			if permSet[ep.ID] {
-				filtered = append(filtered, ep)
+		filtered := make([]store.Agent, 0)
+		for _, agent := range agents {
+			if permSet[agent.ID] {
+				filtered = append(filtered, agent)
 			}
 		}
-		endpoints = filtered
+		agents = filtered
 	}
 
 	// Enrich with runtime online status.
@@ -306,13 +306,13 @@ func (s *Server) handleListEndpoints(w http.ResponseWriter, r *http.Request) {
 		onlineSet[rt.ID] = rt.Online
 	}
 
-	type endpointResponse struct {
-		store.Endpoint
+	type agentResponse struct {
+		store.Agent
 		Online bool `json:"online"`
 	}
-	result := make([]endpointResponse, len(endpoints))
-	for i, ep := range endpoints {
-		result[i] = endpointResponse{Endpoint: ep, Online: onlineSet[ep.RuntimeID]}
+	result := make([]agentResponse, len(agents))
+	for i, agent := range agents {
+		result[i] = agentResponse{Agent: agent, Online: onlineSet[agent.RuntimeID]}
 	}
 
 	writeJSON(w, http.StatusOK, result)
@@ -338,16 +338,16 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	identity := getIdentityFromContext(r.Context())
 
 	var req struct {
-		EndpointID string `json:"endpoint_id"`
+		AgentID string `json:"agent_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	// Check endpoint access when mode is "none".
-	if s.defaultEndpointAccess == "none" {
-		hasAccess, err := s.store.HasEndpointAccess(r.Context(), identity.UserID, req.EndpointID)
+	// Check agent access when mode is "none".
+	if s.defaultAgentAccess == "none" {
+		hasAccess, err := s.store.HasAgentAccess(r.Context(), identity.UserID, req.AgentID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to check permissions")
 			return
@@ -355,12 +355,12 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		if !hasAccess {
 			if err := s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
 				ID: uuid.New().String(), OrgID: identity.OrgID, Action: "session.create_denied",
-				UserID: identity.UserID, EndpointID: req.EndpointID,
+				UserID: identity.UserID, AgentID: req.AgentID,
 				Detail: json.RawMessage(`{"reason":"no_access"}`), CreatedAt: time.Now(),
 			}); err != nil {
 				s.logger.Warn("failed to log audit event", "action", "session.create_denied", "error", err)
 			}
-			writeError(w, http.StatusForbidden, "no access to this endpoint")
+			writeError(w, http.StatusForbidden, "no access to this agent")
 			return
 		}
 	}
@@ -377,12 +377,12 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	sess, err := s.router.CreateSession(r.Context(), identity.UserID, req.EndpointID)
+	sess, err := s.router.CreateSession(r.Context(), identity.UserID, req.AgentID)
 	if err != nil {
 		if strings.Contains(err.Error(), "max sessions") {
 			if err := s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
 				ID: uuid.New().String(), OrgID: identity.OrgID, Action: "session.create_denied",
-				UserID: identity.UserID, EndpointID: req.EndpointID,
+				UserID: identity.UserID, AgentID: req.AgentID,
 				Detail: json.RawMessage(`{"reason":"max_sessions"}`), CreatedAt: time.Now(),
 			}); err != nil {
 				s.logger.Warn("failed to log audit event", "action", "session.create_denied", "error", err)
@@ -465,7 +465,7 @@ func (s *Server) handleCloseSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
 		ID: uuid.New().String(), OrgID: identity.OrgID, Action: "session.close",
-		UserID: identity.UserID, SessionID: sessionID, EndpointID: sess.EndpointID, CreatedAt: time.Now(),
+		UserID: identity.UserID, SessionID: sessionID, AgentID: sess.AgentID, CreatedAt: time.Now(),
 	}); err != nil {
 		s.logger.Warn("failed to log audit event", "action", "session.close", "error", err)
 	}
@@ -533,14 +533,14 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGrantPermission(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, s.maxBodyBytes)
 	var req struct {
-		UserID     string `json:"user_id"`
-		EndpointID string `json:"endpoint_id"`
+		UserID  string `json:"user_id"`
+		AgentID string `json:"agent_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if err := s.store.GrantEndpointAccess(r.Context(), req.UserID, req.EndpointID); err != nil {
+	if err := s.store.GrantAgentAccess(r.Context(), req.UserID, req.AgentID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to grant permission")
 		return
 	}
@@ -550,14 +550,14 @@ func (s *Server) handleGrantPermission(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRevokePermission(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, s.maxBodyBytes)
 	var req struct {
-		UserID     string `json:"user_id"`
-		EndpointID string `json:"endpoint_id"`
+		UserID  string `json:"user_id"`
+		AgentID string `json:"agent_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if err := s.store.RevokeEndpointAccess(r.Context(), req.UserID, req.EndpointID); err != nil {
+	if err := s.store.RevokeAgentAccess(r.Context(), req.UserID, req.AgentID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to revoke permission")
 		return
 	}
@@ -566,15 +566,15 @@ func (s *Server) handleRevokePermission(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleListUserPermissions(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "userID")
-	endpoints, err := s.store.ListUserEndpoints(r.Context(), userID)
+	agents, err := s.store.ListUserAgents(r.Context(), userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list permissions")
 		return
 	}
-	if endpoints == nil {
-		endpoints = []string{}
+	if agents == nil {
+		agents = []string{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"user_id": userID, "endpoint_ids": endpoints})
+	writeJSON(w, http.StatusOK, map[string]any{"user_id": userID, "agent_ids": agents})
 }
 
 // --- Admin session/audit handlers ---
@@ -610,7 +610,7 @@ func (s *Server) handleAdminCloseSession(w http.ResponseWriter, r *http.Request)
 	identity := getIdentityFromContext(r.Context())
 	if err := s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
 		ID: uuid.New().String(), OrgID: identity.OrgID, Action: "session.admin_close",
-		UserID: identity.UserID, SessionID: sessionID, EndpointID: sess.EndpointID, CreatedAt: time.Now(),
+		UserID: identity.UserID, SessionID: sessionID, AgentID: sess.AgentID, CreatedAt: time.Now(),
 	}); err != nil {
 		s.logger.Warn("failed to log audit event", "action", "session.admin_close", "error", err)
 	}
@@ -640,16 +640,16 @@ func (s *Server) handleAdminListAuditEvents(w http.ResponseWriter, r *http.Reque
 	// Check for filter parameters.
 	action := r.URL.Query().Get("action")
 	sessionID := r.URL.Query().Get("session_id")
-	endpointID := r.URL.Query().Get("endpoint_id")
+	agentID := r.URL.Query().Get("agent_id")
 
 	var events []store.AuditEvent
 	var err error
 
-	if action != "" || sessionID != "" || endpointID != "" {
+	if action != "" || sessionID != "" || agentID != "" {
 		events, err = s.store.ListAuditEventsFiltered(r.Context(), identity.OrgID, store.AuditFilter{
-			Action:     action,
-			SessionID:  sessionID,
-			EndpointID: endpointID,
+			Action:    action,
+			SessionID: sessionID,
+			AgentID:   agentID,
 			Limit:      limit,
 			Offset:     offset,
 		})
@@ -687,29 +687,29 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
-// --- Admin endpoint config handlers ---
+// --- Admin agent config handlers ---
 
-// adminEndpointInfo extends endpoint data with runtime info and config override.
-type adminEndpointInfo struct {
-	ID             string                      `json:"id"`
-	OrgID          string                      `json:"org_id"`
-	RuntimeID      string                      `json:"runtime_id"`
-	RuntimeName    string                      `json:"runtime_name"`
-	RuntimeOnline  bool                        `json:"runtime_online"`
-	Profile        string                      `json:"profile"`
-	Name           string                      `json:"name"`
-	Tags           json.RawMessage             `json:"tags"`
-	Caps           json.RawMessage             `json:"caps"`
-	Security       json.RawMessage             `json:"security"`
-	ConfigOverride *store.EndpointConfigOverride `json:"config_override,omitempty"`
+// adminAgentInfo extends agent data with runtime info and config override.
+type adminAgentInfo struct {
+	ID             string                    `json:"id"`
+	OrgID          string                    `json:"org_id"`
+	RuntimeID      string                    `json:"runtime_id"`
+	RuntimeName    string                    `json:"runtime_name"`
+	RuntimeOnline  bool                      `json:"runtime_online"`
+	Profile        string                    `json:"profile"`
+	Name           string                    `json:"name"`
+	Tags           json.RawMessage           `json:"tags"`
+	Caps           json.RawMessage           `json:"caps"`
+	Security       json.RawMessage           `json:"security"`
+	ConfigOverride *store.AgentConfigOverride `json:"config_override,omitempty"`
 }
 
-func (s *Server) handleAdminListEndpoints(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAdminListAgents(w http.ResponseWriter, r *http.Request) {
 	identity := getIdentityFromContext(r.Context())
 
-	endpoints, err := s.store.ListEndpoints(r.Context(), identity.OrgID)
+	agents, err := s.store.ListAgents(r.Context(), identity.OrgID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list endpoints")
+		writeError(w, http.StatusInternalServerError, "failed to list agents")
 		return
 	}
 
@@ -723,33 +723,33 @@ func (s *Server) handleAdminListEndpoints(w http.ResponseWriter, r *http.Request
 		rtMap[rt.ID] = rt
 	}
 
-	overrides, err := s.store.ListEndpointConfigOverrides(r.Context(), identity.OrgID)
+	overrides, err := s.store.ListAgentConfigOverrides(r.Context(), identity.OrgID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list overrides")
 		return
 	}
-	overrideMap := make(map[string]store.EndpointConfigOverride, len(overrides))
+	overrideMap := make(map[string]store.AgentConfigOverride, len(overrides))
 	for _, o := range overrides {
-		overrideMap[o.EndpointID] = o
+		overrideMap[o.AgentID] = o
 	}
 
-	result := make([]adminEndpointInfo, 0, len(endpoints))
-	for _, ep := range endpoints {
-		info := adminEndpointInfo{
-			ID:        ep.ID,
-			OrgID:     ep.OrgID,
-			RuntimeID: ep.RuntimeID,
-			Profile:   ep.Profile,
-			Name:      ep.Name,
-			Tags:      json.RawMessage(ep.Tags),
-			Caps:      json.RawMessage(ep.Caps),
-			Security:  json.RawMessage(ep.Security),
+	result := make([]adminAgentInfo, 0, len(agents))
+	for _, agent := range agents {
+		info := adminAgentInfo{
+			ID:        agent.ID,
+			OrgID:     agent.OrgID,
+			RuntimeID: agent.RuntimeID,
+			Profile:   agent.Profile,
+			Name:      agent.Name,
+			Tags:      json.RawMessage(agent.Tags),
+			Caps:      json.RawMessage(agent.Caps),
+			Security:  json.RawMessage(agent.Security),
 		}
-		if rt, ok := rtMap[ep.RuntimeID]; ok {
+		if rt, ok := rtMap[agent.RuntimeID]; ok {
 			info.RuntimeName = rt.Name
 			info.RuntimeOnline = rt.Online
 		}
-		if o, ok := overrideMap[ep.ID]; ok {
+		if o, ok := overrideMap[agent.ID]; ok {
 			info.ConfigOverride = &o
 		}
 		result = append(result, info)
@@ -758,29 +758,29 @@ func (s *Server) handleAdminListEndpoints(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, result)
 }
 
-func (s *Server) handleGetEndpointConfig(w http.ResponseWriter, r *http.Request) {
-	endpointID := chi.URLParam(r, "endpointID")
+func (s *Server) handleGetAgentConfig(w http.ResponseWriter, r *http.Request) {
+	agentID := chi.URLParam(r, "agentID")
 
-	override, err := s.store.GetEndpointConfigOverride(r.Context(), endpointID)
+	override, err := s.store.GetAgentConfigOverride(r.Context(), agentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get config override")
 		return
 	}
 	if override == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"endpoint_id": endpointID, "override": nil})
+		writeJSON(w, http.StatusOK, map[string]any{"agent_id": agentID, "override": nil})
 		return
 	}
 	writeJSON(w, http.StatusOK, override)
 }
 
-func (s *Server) handleUpdateEndpointConfig(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleUpdateAgentConfig(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, s.maxBodyBytes)
-	endpointID := chi.URLParam(r, "endpointID")
+	agentID := chi.URLParam(r, "agentID")
 	identity := getIdentityFromContext(r.Context())
 
 	var req struct {
 		Security *protocol.SecurityProfile `json:"security,omitempty"`
-		Limits   *protocol.EndpointLimits  `json:"limits,omitempty"`
+		Limits   *protocol.AgentLimits     `json:"limits,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -798,10 +798,10 @@ func (s *Server) handleUpdateEndpointConfig(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	// Verify endpoint exists.
-	ep, err := s.store.GetEndpoint(r.Context(), endpointID)
-	if err != nil || ep == nil {
-		writeError(w, http.StatusNotFound, "endpoint not found")
+	// Verify agent exists.
+	agent, err := s.store.GetAgent(r.Context(), agentID)
+	if err != nil || agent == nil {
+		writeError(w, http.StatusNotFound, "agent not found")
 		return
 	}
 
@@ -818,36 +818,36 @@ func (s *Server) handleUpdateEndpointConfig(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	override := &store.EndpointConfigOverride{
-		EndpointID: endpointID,
-		OrgID:      ep.OrgID,
-		Security:   secJSON,
-		Limits:     limJSON,
-		UpdatedBy:  identity.UserID,
-		UpdatedAt:  time.Now(),
+	override := &store.AgentConfigOverride{
+		AgentID:   agentID,
+		OrgID:     agent.OrgID,
+		Security:  secJSON,
+		Limits:    limJSON,
+		UpdatedBy: identity.UserID,
+		UpdatedAt: time.Now(),
 	}
 
-	if err := s.store.UpsertEndpointConfigOverride(r.Context(), override); err != nil {
+	if err := s.store.UpsertAgentConfigOverride(r.Context(), override); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save config override")
 		return
 	}
 
 	// Push to runtime.
-	pushed := s.router.PushEndpointConfigUpdate(endpointID, req.Security, req.Limits)
+	pushed := s.router.PushAgentConfigUpdate(agentID, req.Security, req.Limits)
 
 	// Audit log.
 	if err := s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
-		ID: uuid.New().String(), OrgID: identity.OrgID, Action: "endpoint.config_update",
-		UserID: identity.UserID, EndpointID: endpointID,
+		ID: uuid.New().String(), OrgID: identity.OrgID, Action: "agent.config_update",
+		UserID: identity.UserID, AgentID: agentID,
 		Detail:    json.RawMessage(fmt.Sprintf(`{"pushed_to_runtime":%t}`, pushed)),
 		CreatedAt: time.Now(),
 	}); err != nil {
-		s.logger.Warn("failed to log audit event", "action", "endpoint.config_update", "error", err)
+		s.logger.Warn("failed to log audit event", "action", "agent.config_update", "error", err)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":             "saved",
-		"pushed_to_runtime":  pushed,
+		"status":            "saved",
+		"pushed_to_runtime": pushed,
 	})
 }
 

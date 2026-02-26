@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type {
   SessionInfo,
   StoredMessage,
-  EndpointInfo,
+  AgentInfo,
   UserInfo,
   Envelope,
   AgentOutput,
@@ -15,13 +15,13 @@ import { api } from "@/api/client";
 import { socket } from "@/api/websocket";
 
 function assignSequenceNumbers(sessions: SessionInfo[]): SessionInfo[] {
-  const byEndpoint = new Map<string, SessionInfo[]>();
+  const byAgent = new Map<string, SessionInfo[]>();
   for (const s of sessions) {
-    const key = s.endpoint_id;
-    if (!byEndpoint.has(key)) byEndpoint.set(key, []);
-    byEndpoint.get(key)!.push(s);
+    const key = s.agent_id;
+    if (!byAgent.has(key)) byAgent.set(key, []);
+    byAgent.get(key)!.push(s);
   }
-  for (const group of byEndpoint.values()) {
+  for (const group of byAgent.values()) {
     group.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
     group.forEach((s, i) => { s.seq = i + 1; });
   }
@@ -35,7 +35,7 @@ interface SessionState {
   authProvider: "builtin" | null; // null = loading
 
   // Data
-  endpoints: EndpointInfo[];
+  agents: AgentInfo[];
   sessions: SessionInfo[];
   activeSessionId: string | null;
   messages: Map<string, StoredMessage[]>;
@@ -55,9 +55,9 @@ interface SessionState {
   init: () => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
-  loadEndpoints: () => Promise<void>;
+  loadAgents: () => Promise<void>;
   loadSessions: () => Promise<void>;
-  createSession: (endpointId: string) => Promise<SessionInfo>;
+  createSession: (agentId: string) => Promise<SessionInfo>;
   selectSession: (sessionId: string) => Promise<void>;
   deselectSession: () => void;
   sendMessage: (content: string) => void;
@@ -218,7 +218,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
     user: null,
     isAuthenticated: api.isAuthenticated(),
     authProvider: null,
-    endpoints: [],
+    agents: [],
     sessions: [],
     activeSessionId: null,
     messages: new Map(),
@@ -272,7 +272,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
         });
         socket.connect();
         setupSocketHandlers();
-        await Promise.all([get().loadEndpoints(), get().loadSessions()]);
+        await Promise.all([get().loadAgents(), get().loadSessions()]);
       } catch {
         set({ isAuthenticated: false });
       }
@@ -291,7 +291,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
       socket.connect();
       setupSocketHandlers();
       // Load data in background — don't let failures block login.
-      Promise.all([get().loadEndpoints(), get().loadSessions()]).catch(() => {});
+      Promise.all([get().loadAgents(), get().loadSessions()]).catch(() => {});
     },
 
     logout: () => {
@@ -301,7 +301,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
         user: null,
         isAuthenticated: false,
         sessions: [],
-        endpoints: [],
+        agents: [],
         messages: new Map(),
         turns: new Map(),
         activeSessionId: null,
@@ -312,9 +312,9 @@ export const useSessionStore = create<SessionState>((set, get) => {
       });
     },
 
-    loadEndpoints: async () => {
-      const endpoints = await api.listEndpoints();
-      set({ endpoints: endpoints || [] });
+    loadAgents: async () => {
+      const agents = await api.listAgents();
+      set({ agents: agents || [] });
     },
 
     loadSessions: async () => {
@@ -322,8 +322,8 @@ export const useSessionStore = create<SessionState>((set, get) => {
       set({ sessions: assignSequenceNumbers(sessions || []) });
     },
 
-    createSession: async (endpointId: string) => {
-      const session = await api.createSession(endpointId);
+    createSession: async (agentId: string) => {
+      const session = await api.createSession(agentId);
       const { sessions } = get();
       set({ sessions: assignSequenceNumbers([session, ...sessions]) });
       await get().selectSession(session.id);

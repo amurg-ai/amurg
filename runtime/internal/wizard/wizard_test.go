@@ -13,7 +13,7 @@ import (
 )
 
 func TestWizard_ClaudeCode_ManualToken(t *testing.T) {
-	// Simulate user input: self-hosted hub, manual token, configure one claude-code endpoint.
+	// Simulate user input: self-hosted hub, manual token, configure one claude-code agent.
 	input := strings.Join([]string{
 		"2",                               // hub: Self-hosted
 		"ws://hub.example.com/ws/runtime", // hub URL
@@ -21,9 +21,9 @@ func TestWizard_ClaudeCode_ManualToken(t *testing.T) {
 		"my-token-123",                    // token
 		"test-runtime",                    // runtime ID
 		"info",                            // log level
-		"1",                               // 1 endpoint
+		"1",                               // 1 agent
 		"1",                               // profile: claude-code (first option)
-		"My Claude Agent",                 // endpoint name
+		"My Claude Agent",                 // agent name
 		"",                                // model (default)
 		"",                                // permission mode (default)
 		"2",                               // start now: No
@@ -60,15 +60,15 @@ func TestWizard_ClaudeCode_ManualToken(t *testing.T) {
 	if cfg.Runtime.ID != "test-runtime" {
 		t.Errorf("runtime.id = %q, want %q", cfg.Runtime.ID, "test-runtime")
 	}
-	if len(cfg.Endpoints) != 1 {
-		t.Fatalf("endpoints count = %d, want 1", len(cfg.Endpoints))
+	if len(cfg.Agents) != 1 {
+		t.Fatalf("agents count = %d, want 1", len(cfg.Agents))
 	}
-	ep := cfg.Endpoints[0]
-	if ep.Profile != "claude-code" {
-		t.Errorf("endpoint profile = %q, want %q", ep.Profile, "claude-code")
+	agent := cfg.Agents[0]
+	if agent.Profile != "claude-code" {
+		t.Errorf("agent profile = %q, want %q", agent.Profile, "claude-code")
 	}
-	if ep.Name != "My Claude Agent" {
-		t.Errorf("endpoint name = %q, want %q", ep.Name, "My Claude Agent")
+	if agent.Name != "My Claude Agent" {
+		t.Errorf("agent name = %q, want %q", agent.Name, "My Claude Agent")
 	}
 }
 
@@ -80,9 +80,9 @@ func TestWizard_CloudHub(t *testing.T) {
 		"cloud-token-xyz", // token
 		"cloud-runtime",   // runtime ID
 		"info",            // log level
-		"1",               // 1 endpoint
+		"1",               // 1 agent
 		"1",               // profile: claude-code
-		"Cloud Agent",     // endpoint name
+		"Cloud Agent",     // agent name
 		"",                // model (default)
 		"",                // permission mode (default)
 		"2",               // start now: No
@@ -125,9 +125,9 @@ func TestWizard_GenericCLI(t *testing.T) {
 		"dev-token",                         // token
 		"dev-runtime",                       // runtime ID
 		"debug",                             // log level
-		"1",                                 // 1 endpoint
+		"1",                                 // 1 agent
 		"5",                                 // profile: generic-cli (5th option)
-		"Bash Shell",                        // endpoint name
+		"Bash Shell",                        // agent name
 		"bash",                              // command
 		"--norc -i",                         // args
 		"2",                                 // start now: No
@@ -154,21 +154,21 @@ func TestWizard_GenericCLI(t *testing.T) {
 		t.Fatalf("unmarshal config: %v", err)
 	}
 
-	if len(cfg.Endpoints) != 1 {
-		t.Fatalf("endpoints count = %d, want 1", len(cfg.Endpoints))
+	if len(cfg.Agents) != 1 {
+		t.Fatalf("agents count = %d, want 1", len(cfg.Agents))
 	}
-	ep := cfg.Endpoints[0]
-	if ep.Profile != "generic-cli" {
-		t.Errorf("endpoint profile = %q, want %q", ep.Profile, "generic-cli")
+	agent := cfg.Agents[0]
+	if agent.Profile != "generic-cli" {
+		t.Errorf("agent profile = %q, want %q", agent.Profile, "generic-cli")
 	}
-	if ep.CLI == nil {
-		t.Fatal("endpoint.cli is nil")
+	if agent.CLI == nil {
+		t.Fatal("agent.cli is nil")
 	}
-	if ep.CLI.Command != "bash" {
-		t.Errorf("cli.command = %q, want %q", ep.CLI.Command, "bash")
+	if agent.CLI.Command != "bash" {
+		t.Errorf("cli.command = %q, want %q", agent.CLI.Command, "bash")
 	}
-	if len(ep.CLI.Args) != 2 || ep.CLI.Args[0] != "--norc" {
-		t.Errorf("cli.args = %v, want [--norc -i]", ep.CLI.Args)
+	if len(agent.CLI.Args) != 2 || agent.CLI.Args[0] != "--norc" {
+		t.Errorf("cli.args = %v, want [--norc -i]", agent.CLI.Args)
 	}
 }
 

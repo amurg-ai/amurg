@@ -17,7 +17,7 @@ export interface SecurityProfile {
   env_whitelist?: string[];
 }
 
-export interface EndpointInfo {
+export interface AgentInfo {
   id: string;
   runtime_id: string;
   profile: string;
@@ -33,13 +33,13 @@ export type ConnectionState = "connected" | "disconnected" | "reconnecting";
 export interface SessionInfo {
   id: string;
   user_id: string;
-  endpoint_id: string;
+  agent_id: string;
   runtime_id: string;
   profile: string;
   state: string;
   created_at: string;
   updated_at: string;
-  endpoint_name?: string;
+  agent_name?: string;
   seq?: number;
 }
 
@@ -85,7 +85,7 @@ export interface AuditEvent {
   user_id: string;
   runtime_id: string;
   session_id: string;
-  endpoint_id: string;
+  agent_id: string;
   detail: Record<string, unknown> | string;
   created_at: string;
 }
@@ -129,8 +129,8 @@ export interface FileMetadata {
   direction: "upload" | "download";
 }
 
-// Admin endpoint info with runtime details and config override
-export interface AdminEndpointInfo {
+// Admin agent info with runtime details and config override
+export interface AdminAgentInfo {
   id: string;
   org_id: string;
   runtime_id: string;
@@ -141,11 +141,11 @@ export interface AdminEndpointInfo {
   tags: Record<string, string>;
   caps: Record<string, unknown>;
   security: SecurityProfile;
-  config_override?: EndpointConfigOverride;
+  config_override?: AgentConfigOverride;
 }
 
-export interface EndpointConfigOverride {
-  endpoint_id: string;
+export interface AgentConfigOverride {
+  agent_id: string;
   org_id: string;
   security: string; // JSON string
   limits: string; // JSON string
@@ -153,7 +153,7 @@ export interface EndpointConfigOverride {
   updated_at: string;
 }
 
-export interface EndpointLimitsWire {
+export interface AgentLimitsWire {
   max_sessions?: number;
   session_timeout?: string;
   max_output_bytes?: number;

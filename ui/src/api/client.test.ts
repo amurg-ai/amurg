@@ -92,7 +92,7 @@ describe("api client", () => {
   });
 
   // --- authenticated requests ---
-  describe("listEndpoints", () => {
+  describe("listAgents", () => {
     it("sends Authorization header with stored token", async () => {
       localStorage.setItem("amurg_token", "my-token");
       globalThis.fetch = vi.fn().mockResolvedValue({
@@ -100,11 +100,11 @@ describe("api client", () => {
         json: () => Promise.resolve([]),
       });
 
-      await api.listEndpoints();
+      await api.listAgents();
 
       const [url, options] = (globalThis.fetch as ReturnType<typeof vi.fn>)
         .mock.calls[0];
-      expect(url).toBe("/api/endpoints");
+      expect(url).toBe("/api/agents");
       expect(options.headers.Authorization).toBe("Bearer my-token");
       expect(options.headers["Content-Type"]).toBe("application/json");
     });
@@ -115,7 +115,7 @@ describe("api client", () => {
         json: () => Promise.resolve([]),
       });
 
-      await api.listEndpoints();
+      await api.listAgents();
 
       const [, options] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock
         .calls[0];
@@ -124,7 +124,7 @@ describe("api client", () => {
   });
 
   describe("listSessions", () => {
-    it("calls correct endpoint", async () => {
+    it("calls correct path", async () => {
       localStorage.setItem("amurg_token", "tok");
       globalThis.fetch = vi.fn().mockResolvedValue({
         ok: true,
@@ -140,14 +140,14 @@ describe("api client", () => {
   });
 
   describe("createSession", () => {
-    it("sends POST with endpoint_id", async () => {
+    it("sends POST with agent_id", async () => {
       localStorage.setItem("amurg_token", "tok");
       globalThis.fetch = vi.fn().mockResolvedValue({
         ok: true,
         json: () =>
           Promise.resolve({
             id: "sess-1",
-            endpoint_id: "ep-1",
+            agent_id: "ep-1",
             state: "active",
           }),
       });
@@ -158,13 +158,13 @@ describe("api client", () => {
         .mock.calls[0];
       expect(url).toBe("/api/sessions");
       expect(options.method).toBe("POST");
-      expect(JSON.parse(options.body)).toEqual({ endpoint_id: "ep-1" });
+      expect(JSON.parse(options.body)).toEqual({ agent_id: "ep-1" });
       expect(result.id).toBe("sess-1");
     });
   });
 
   describe("getMessages", () => {
-    it("calls correct endpoint with session ID", async () => {
+    it("calls correct path with session ID", async () => {
       localStorage.setItem("amurg_token", "tok");
       globalThis.fetch = vi.fn().mockResolvedValue({
         ok: true,
@@ -189,7 +189,7 @@ describe("api client", () => {
         json: () => Promise.resolve({ error: "bad request details" }),
       });
 
-      await expect(api.listEndpoints()).rejects.toThrow("bad request details");
+      await expect(api.listAgents()).rejects.toThrow("bad request details");
     });
 
     it("falls back to statusText when response body has no error field", async () => {
@@ -201,7 +201,7 @@ describe("api client", () => {
         json: () => Promise.resolve({}),
       });
 
-      await expect(api.listEndpoints()).rejects.toThrow(
+      await expect(api.listAgents()).rejects.toThrow(
         "Internal Server Error",
       );
     });
@@ -215,7 +215,7 @@ describe("api client", () => {
         json: () => Promise.reject(new Error("not JSON")),
       });
 
-      await expect(api.listEndpoints()).rejects.toThrow("Bad Gateway");
+      await expect(api.listAgents()).rejects.toThrow("Bad Gateway");
     });
   });
 });

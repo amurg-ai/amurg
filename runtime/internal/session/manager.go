@@ -21,9 +21,9 @@ type Manager struct {
 	registry *adapter.Registry
 	logger   *slog.Logger
 
-	mu       sync.RWMutex
-	sessions map[string]*Session
-	epCfgs   map[string]config.EndpointConfig
+	mu        sync.RWMutex
+	sessions  map[string]*Session
+	agentCfgs map[string]config.AgentConfig
 
 	onOutput            OutputHandler
 	onPermissionRequest PermissionRequestFunc
@@ -32,15 +32,15 @@ type Manager struct {
 // NewManager creates a session manager.
 func NewManager(
 	cfg config.RuntimeConfig,
-	endpoints []config.EndpointConfig,
+	agents []config.AgentConfig,
 	registry *adapter.Registry,
 	onOutput OutputHandler,
 	onPermissionRequest PermissionRequestFunc,
 	logger *slog.Logger,
 ) *Manager {
-	epCfgs := make(map[string]config.EndpointConfig, len(endpoints))
-	for _, ep := range endpoints {
-		epCfgs[ep.ID] = ep
+	agentCfgs := make(map[string]config.AgentConfig, len(agents))
+	for _, agent := range agents {
+		agentCfgs[agent.ID] = agent
 	}
 
 	return &Manager{
@@ -48,14 +48,14 @@ func NewManager(
 		registry:            registry,
 		logger:              logger,
 		sessions:            make(map[string]*Session),
-		epCfgs:              epCfgs,
+		agentCfgs:           agentCfgs,
 		onOutput:            onOutput,
 		onPermissionRequest: onPermissionRequest,
 	}
 }
 
-// Create creates a new session for the given endpoint.
-func (m *Manager) Create(ctx context.Context, sessionID, endpointID, userID string) error {
+// Create creates a new session for the given agent.
+func (m *Manager) Create(ctx context.Context, sessionID, agentID, userID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -67,33 +67,33 @@ func (m *Manager) Create(ctx context.Context, sessionID, endpointID, userID stri
 		return fmt.Errorf("session %s already exists", sessionID)
 	}
 
-	epCfg, ok := m.epCfgs[endpointID]
+	agentCfg, ok := m.agentCfgs[agentID]
 	if !ok {
-		return fmt.Errorf("unknown endpoint: %s", endpointID)
+		return fmt.Errorf("unknown agent: %s", agentID)
 	}
 
-	adp, err := m.registry.Get(epCfg.Profile)
+	adp, err := m.registry.Get(agentCfg.Profile)
 	if err != nil {
 		return err
 	}
 
-	agent, err := adp.Start(ctx, epCfg)
+	agentSess, err := adp.Start(ctx, agentCfg)
 	if err != nil {
 		return fmt.Errorf("start agent: %w", err)
 	}
 
 	// Wire up permission handler if supported.
-	if pr, ok := agent.(adapter.PermissionRequester); ok && m.onPermissionRequest != nil {
+	if pr, ok := agentSess.(adapter.PermissionRequester); ok && m.onPermissionRequest != nil {
 		sid := sessionID
 		pr.SetPermissionHandler(func(tool, description, resource string) bool {
 			return m.onPermissionRequest(sid, tool, description, resource)
 		})
 	}
 
-	sess := NewSession(sessionID, endpointID, userID, agent, m.onOutput, m.logger)
+	sess := NewSession(sessionID, agentID, userID, agentSess, m.onOutput, m.logger)
 	m.sessions[sessionID] = sess
 
-	m.logger.Info("session created", "session_id", sessionID, "endpoint_id", endpointID, "user_id", userID)
+	m.logger.Info("session created", "session_id", sessionID, "agent_id", agentID, "user_id", userID)
 	return nil
 }
 
@@ -108,9 +108,9 @@ func (m *Manager) Send(ctx context.Context, sessionID string, input []byte) erro
 	}
 
 	idleTimeout := m.cfg.IdleTimeout.Duration
-	// Check for endpoint-specific idle timeout.
-	if epCfg, ok := m.epCfgs[sess.EndpointID]; ok && epCfg.Limits != nil && epCfg.Limits.IdleTimeout.Duration > 0 {
-		idleTimeout = epCfg.Limits.IdleTimeout.Duration
+	// Check for agent-specific idle timeout.
+	if agentCfg, ok := m.agentCfgs[sess.AgentID]; ok && agentCfg.Limits != nil && agentCfg.Limits.IdleTimeout.Duration > 0 {
+		idleTimeout = agentCfg.Limits.IdleTimeout.Duration
 	}
 
 	return sess.Send(ctx, input, idleTimeout)
@@ -183,9 +183,9 @@ func (m *Manager) DeliverFile(sessionID, filePath string, meta protocol.FileMeta
 		return
 	}
 
-	// Check if the adapter is an external adapter by looking at the endpoint profile.
-	epCfg, isKnown := m.epCfgs[sess.EndpointID]
-	if isKnown && epCfg.Profile == "external" {
+	// Check if the adapter is an external adapter by looking at the agent profile.
+	agentCfg, isKnown := m.agentCfgs[sess.AgentID]
+	if isKnown && agentCfg.Profile == "external" {
 		// External adapters get native file protocol via DeliverFileToExternal.
 		if fd, ok := sess.agent.(adapter.FileDeliverer); ok {
 			if err := fd.DeliverFile(filePath, meta.Name, meta.MimeType); err != nil {
@@ -200,8 +200,8 @@ func (m *Manager) DeliverFile(sessionID, filePath string, meta protocol.FileMeta
 	msg := fmt.Sprintf("[File uploaded: %s (%s, %d bytes)] Path: %s", meta.Name, meta.MimeType, meta.Size, filePath)
 
 	idleTimeout := m.cfg.IdleTimeout.Duration
-	if epCfg, ok := m.epCfgs[sess.EndpointID]; ok && epCfg.Limits != nil && epCfg.Limits.IdleTimeout.Duration > 0 {
-		idleTimeout = epCfg.Limits.IdleTimeout.Duration
+	if ac, ok := m.agentCfgs[sess.AgentID]; ok && ac.Limits != nil && ac.Limits.IdleTimeout.Duration > 0 {
+		idleTimeout = ac.Limits.IdleTimeout.Duration
 	}
 
 	if err := sess.Send(ctx, []byte(msg), idleTimeout); err != nil {
@@ -209,71 +209,71 @@ func (m *Manager) DeliverFile(sessionID, filePath string, meta protocol.FileMeta
 	}
 }
 
-// UpdateEndpointConfig applies config overrides from the hub to the in-memory endpoint config.
+// UpdateAgentConfig applies config overrides from the hub to the in-memory agent config.
 // Only affects new sessions; existing sessions already hold a copy of the config.
-func (m *Manager) UpdateEndpointConfig(endpointID string, security *protocol.SecurityProfile, limits *protocol.EndpointLimits) error {
+func (m *Manager) UpdateAgentConfig(agentID string, security *protocol.SecurityProfile, limits *protocol.AgentLimits) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	epCfg, ok := m.epCfgs[endpointID]
+	agentCfg, ok := m.agentCfgs[agentID]
 	if !ok {
-		return fmt.Errorf("unknown endpoint: %s", endpointID)
+		return fmt.Errorf("unknown agent: %s", agentID)
 	}
 
 	if security != nil {
 		// Block remote override of permission_mode to "skip" unless explicitly allowed.
 		if security.PermissionMode == "skip" && !m.cfg.AllowRemotePermissionSkip {
 			m.logger.Warn("blocked remote permission_mode override to 'skip'",
-				"endpoint_id", endpointID)
+				"agent_id", agentID)
 			return fmt.Errorf("remote override of permission_mode to 'skip' is not allowed")
 		}
 
-		if epCfg.Security == nil {
-			epCfg.Security = &config.SecurityConfig{}
+		if agentCfg.Security == nil {
+			agentCfg.Security = &config.SecurityConfig{}
 		}
 		if security.Cwd != "" {
-			epCfg.Security.Cwd = security.Cwd
+			agentCfg.Security.Cwd = security.Cwd
 		}
 		if security.PermissionMode != "" {
-			epCfg.Security.PermissionMode = security.PermissionMode
+			agentCfg.Security.PermissionMode = security.PermissionMode
 		}
 		if security.AllowedPaths != nil {
-			epCfg.Security.AllowedPaths = security.AllowedPaths
+			agentCfg.Security.AllowedPaths = security.AllowedPaths
 		}
 		if security.DeniedPaths != nil {
-			epCfg.Security.DeniedPaths = security.DeniedPaths
+			agentCfg.Security.DeniedPaths = security.DeniedPaths
 		}
 		if security.AllowedTools != nil {
-			epCfg.Security.AllowedTools = security.AllowedTools
+			agentCfg.Security.AllowedTools = security.AllowedTools
 		}
 		if security.EnvWhitelist != nil {
-			epCfg.Security.EnvWhitelist = security.EnvWhitelist
+			agentCfg.Security.EnvWhitelist = security.EnvWhitelist
 		}
 	}
 
 	if limits != nil {
-		if epCfg.Limits == nil {
-			epCfg.Limits = &config.EndpointLimits{}
+		if agentCfg.Limits == nil {
+			agentCfg.Limits = &config.AgentLimits{}
 		}
 		if limits.MaxSessions > 0 {
-			epCfg.Limits.MaxSessions = limits.MaxSessions
+			agentCfg.Limits.MaxSessions = limits.MaxSessions
 		}
 		if limits.MaxOutputBytes > 0 {
-			epCfg.Limits.MaxOutputBytes = limits.MaxOutputBytes
+			agentCfg.Limits.MaxOutputBytes = limits.MaxOutputBytes
 		}
 		if limits.SessionTimeout != "" {
 			if d, err := time.ParseDuration(limits.SessionTimeout); err == nil {
-				epCfg.Limits.SessionTimeout = config.Duration{Duration: d}
+				agentCfg.Limits.SessionTimeout = config.Duration{Duration: d}
 			}
 		}
 		if limits.IdleTimeout != "" {
 			if d, err := time.ParseDuration(limits.IdleTimeout); err == nil {
-				epCfg.Limits.IdleTimeout = config.Duration{Duration: d}
+				agentCfg.Limits.IdleTimeout = config.Duration{Duration: d}
 			}
 		}
 	}
 
-	m.epCfgs[endpointID] = epCfg
+	m.agentCfgs[agentID] = agentCfg
 	return nil
 }
 

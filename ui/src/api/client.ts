@@ -1,4 +1,4 @@
-import type { EndpointInfo, SessionInfo, StoredMessage, UserInfo, AuditEvent, RuntimeInfo, AdminEndpointInfo, EndpointConfigOverride, SecurityProfile, EndpointLimitsWire } from "@/types";
+import type { AgentInfo, SessionInfo, StoredMessage, UserInfo, AuditEvent, RuntimeInfo, AdminAgentInfo, AgentConfigOverride, SecurityProfile, AgentLimitsWire } from "@/types";
 
 const BASE = "";
 
@@ -77,14 +77,14 @@ export const api = {
     return res.json();
   },
 
-  listEndpoints: () => request<EndpointInfo[]>("/api/endpoints"),
+  listAgents: () => request<AgentInfo[]>("/api/agents"),
 
   listSessions: () => request<SessionInfo[]>("/api/sessions"),
 
-  createSession: (endpointId: string) =>
+  createSession: (agentId: string) =>
     request<SessionInfo>("/api/sessions", {
       method: "POST",
-      body: JSON.stringify({ endpoint_id: endpointId }),
+      body: JSON.stringify({ agent_id: agentId }),
     }),
 
   getMessages: (sessionId: string) =>
@@ -95,7 +95,7 @@ export const api = {
       method: "POST",
     }),
 
-  // Admin endpoints
+  // Admin
   listRuntimes: () => request<RuntimeInfo[]>("/api/runtimes"),
 
   listUsers: () => request<UserInfo[]>("/api/users"),
@@ -113,20 +113,20 @@ export const api = {
     return request<AuditEvent[]>(url);
   },
 
-  // Admin endpoint config
-  listAdminEndpoints: () => request<AdminEndpointInfo[]>("/api/admin/endpoints"),
+  // Admin agent config
+  listAdminAgents: () => request<AdminAgentInfo[]>("/api/admin/agents"),
 
-  getEndpointConfig: (endpointId: string) =>
-    request<EndpointConfigOverride | { endpoint_id: string; override: null }>(
-      `/api/admin/endpoints/${endpointId}/config`
+  getAgentConfig: (agentId: string) =>
+    request<AgentConfigOverride | { agent_id: string; override: null }>(
+      `/api/admin/agents/${agentId}/config`
     ),
 
-  updateEndpointConfig: (
-    endpointId: string,
-    body: { security?: SecurityProfile; limits?: EndpointLimitsWire }
+  updateAgentConfig: (
+    agentId: string,
+    body: { security?: SecurityProfile; limits?: AgentLimitsWire }
   ) =>
     request<{ status: string; pushed_to_runtime: boolean }>(
-      `/api/admin/endpoints/${endpointId}/config`,
+      `/api/admin/agents/${agentId}/config`,
       {
         method: "PUT",
         body: JSON.stringify(body),

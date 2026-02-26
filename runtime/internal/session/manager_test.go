@@ -16,7 +16,7 @@ type mockAdapter struct {
 	startErr error
 }
 
-func (m *mockAdapter) Start(_ context.Context, _ config.EndpointConfig) (adapter.AgentSession, error) {
+func (m *mockAdapter) Start(_ context.Context, _ config.AgentConfig) (adapter.AgentSession, error) {
 	if m.startErr != nil {
 		return nil, m.startErr
 	}
@@ -31,8 +31,8 @@ func testManagerConfig() config.RuntimeConfig {
 	}
 }
 
-func testEndpoints() []config.EndpointConfig {
-	return []config.EndpointConfig{
+func testAgents() []config.AgentConfig {
+	return []config.AgentConfig{
 		{
 			ID:      "ep-1",
 			Name:    "Test CLI",
@@ -55,7 +55,7 @@ func newTestManager(t *testing.T) *Manager {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	handler := func(string, adapter.Output, bool) {}
 
-	return NewManager(testManagerConfig(), testEndpoints(), registry, handler, nil, logger)
+	return NewManager(testManagerConfig(), testAgents(), registry, handler, nil, logger)
 }
 
 func TestManager_Create(t *testing.T) {
@@ -85,12 +85,12 @@ func TestManager_Create_DuplicateSession(t *testing.T) {
 	}
 }
 
-func TestManager_Create_UnknownEndpoint(t *testing.T) {
+func TestManager_Create_UnknownAgent(t *testing.T) {
 	m := newTestManager(t)
 
 	err := m.Create(context.Background(), "sess-1", "unknown-ep", "user-1")
 	if err == nil {
-		t.Fatal("expected error for unknown endpoint, got nil")
+		t.Fatal("expected error for unknown agent, got nil")
 	}
 }
 

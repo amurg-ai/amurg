@@ -70,8 +70,8 @@ func TestNewSession(t *testing.T) {
 	if sess.ID != "sess-1" {
 		t.Errorf("expected ID sess-1, got %s", sess.ID)
 	}
-	if sess.EndpointID != "ep-1" {
-		t.Errorf("expected EndpointID ep-1, got %s", sess.EndpointID)
+	if sess.AgentID != "ep-1" {
+		t.Errorf("expected AgentID ep-1, got %s", sess.AgentID)
 	}
 	if sess.UserID != "user-1" {
 		t.Errorf("expected UserID user-1, got %s", sess.UserID)

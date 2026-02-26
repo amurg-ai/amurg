@@ -16,10 +16,10 @@ import (
 // It executes a command per user message (run-to-completion).
 type JobAdapter struct{}
 
-func (a *JobAdapter) Start(ctx context.Context, cfg config.EndpointConfig) (AgentSession, error) {
+func (a *JobAdapter) Start(ctx context.Context, cfg config.AgentConfig) (AgentSession, error) {
 	jobCfg := cfg.Job
 	if jobCfg == nil {
-		return nil, fmt.Errorf("generic-job endpoint %s: missing job config", cfg.ID)
+		return nil, fmt.Errorf("generic-job agent %s: missing job config", cfg.ID)
 	}
 
 	return &jobSession{

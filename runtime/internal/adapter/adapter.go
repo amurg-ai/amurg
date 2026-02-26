@@ -23,7 +23,7 @@ type Output struct {
 type Adapter interface {
 	// Start initializes the agent for a new session. It returns an
 	// AgentSession that the runtime uses to communicate with the agent.
-	Start(ctx context.Context, cfg config.EndpointConfig) (AgentSession, error)
+	Start(ctx context.Context, cfg config.AgentConfig) (AgentSession, error)
 }
 
 // AgentSession represents an active agent interaction.

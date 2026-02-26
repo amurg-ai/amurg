@@ -18,7 +18,7 @@ import (
 // spawning a new process per Send() call and using --resume for continuity.
 type ClaudeCodeAdapter struct{}
 
-func (a *ClaudeCodeAdapter) Start(ctx context.Context, cfg config.EndpointConfig) (AgentSession, error) {
+func (a *ClaudeCodeAdapter) Start(ctx context.Context, cfg config.AgentConfig) (AgentSession, error) {
 	ccCfg := cfg.ClaudeCode
 	if ccCfg == nil {
 		ccCfg = &config.ClaudeCodeConfig{}

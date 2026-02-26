@@ -24,7 +24,7 @@ type Client struct {
 	cfg     config.HubConfig
 	rtID    string
 	orgID   string // optional, defaults to "default" on hub side
-	endpoints []protocol.EndpointRegistration
+	agents  []protocol.AgentRegistration
 	handler MessageHandler
 	logger  *slog.Logger
 
@@ -35,12 +35,12 @@ type Client struct {
 }
 
 // NewClient creates a hub client.
-func NewClient(cfg config.HubConfig, runtimeID, orgID string, endpoints []protocol.EndpointRegistration, handler MessageHandler, logger *slog.Logger) *Client {
+func NewClient(cfg config.HubConfig, runtimeID, orgID string, agents []protocol.AgentRegistration, handler MessageHandler, logger *slog.Logger) *Client {
 	return &Client{
 		cfg:          cfg,
 		rtID:         runtimeID,
 		orgID:        orgID,
-		endpoints:    endpoints,
+		agents:       agents,
 		handler:      handler,
 		logger:       logger.With("component", "hub-client"),
 		done:         make(chan struct{}),
@@ -112,7 +112,7 @@ func (c *Client) connectOnce(ctx context.Context) error {
 		RuntimeID: c.rtID,
 		Token:     token,
 		OrgID:     c.orgID,
-		Endpoints: c.endpoints,
+		Agents:    c.agents,
 	}
 
 	if err := c.sendMessage(protocol.TypeRuntimeHello, "", hello); err != nil {
