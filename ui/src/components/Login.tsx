@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { useSessionStore } from "@/stores/sessionStore";
 
 export function Login() {
@@ -9,6 +9,8 @@ export function Login() {
   const [loading, setLoading] = useState(false);
   const login = useSessionStore((s) => s.login);
   const navigate = useNavigate();
+  const location = useLocation();
+  const returnTo = (location.state as { returnTo?: string })?.returnTo || "/";
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -17,7 +19,7 @@ export function Login() {
 
     try {
       await login(username, password);
-      navigate("/", { replace: true });
+      navigate(returnTo, { replace: true });
     } catch {
       setError("Invalid credentials");
     } finally {

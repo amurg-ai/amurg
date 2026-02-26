@@ -1,5 +1,5 @@
 import { useEffect, lazy, Suspense } from "react";
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useSessionStore } from "@/stores/sessionStore";
 import { Login } from "@/components/Login";
 import { Chat } from "@/components/Chat";
@@ -7,6 +7,11 @@ import { Chat } from "@/components/Chat";
 const ConnectRuntime = lazy(() =>
   import("@/components/ConnectRuntime").then((m) => ({ default: m.ConnectRuntime }))
 );
+
+function RequireAuth() {
+  const location = useLocation();
+  return <Navigate to="/login" state={{ returnTo: location.pathname }} replace />;
+}
 
 export function App() {
   const { isAuthenticated, init } = useSessionStore();
@@ -27,7 +32,7 @@ export function App() {
           <Route path="/*" element={<Chat />} />
         </>
       ) : (
-        <Route path="/*" element={<Navigate to="/login" replace />} />
+        <Route path="/*" element={<RequireAuth />} />
       )}
     </Routes>
   );
