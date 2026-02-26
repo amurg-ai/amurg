@@ -24,6 +24,44 @@ import (
 	"github.com/amurg-ai/amurg/pkg/protocol"
 )
 
+const (
+	// wsPingInterval is how often the hub sends WebSocket ping frames.
+	wsPingInterval = 30 * time.Second
+	// wsPongWait is the maximum time to wait for a pong from the peer.
+	wsPongWait = 60 * time.Second
+)
+
+// startWSKeepalive sets up WebSocket-level ping/pong on a connection. It sets
+// read deadline, installs a pong handler, and starts a goroutine that sends
+// periodic pings. The returned cancel function stops the ping goroutine.
+func startWSKeepalive(conn *websocket.Conn, mu *sync.Mutex) (cancel func()) {
+	_ = conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	})
+
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(wsPingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				mu.Lock()
+				err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second))
+				mu.Unlock()
+				if err != nil {
+					return
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	return func() { close(done) }
+}
+
 // makeUpgrader creates a WebSocket upgrader with origin checking.
 func makeUpgrader(allowedOrigins []string) websocket.Upgrader {
 	allowAll := len(allowedOrigins) == 0 || (len(allowedOrigins) == 1 && allowedOrigins[0] == "*")
@@ -179,6 +217,11 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 
 	// Set read limit for runtime connections.
 	conn.SetReadLimit(r.maxRuntimeMessageSize)
+
+	// Set up WebSocket-level keepalive (pings every 30s).
+	var rtMu sync.Mutex
+	cancelKeepalive := startWSKeepalive(conn, &rtMu)
+	defer cancelKeepalive()
 
 	// Read the hello message.
 	_, msg, err := conn.ReadMessage()

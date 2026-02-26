@@ -16,6 +16,13 @@ import (
 	"github.com/amurg-ai/amurg/runtime/internal/config"
 )
 
+const (
+	// pingInterval is how often WebSocket ping frames are sent.
+	pingInterval = 30 * time.Second
+	// pongWait is the maximum time to wait for a pong before considering the connection dead.
+	pongWait = 60 * time.Second
+)
+
 // MessageHandler processes messages received from the hub.
 type MessageHandler func(env protocol.Envelope) error
 
@@ -49,8 +56,9 @@ func NewClient(cfg config.HubConfig, runtimeID, orgID string, endpoints []protoc
 }
 
 // Connect establishes the WebSocket connection to the hub and begins processing messages.
-// It blocks until the context is canceled or the connection is permanently lost.
+// It blocks until the context is canceled. Reconnects with exponential backoff on failure.
 func (c *Client) Connect(ctx context.Context) error {
+	delay := c.cfg.ReconnectInterval.Duration
 	for {
 		select {
 		case <-ctx.Done():
@@ -60,17 +68,23 @@ func (c *Client) Connect(ctx context.Context) error {
 
 		if err := c.connectOnce(ctx); err != nil {
 			c.logger.Warn("connection failed", "error", err)
+
+			// Exponential backoff: double delay on each failure, cap at max.
+			c.logger.Info("reconnecting", "delay", delay)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(delay):
+			}
+			delay = delay * 2
+			if delay > c.cfg.MaxReconnectDelay.Duration {
+				delay = c.cfg.MaxReconnectDelay.Duration
+			}
+			continue
 		}
 
-		// Reconnect with backoff.
-		delay := c.cfg.ReconnectInterval.Duration
-		c.logger.Info("reconnecting", "delay", delay)
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(delay):
-		}
+		// Successful connection ended (e.g. server closed cleanly); reset backoff.
+		delay = c.cfg.ReconnectInterval.Duration
 	}
 }
 
@@ -102,6 +116,37 @@ func (c *Client) connectOnce(ctx context.Context) error {
 		c.mu.Unlock()
 		_ = conn.Close()
 	}()
+
+	// Set up WebSocket-level keepalive.
+	_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+	conn.SetPongHandler(func(string) error {
+		c.logger.Debug("pong received")
+		return conn.SetReadDeadline(time.Now().Add(pongWait))
+	})
+
+	// Start ping goroutine — sends WebSocket ping frames to keep connection alive
+	// through proxies (e.g. Cloudflare's ~100s idle timeout).
+	pingDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(pingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				c.mu.Lock()
+				err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second))
+				c.mu.Unlock()
+				if err != nil {
+					c.logger.Debug("ping write failed", "error", err)
+					return
+				}
+				c.logger.Debug("ping sent")
+			case <-pingDone:
+				return
+			}
+		}
+	}()
+	defer close(pingDone)
 
 	// Send hello with latest token.
 	c.mu.Lock()
@@ -135,6 +180,9 @@ func (c *Client) connectOnce(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("read message: %w", err)
 		}
+
+		// Any message resets the read deadline.
+		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
 
 		var env protocol.Envelope
 		if err := json.Unmarshal(msg, &env); err != nil {
