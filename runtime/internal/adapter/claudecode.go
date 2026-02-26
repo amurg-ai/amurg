@@ -104,13 +104,9 @@ func (s *claudeCodeSession) Send(ctx context.Context, input []byte) error {
 	args = append(args, string(input))
 
 	cmd := exec.CommandContext(ctx, s.cfg.Command, args...)
-	// Working directory - security.Cwd overrides profile config.
-	workDir := s.cfg.WorkDir
-	if s.security != nil && s.security.Cwd != "" {
-		workDir = s.security.Cwd
-	}
-	if workDir != "" {
-		cmd.Dir = workDir
+	// Working directory — validated with fallback.
+	if dir := resolveWorkDir(s.cfg.WorkDir, s.security); dir != "" {
+		cmd.Dir = dir
 	}
 	cmd.Env = os.Environ()
 	for k, v := range s.cfg.Env {

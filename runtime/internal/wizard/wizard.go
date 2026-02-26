@@ -340,7 +340,7 @@ func (w *Wizard) ConfigureAgent(index int) config.AgentConfig {
 	switch profile {
 	case protocol.ProfileClaudeCode:
 		cc := &config.ClaudeCodeConfig{}
-		cc.WorkDir = w.p.Ask("  Working directory", defaultWorkDir)
+		cc.WorkDir = w.p.AskDir("  Working directory", defaultWorkDir)
 		model := w.p.Ask("  Model (leave empty for default)", "")
 		if model != "" {
 			cc.Model = model
@@ -353,7 +353,7 @@ func (w *Wizard) ConfigureAgent(index int) config.AgentConfig {
 
 	case protocol.ProfileGitHubCopilot:
 		cp := &config.CopilotConfig{}
-		cp.WorkDir = w.p.Ask("  Working directory", defaultWorkDir)
+		cp.WorkDir = w.p.AskDir("  Working directory", defaultWorkDir)
 		model := w.p.Ask("  Model (leave empty for default)", "")
 		if model != "" {
 			cp.Model = model
@@ -362,7 +362,7 @@ func (w *Wizard) ConfigureAgent(index int) config.AgentConfig {
 
 	case protocol.ProfileCodex:
 		cx := &config.CodexConfig{}
-		cx.WorkDir = w.p.Ask("  Working directory", defaultWorkDir)
+		cx.WorkDir = w.p.AskDir("  Working directory", defaultWorkDir)
 		model := w.p.Ask("  Model (leave empty for default)", "")
 		if model != "" {
 			cx.Model = model
@@ -371,7 +371,7 @@ func (w *Wizard) ConfigureAgent(index int) config.AgentConfig {
 
 	case protocol.ProfileKilo:
 		kc := &config.KiloConfig{}
-		kc.WorkDir = w.p.Ask("  Working directory", defaultWorkDir)
+		kc.WorkDir = w.p.AskDir("  Working directory", defaultWorkDir)
 		model := w.p.Ask("  Model (leave empty for default)", "")
 		if model != "" {
 			kc.Model = model

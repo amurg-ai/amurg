@@ -46,10 +46,8 @@ func (a *ExternalAdapter) Start(ctx context.Context, cfg config.AgentConfig) (Ag
 	}
 
 	cmd := exec.CommandContext(ctx, extCfg.Command, extCfg.Args...)
-	if extCfg.WorkDir != "" {
-		cmd.Dir = extCfg.WorkDir
-	} else if cfg.Security != nil && cfg.Security.Cwd != "" {
-		cmd.Dir = cfg.Security.Cwd
+	if dir := resolveWorkDir(extCfg.WorkDir, cfg.Security); dir != "" {
+		cmd.Dir = dir
 	}
 	cmd.Env = os.Environ()
 	for k, v := range extCfg.Env {

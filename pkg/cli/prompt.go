@@ -54,6 +54,33 @@ func (p *Prompter) Ask(question, defaultVal string) string {
 	return defaultVal
 }
 
+// AskDir asks for a directory path with a default value. It validates that the
+// path exists and is a directory, re-prompting if it doesn't.
+func (p *Prompter) AskDir(question, defaultVal string) string {
+	for {
+		ans := p.Ask(question, defaultVal)
+		if ans == "" {
+			return ""
+		}
+		// Expand ~ to home dir.
+		if strings.HasPrefix(ans, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				ans = home + ans[1:]
+			}
+		}
+		info, err := os.Stat(ans)
+		if err == nil && info.IsDir() {
+			return ans
+		}
+		if err != nil {
+			_, _ = fmt.Fprintf(p.Out, "  Directory does not exist: %s\n", ans)
+		} else {
+			_, _ = fmt.Fprintf(p.Out, "  Not a directory: %s\n", ans)
+		}
+		_, _ = fmt.Fprintf(p.Out, "  Please enter a valid directory path.\n")
+	}
+}
+
 // AskPassword reads a line without echoing. Falls back to plain read if
 // stdin is not a terminal (e.g. during tests or piped input).
 func (p *Prompter) AskPassword(question string) string {

@@ -102,13 +102,9 @@ func (s *codexSession) Send(ctx context.Context, input []byte) error {
 		args = append(args, "--model", s.cfg.Model)
 	}
 
-	// Working directory.
-	workDir := s.cfg.WorkDir
-	if s.security != nil && s.security.Cwd != "" {
-		workDir = s.security.Cwd
-	}
-	if workDir != "" {
-		args = append(args, "--cd", workDir)
+	// Working directory — validated with fallback.
+	if dir := resolveWorkDir(s.cfg.WorkDir, s.security); dir != "" {
+		args = append(args, "--cd", dir)
 	}
 
 	// The prompt text is the final argument.

@@ -64,10 +64,8 @@ func (s *jobSession) Send(ctx context.Context, input []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 
 	cmd := exec.CommandContext(ctx, s.cfg.Command, args...)
-	if s.cfg.WorkDir != "" {
-		cmd.Dir = s.cfg.WorkDir
-	} else if s.security != nil && s.security.Cwd != "" {
-		cmd.Dir = s.security.Cwd
+	if dir := resolveWorkDir(s.cfg.WorkDir, s.security); dir != "" {
+		cmd.Dir = dir
 	}
 	cmd.Env = os.Environ()
 	for k, v := range s.cfg.Env {

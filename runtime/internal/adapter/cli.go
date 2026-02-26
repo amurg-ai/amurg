@@ -23,10 +23,8 @@ func (a *CLIAdapter) Start(ctx context.Context, cfg config.AgentConfig) (AgentSe
 	}
 
 	cmd := exec.CommandContext(ctx, cliCfg.Command, cliCfg.Args...)
-	if cliCfg.WorkDir != "" {
-		cmd.Dir = cliCfg.WorkDir
-	} else if cfg.Security != nil && cfg.Security.Cwd != "" {
-		cmd.Dir = cfg.Security.Cwd
+	if dir := resolveWorkDir(cliCfg.WorkDir, cfg.Security); dir != "" {
+		cmd.Dir = dir
 	}
 	cmd.Env = os.Environ()
 	for k, v := range cliCfg.Env {

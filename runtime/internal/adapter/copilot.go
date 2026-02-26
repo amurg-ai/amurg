@@ -105,13 +105,9 @@ func (s *copilotSession) Send(ctx context.Context, input []byte) error {
 
 	cmd := exec.CommandContext(ctx, s.cfg.Command, args...)
 
-	// Working directory.
-	workDir := s.cfg.WorkDir
-	if s.security != nil && s.security.Cwd != "" {
-		workDir = s.security.Cwd
-	}
-	if workDir != "" {
-		cmd.Dir = workDir
+	// Working directory — validated with fallback.
+	if dir := resolveWorkDir(s.cfg.WorkDir, s.security); dir != "" {
+		cmd.Dir = dir
 	}
 
 	cmd.Env = os.Environ()
