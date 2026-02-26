@@ -380,7 +380,7 @@ func (s *SQLiteStore) ListUsers(ctx context.Context, orgID string) ([]User, erro
 func (s *SQLiteStore) UpsertRuntime(ctx context.Context, rt *Runtime) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO runtimes (id, org_id, name, online, last_seen) VALUES (?, ?, ?, ?, ?)
-		 ON CONFLICT(id) DO UPDATE SET name=excluded.name, online=excluded.online, last_seen=excluded.last_seen`,
+		 ON CONFLICT(id) DO UPDATE SET org_id=excluded.org_id, name=excluded.name, online=excluded.online, last_seen=excluded.last_seen`,
 		rt.ID, rt.OrgID, rt.Name, rt.Online, rt.LastSeen,
 	)
 	return err
@@ -431,7 +431,7 @@ func (s *SQLiteStore) SetRuntimeOnline(ctx context.Context, id string, online bo
 func (s *SQLiteStore) UpsertAgent(ctx context.Context, agent *Agent) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO agents (id, org_id, runtime_id, profile, name, tags, caps, security) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(id) DO UPDATE SET runtime_id=excluded.runtime_id, profile=excluded.profile, name=excluded.name, tags=excluded.tags, caps=excluded.caps, security=excluded.security`,
+		 ON CONFLICT(id) DO UPDATE SET org_id=excluded.org_id, runtime_id=excluded.runtime_id, profile=excluded.profile, name=excluded.name, tags=excluded.tags, caps=excluded.caps, security=excluded.security`,
 		agent.ID, agent.OrgID, agent.RuntimeID, agent.Profile, agent.Name, agent.Tags, agent.Caps, agent.Security,
 	)
 	return err

@@ -326,7 +326,7 @@ func (s *PostgresStore) ListUsers(ctx context.Context, orgID string) ([]User, er
 func (s *PostgresStore) UpsertRuntime(ctx context.Context, rt *Runtime) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO runtimes (id, org_id, name, online, last_seen) VALUES ($1, $2, $3, $4, $5)
-		 ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name, online=EXCLUDED.online, last_seen=EXCLUDED.last_seen`,
+		 ON CONFLICT(id) DO UPDATE SET org_id=EXCLUDED.org_id, name=EXCLUDED.name, online=EXCLUDED.online, last_seen=EXCLUDED.last_seen`,
 		rt.ID, rt.OrgID, rt.Name, rt.Online, rt.LastSeen,
 	)
 	return err
@@ -377,7 +377,7 @@ func (s *PostgresStore) SetRuntimeOnline(ctx context.Context, id string, online 
 func (s *PostgresStore) UpsertAgent(ctx context.Context, agent *Agent) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO agents (id, org_id, runtime_id, profile, name, tags, caps, security) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		 ON CONFLICT(id) DO UPDATE SET runtime_id=EXCLUDED.runtime_id, profile=EXCLUDED.profile, name=EXCLUDED.name, tags=EXCLUDED.tags, caps=EXCLUDED.caps, security=EXCLUDED.security`,
+		 ON CONFLICT(id) DO UPDATE SET org_id=EXCLUDED.org_id, runtime_id=EXCLUDED.runtime_id, profile=EXCLUDED.profile, name=EXCLUDED.name, tags=EXCLUDED.tags, caps=EXCLUDED.caps, security=EXCLUDED.security`,
 		agent.ID, agent.OrgID, agent.RuntimeID, agent.Profile, agent.Name, agent.Tags, agent.Caps, agent.Security,
 	)
 	return err

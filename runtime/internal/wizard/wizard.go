@@ -333,6 +333,10 @@ func (w *Wizard) ConfigureAgent(index int) config.AgentConfig {
 	switch profile {
 	case protocol.ProfileClaudeCode:
 		cc := &config.ClaudeCodeConfig{}
+		workDir := w.p.Ask("  Working directory (leave empty for home dir)", "")
+		if workDir != "" {
+			cc.WorkDir = workDir
+		}
 		model := w.p.Ask("  Model (leave empty for default)", "")
 		if model != "" {
 			cc.Model = model
