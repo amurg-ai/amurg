@@ -1,13 +1,32 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useState, useEffect, useRef } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { api } from "@/api/client";
 
 export function ConnectRuntime() {
+  const [searchParams] = useSearchParams();
   const [userCode, setUserCode] = useState("");
   const [runtimeName, setRuntimeName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<{ runtime_id: string } | null>(null);
+  const autoSubmitted = useRef(false);
+
+  // Pre-fill code from URL query param.
+  useEffect(() => {
+    const code = searchParams.get("code");
+    if (code) {
+      handleCodeChange(code);
+    }
+  }, [searchParams]);
+
+  // Auto-submit when code is pre-filled from URL and valid.
+  useEffect(() => {
+    if (autoSubmitted.current) return;
+    if (userCode.length === 9 && searchParams.get("code")) {
+      autoSubmitted.current = true;
+      doSubmit(userCode, runtimeName);
+    }
+  }, [userCode]);
 
   const handleCodeChange = (value: string) => {
     // Strip non-alphanumeric except hyphen, uppercase
@@ -20,14 +39,13 @@ export function ConnectRuntime() {
     setUserCode(cleaned.slice(0, 9));
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const doSubmit = async (code: string, name: string) => {
     setError("");
     setResult(null);
     setLoading(true);
 
     try {
-      const res = await api.approveRuntimeRegistration(userCode, runtimeName);
+      const res = await api.approveRuntimeRegistration(code, name);
       setResult({ runtime_id: res.runtime_id });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to approve registration");
@@ -36,27 +54,59 @@ export function ConnectRuntime() {
     }
   };
 
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await doSubmit(userCode, runtimeName);
+  };
+
+  if (result) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-900 px-4">
+        <div className="w-full max-w-sm text-center">
+          <div className="mb-6">
+            <div className="w-16 h-16 bg-teal-600/20 rounded-full flex items-center justify-center mx-auto mb-4">
+              <svg className="w-8 h-8 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <h1 className="text-2xl font-bold text-slate-100">Runtime Connected</h1>
+            <p className="text-slate-400 mt-2">
+              Your runtime has been registered successfully.
+            </p>
+            <p className="text-xs text-slate-500 mt-1 font-mono">
+              ID: {result.runtime_id}
+            </p>
+          </div>
+          <p className="text-slate-400 text-sm mb-6">
+            You can close this tab or return to your agents.
+          </p>
+          <Link
+            to="/"
+            className="inline-block px-6 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium transition-colors"
+          >
+            Go to Agents
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-900 px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <h1 className="text-2xl font-bold text-slate-100">Connect Runtime</h1>
-          <p className="text-slate-400 mt-2">Enter the code displayed on the runtime</p>
+          <p className="text-slate-400 mt-2">
+            {searchParams.get("code")
+              ? "Approving your runtime registration..."
+              : "Enter the code displayed on the runtime"}
+          </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {error && (
             <div className="bg-red-900/50 text-red-300 px-4 py-2 rounded-lg text-sm">
               {error}
-            </div>
-          )}
-
-          {result && (
-            <div className="bg-green-900/50 text-green-300 px-4 py-2 rounded-lg text-sm">
-              Runtime registered successfully!
-              <span className="block text-xs text-green-400 mt-1 font-mono">
-                ID: {result.runtime_id}
-              </span>
             </div>
           )}
 

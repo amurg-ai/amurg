@@ -1011,7 +1011,7 @@ func (s *Server) handleRuntimeRegister(w http.ResponseWriter, r *http.Request) {
 	if fwd := r.Header.Get("X-Forwarded-Proto"); fwd != "" {
 		scheme = fwd
 	}
-	verificationURL := fmt.Sprintf("%s://%s/connect", scheme, r.Host)
+	verificationURL := fmt.Sprintf("%s://%s/connect?code=%s", scheme, r.Host, userCode)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"user_code":        userCode,

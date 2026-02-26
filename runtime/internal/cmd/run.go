@@ -12,6 +12,7 @@ import (
 
 	"github.com/amurg-ai/amurg/runtime/internal/config"
 	"github.com/amurg-ai/amurg/runtime/internal/runtime"
+	"github.com/amurg-ai/amurg/runtime/internal/wizard"
 )
 
 func newRunCmd() *cobra.Command {
@@ -75,7 +76,8 @@ func runRun(cmd *cobra.Command, args []string) error {
 // resolveConfigPath returns the config file path from (in priority order):
 // 1. Positional argument
 // 2. --config / -c flag
-// 3. Default value
+// 3. ~/.amurg/config.json (if it exists)
+// 4. Default value (runtime-config.json in CWD)
 func resolveConfigPath(cmd *cobra.Command, args []string, defaultPath string) string {
 	if len(args) > 0 {
 		return args[0]
@@ -86,6 +88,12 @@ func resolveConfigPath(cmd *cobra.Command, args []string, defaultPath string) st
 	// Check parent (root) persistent flags too.
 	if f := cmd.Root().PersistentFlags().Lookup("config"); f != nil && f.Changed {
 		return f.Value.String()
+	}
+	// Check default config location (~/.amurg/config.json).
+	if p := wizard.DefaultConfigPath(); p != "" {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
 	}
 	return defaultPath
 }

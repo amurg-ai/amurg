@@ -16,10 +16,19 @@ func newInitCmd() *cobra.Command {
 			systemd, _ := cmd.Flags().GetBool("systemd")
 
 			w := wizard.New(cli.DefaultPrompter())
-			return w.Run(output, systemd)
+			configPath, startNow, err := w.Run(output, systemd)
+			if err != nil {
+				return err
+			}
+
+			if startNow {
+				return runRun(cmd, []string{configPath})
+			}
+
+			return nil
 		},
 	}
-	cmd.Flags().StringP("output", "o", "", "output config file path (default: ./amurg-runtime.json)")
+	cmd.Flags().StringP("output", "o", "", "output config file path (default: ~/.amurg/config.json)")
 	cmd.Flags().Bool("systemd", false, "also generate a systemd unit file")
 	return cmd
 }

@@ -26,6 +26,7 @@ func TestWizard_ClaudeCode_ManualToken(t *testing.T) {
 		"My Claude Agent",                 // endpoint name
 		"",                                // model (default)
 		"",                                // permission mode (default)
+		"2",                               // start now: No
 	}, "\n") + "\n"
 
 	out := &bytes.Buffer{}
@@ -35,7 +36,7 @@ func TestWizard_ClaudeCode_ManualToken(t *testing.T) {
 	outputPath := filepath.Join(tmpDir, "config.json")
 
 	w := New(p)
-	if err := w.Run(outputPath, false); err != nil {
+	if _, _, err := w.Run(outputPath, false); err != nil {
 		t.Fatalf("wizard.Run() error: %v", err)
 	}
 
@@ -84,6 +85,7 @@ func TestWizard_CloudHub(t *testing.T) {
 		"Cloud Agent",     // endpoint name
 		"",                // model (default)
 		"",                // permission mode (default)
+		"2",               // start now: No
 	}, "\n") + "\n"
 
 	out := &bytes.Buffer{}
@@ -93,7 +95,7 @@ func TestWizard_CloudHub(t *testing.T) {
 	outputPath := filepath.Join(tmpDir, "config.json")
 
 	w := New(p)
-	if err := w.Run(outputPath, false); err != nil {
+	if _, _, err := w.Run(outputPath, false); err != nil {
 		t.Fatalf("wizard.Run() error: %v", err)
 	}
 
@@ -128,6 +130,7 @@ func TestWizard_GenericCLI(t *testing.T) {
 		"Bash Shell",                        // endpoint name
 		"bash",                              // command
 		"--norc -i",                         // args
+		"2",                                 // start now: No
 	}, "\n") + "\n"
 
 	out := &bytes.Buffer{}
@@ -137,7 +140,7 @@ func TestWizard_GenericCLI(t *testing.T) {
 	outputPath := filepath.Join(tmpDir, "config.json")
 
 	w := New(p)
-	if err := w.Run(outputPath, false); err != nil {
+	if _, _, err := w.Run(outputPath, false); err != nil {
 		t.Fatalf("wizard.Run() error: %v", err)
 	}
 

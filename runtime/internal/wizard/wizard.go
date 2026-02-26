@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -69,7 +72,9 @@ type pollResponse struct {
 }
 
 // Run executes the interactive wizard and writes the config file.
-func (w *Wizard) Run(outputPath string, generateSystemd bool) error {
+// It returns the resolved config path, whether the user wants to start the
+// runtime immediately, and any error.
+func (w *Wizard) Run(outputPath string, generateSystemd bool) (string, bool, error) {
 	_, _ = fmt.Fprintln(w.p.Out)
 	_, _ = fmt.Fprintln(w.p.Out, "  Amurg Runtime — Configuration Wizard")
 	_, _ = fmt.Fprintln(w.p.Out, strings.Repeat("─", 42))
@@ -98,7 +103,7 @@ func (w *Wizard) Run(outputPath string, generateSystemd bool) error {
 	if authChoice == "Register via browser (recommended)" {
 		token, runtimeID, orgID, err := w.deviceCodeFlow(cfg.Hub.URL)
 		if err != nil {
-			return err
+			return "", false, err
 		}
 		cfg.Hub.Token = token
 		runtimeIDFromAuth = runtimeID
@@ -133,16 +138,23 @@ func (w *Wizard) Run(outputPath string, generateSystemd bool) error {
 	// Output path.
 	_, _ = fmt.Fprintln(w.p.Out)
 	if outputPath == "" {
-		outputPath = w.p.Ask("Config file output path", "./amurg-runtime.json")
+		outputPath = w.p.Ask("Config file output path", DefaultConfigPath())
+	}
+
+	// Ensure parent directory exists.
+	if dir := filepath.Dir(outputPath); dir != "." {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return "", false, fmt.Errorf("create config directory: %w", err)
+		}
 	}
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal config: %w", err)
+		return "", false, fmt.Errorf("marshal config: %w", err)
 	}
 
 	if err := os.WriteFile(outputPath, append(data, '\n'), 0600); err != nil {
-		return fmt.Errorf("write config: %w", err)
+		return "", false, fmt.Errorf("write config: %w", err)
 	}
 
 	_, _ = fmt.Fprintf(w.p.Out, "\n  Config written to %s\n", outputPath)
@@ -150,15 +162,23 @@ func (w *Wizard) Run(outputPath string, generateSystemd bool) error {
 	// Optional systemd unit.
 	if generateSystemd {
 		if err := w.writeSystemdUnit(outputPath); err != nil {
-			return err
+			return "", false, err
 		}
 	}
 
+	// Offer to start the runtime.
 	_, _ = fmt.Fprintln(w.p.Out)
-	_, _ = fmt.Fprintln(w.p.Out, "  Next steps:")
-	_, _ = fmt.Fprintf(w.p.Out, "    amurg-runtime run %s\n\n", outputPath)
+	startChoice := w.p.Choose("  Start the runtime now?",
+		[]string{"Yes", "No"}, 0)
+	startNow := startChoice == "Yes"
 
-	return nil
+	if !startNow {
+		_, _ = fmt.Fprintln(w.p.Out)
+		_, _ = fmt.Fprintln(w.p.Out, "  To start later:")
+		_, _ = fmt.Fprintf(w.p.Out, "    amurg-runtime run %s\n\n", outputPath)
+	}
+
+	return outputPath, startNow, nil
 }
 
 // deviceCodeFlow initiates the device-code registration flow and polls until
@@ -219,6 +239,13 @@ func (w *Wizard) doDeviceCodeRound(httpBase string) (string, string, string, err
 	_, _ = fmt.Fprintf(w.p.Out, "  │  Open:  %-31s │\n", dcResp.VerificationURL)
 	_, _ = fmt.Fprintln(w.p.Out, "  └─────────────────────────────────────────┘")
 	_, _ = fmt.Fprintln(w.p.Out)
+
+	// Try to open the browser automatically.
+	if err := openBrowser(dcResp.VerificationURL); err != nil {
+		_, _ = fmt.Fprintln(w.p.Out, "  Could not open browser automatically. Please open the URL above.")
+	} else {
+		_, _ = fmt.Fprintln(w.p.Out, "  Browser opened — approve the registration there.")
+	}
 	_, _ = fmt.Fprintln(w.p.Out, "  Waiting for approval...")
 
 	// Poll until approved or expired.
@@ -410,6 +437,27 @@ WantedBy=multi-user.target
 	_, _ = fmt.Fprintf(w.p.Out, "  Systemd unit written to %s\n", unitPath)
 	_, _ = fmt.Fprintln(w.p.Out, "  Enable with: sudo systemctl enable --now amurg-runtime")
 	return nil
+}
+
+// openBrowser attempts to open a URL in the default browser.
+func openBrowser(url string) error {
+	switch runtime.GOOS {
+	case "darwin":
+		return exec.Command("open", url).Start()
+	case "windows":
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	default: // linux, freebsd, etc.
+		return exec.Command("xdg-open", url).Start()
+	}
+}
+
+// DefaultConfigPath returns the default config file path (~/.amurg/config.json).
+func DefaultConfigPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "amurg-runtime.json"
+	}
+	return filepath.Join(home, ".amurg", "config.json")
 }
 
 func splitArgs(s string) []string {
