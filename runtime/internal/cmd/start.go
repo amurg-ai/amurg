@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -52,7 +51,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	child := exec.Command(exe, "run", configPath)
 	child.Stdout = logFile
 	child.Stderr = logFile
-	child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	child.SysProcAttr = daemon.DetachSysProcAttr()
 
 	if err := child.Start(); err != nil {
 		return fmt.Errorf("start runtime: %w", err)
