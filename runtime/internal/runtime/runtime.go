@@ -46,44 +46,44 @@ func New(cfg *config.Config, logger *slog.Logger) *Runtime {
 	// Create session manager with output handler that forwards to hub.
 	rt.sessions = session.NewManager(
 		cfg.Runtime,
-		cfg.Endpoints,
+		cfg.Agents,
 		registry,
 		rt.handleAgentOutput,
 		rt.handlePermissionRequest,
 		logger,
 	)
 
-	// Build endpoint registrations for hub.
-	endpoints := make([]protocol.EndpointRegistration, 0, len(cfg.Endpoints))
-	for _, ep := range cfg.Endpoints {
-		caps, ok := protocol.KnownProfiles[ep.Profile]
+	// Build agent registrations for hub.
+	agents := make([]protocol.AgentRegistration, 0, len(cfg.Agents))
+	for _, agent := range cfg.Agents {
+		caps, ok := protocol.KnownProfiles[agent.Profile]
 		if !ok {
 			caps = protocol.ProfileCaps{ExecModel: protocol.ExecInteractive}
 		}
 
 		var sec *protocol.SecurityProfile
-		if ep.Security != nil {
+		if agent.Security != nil {
 			sec = &protocol.SecurityProfile{
-				AllowedPaths:   ep.Security.AllowedPaths,
-				DeniedPaths:    ep.Security.DeniedPaths,
-				AllowedTools:   ep.Security.AllowedTools,
-				PermissionMode: ep.Security.PermissionMode,
-				Cwd:            ep.Security.Cwd,
-				EnvWhitelist:   ep.Security.EnvWhitelist,
+				AllowedPaths:   agent.Security.AllowedPaths,
+				DeniedPaths:    agent.Security.DeniedPaths,
+				AllowedTools:   agent.Security.AllowedTools,
+				PermissionMode: agent.Security.PermissionMode,
+				Cwd:            agent.Security.Cwd,
+				EnvWhitelist:   agent.Security.EnvWhitelist,
 			}
 		}
 
-		endpoints = append(endpoints, protocol.EndpointRegistration{
-			ID:       ep.ID,
-			Profile:  ep.Profile,
-			Name:     ep.Name,
-			Tags:     ep.Tags,
+		agents = append(agents, protocol.AgentRegistration{
+			ID:       agent.ID,
+			Profile:  agent.Profile,
+			Name:     agent.Name,
+			Tags:     agent.Tags,
 			Caps:     caps,
 			Security: sec,
 		})
 	}
 
-	rt.hubClient = hub.NewClient(cfg.Hub, cfg.Runtime.ID, cfg.Runtime.OrgID, endpoints, rt.handleHubMessage, logger)
+	rt.hubClient = hub.NewClient(cfg.Hub, cfg.Runtime.ID, cfg.Runtime.OrgID, agents, rt.handleHubMessage, logger)
 
 	return rt
 }
@@ -92,7 +92,7 @@ func New(cfg *config.Config, logger *slog.Logger) *Runtime {
 func (r *Runtime) Run(ctx context.Context) error {
 	r.logger.Info("starting runtime",
 		"id", r.cfg.Runtime.ID,
-		"endpoints", len(r.cfg.Endpoints),
+		"agents", len(r.cfg.Agents),
 		"max_sessions", r.cfg.Runtime.MaxSessions,
 	)
 
@@ -120,8 +120,8 @@ func (r *Runtime) handleHubMessage(env protocol.Envelope) error {
 		return r.handleStop(env)
 	case protocol.TypeFileUpload:
 		return r.handleFileUpload(env)
-	case protocol.TypeEndpointConfigUpdate:
-		return r.handleEndpointConfigUpdate(env)
+	case protocol.TypeAgentConfigUpdate:
+		return r.handleAgentConfigUpdate(env)
 	case protocol.TypePermissionResponse:
 		return r.handlePermissionResponse(env)
 	case protocol.TypePing:
@@ -155,7 +155,7 @@ func (r *Runtime) handleSessionCreate(env protocol.Envelope) error {
 	}
 
 	ctx := context.Background()
-	err := r.sessions.Create(ctx, req.SessionID, req.EndpointID, req.UserID)
+	err := r.sessions.Create(ctx, req.SessionID, req.AgentID, req.UserID)
 
 	resp := protocol.SessionCreated{
 		SessionID: req.SessionID,
@@ -261,37 +261,37 @@ func (r *Runtime) handleFileUpload(env protocol.Envelope) error {
 	return nil
 }
 
-// handleEndpointConfigUpdate applies a config override from the hub.
-func (r *Runtime) handleEndpointConfigUpdate(env protocol.Envelope) error {
+// handleAgentConfigUpdate applies a config override from the hub.
+func (r *Runtime) handleAgentConfigUpdate(env protocol.Envelope) error {
 	data, _ := json.Marshal(env.Payload)
-	var update protocol.EndpointConfigUpdate
+	var update protocol.AgentConfigUpdate
 	if err := json.Unmarshal(data, &update); err != nil {
-		return fmt.Errorf("unmarshal endpoint config update: %w", err)
+		return fmt.Errorf("unmarshal agent config update: %w", err)
 	}
 
 	// Log security details before applying config override.
 	if update.Security != nil {
-		r.logger.Info("applying endpoint config override",
-			"endpoint_id", update.EndpointID,
+		r.logger.Info("applying agent config override",
+			"agent_id", update.AgentID,
 			"permission_mode", update.Security.PermissionMode,
 			"cwd", update.Security.Cwd,
 		)
 	}
 
-	err := r.sessions.UpdateEndpointConfig(update.EndpointID, update.Security, update.Limits)
+	err := r.sessions.UpdateAgentConfig(update.AgentID, update.Security, update.Limits)
 
-	ack := protocol.EndpointConfigAck{
-		EndpointID: update.EndpointID,
-		OK:         err == nil,
+	ack := protocol.AgentConfigAck{
+		AgentID: update.AgentID,
+		OK:      err == nil,
 	}
 	if err != nil {
 		ack.Error = err.Error()
-		r.logger.Warn("endpoint config update failed", "endpoint_id", update.EndpointID, "error", err)
+		r.logger.Warn("agent config update failed", "agent_id", update.AgentID, "error", err)
 	} else {
-		r.logger.Info("endpoint config updated", "endpoint_id", update.EndpointID)
+		r.logger.Info("agent config updated", "agent_id", update.AgentID)
 	}
 
-	return r.hubClient.Send(protocol.TypeEndpointConfigAck, "", ack)
+	return r.hubClient.Send(protocol.TypeAgentConfigAck, "", ack)
 }
 
 // handleAgentOutput is called by the session manager when the agent produces output.

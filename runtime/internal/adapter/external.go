@@ -39,10 +39,10 @@ type externalMsg struct {
 	FilePath     string `json:"file_path,omitempty"`
 }
 
-func (a *ExternalAdapter) Start(ctx context.Context, cfg config.EndpointConfig) (AgentSession, error) {
+func (a *ExternalAdapter) Start(ctx context.Context, cfg config.AgentConfig) (AgentSession, error) {
 	extCfg := cfg.External
 	if extCfg == nil {
-		return nil, fmt.Errorf("external endpoint %s: missing external config", cfg.ID)
+		return nil, fmt.Errorf("external agent %s: missing external config", cfg.ID)
 	}
 
 	cmd := exec.CommandContext(ctx, extCfg.Command, extCfg.Args...)

@@ -16,10 +16,10 @@ import (
 // It spawns an interactive CLI process and pipes stdin/stdout/stderr.
 type CLIAdapter struct{}
 
-func (a *CLIAdapter) Start(ctx context.Context, cfg config.EndpointConfig) (AgentSession, error) {
+func (a *CLIAdapter) Start(ctx context.Context, cfg config.AgentConfig) (AgentSession, error) {
 	cliCfg := cfg.CLI
 	if cliCfg == nil {
-		return nil, fmt.Errorf("generic-cli endpoint %s: missing cli config", cfg.ID)
+		return nil, fmt.Errorf("generic-cli agent %s: missing cli config", cfg.ID)
 	}
 
 	cmd := exec.CommandContext(ctx, cliCfg.Command, cliCfg.Args...)

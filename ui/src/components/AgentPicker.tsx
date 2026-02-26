@@ -3,12 +3,12 @@ import { useSessionStore } from "@/stores/sessionStore";
 import { PROFILE_DISPLAY } from "@/types";
 import { SecurityBadge } from "@/components/SecurityBadge";
 
-interface EndpointPickerProps {
+interface AgentPickerProps {
   onClose: () => void;
 }
 
-export function EndpointPicker({ onClose }: EndpointPickerProps) {
-  const { endpoints, createSession, loadEndpoints } = useSessionStore();
+export function AgentPicker({ onClose }: AgentPickerProps) {
+  const { agents, createSession, loadAgents } = useSessionStore();
   const [creating, setCreating] = useState<string | null>(null);
 
   useEffect(() => {
@@ -19,11 +19,11 @@ export function EndpointPicker({ onClose }: EndpointPickerProps) {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
 
-  const handleSelect = async (endpointId: string) => {
+  const handleSelect = async (agentId: string) => {
     if (creating) return;
-    setCreating(endpointId);
+    setCreating(agentId);
     try {
-      await createSession(endpointId);
+      await createSession(agentId);
       onClose();
     } catch (err) {
       console.error("Failed to create session:", err);
@@ -33,7 +33,7 @@ export function EndpointPicker({ onClose }: EndpointPickerProps) {
   };
 
   const handleRefresh = () => {
-    loadEndpoints();
+    loadAgents();
   };
 
   return (
@@ -74,11 +74,11 @@ export function EndpointPicker({ onClose }: EndpointPickerProps) {
           </div>
         </div>
 
-        {/* Endpoint list */}
+        {/* Agent list */}
         <div className="p-3 max-h-96 overflow-y-auto">
-          {(!endpoints || endpoints.length === 0) ? (
+          {(!agents || agents.length === 0) ? (
             <div className="text-center py-8 text-slate-500">
-              <p className="mb-2">No endpoints online</p>
+              <p className="mb-2">No agents online</p>
               <p className="text-xs mb-4">Make sure a runtime is connected to the hub.</p>
               <button
                 onClick={handleRefresh}
@@ -89,7 +89,7 @@ export function EndpointPicker({ onClose }: EndpointPickerProps) {
             </div>
           ) : (
             <div className="space-y-2">
-              {endpoints.map((ep) => {
+              {agents.map((ep) => {
                 const profile = PROFILE_DISPLAY[ep.profile] || {
                   label: ep.profile,
                   color: "bg-slate-600",

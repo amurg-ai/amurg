@@ -26,10 +26,10 @@ type OutputHandler func(sessionID string, output adapter.Output, final bool)
 
 // Session represents a single active session between a hub user and an agent.
 type Session struct {
-	ID         string
-	EndpointID string
-	UserID     string
-	CreatedAt  time.Time
+	ID        string
+	AgentID   string
+	UserID    string
+	CreatedAt time.Time
 
 	agent   adapter.AgentSession
 	state   atomic.Value // State
@@ -41,15 +41,15 @@ type Session struct {
 }
 
 // NewSession creates a new session wrapping an agent session.
-func NewSession(id, endpointID, userID string, agent adapter.AgentSession, onOutput OutputHandler, logger *slog.Logger) *Session {
+func NewSession(id, agentID, userID string, agent adapter.AgentSession, onOutput OutputHandler, logger *slog.Logger) *Session {
 	s := &Session{
-		ID:         id,
-		EndpointID: endpointID,
-		UserID:     userID,
-		CreatedAt:  time.Now(),
-		agent:      agent,
-		onOutput:   onOutput,
-		logger:     logger.With("session_id", id, "endpoint_id", endpointID),
+		ID:        id,
+		AgentID:   agentID,
+		UserID:    userID,
+		CreatedAt: time.Now(),
+		agent:     agent,
+		onOutput:  onOutput,
+		logger:    logger.With("session_id", id, "agent_id", agentID),
 	}
 	s.state.Store(StateActive)
 	return s

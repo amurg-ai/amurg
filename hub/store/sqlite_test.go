@@ -52,10 +52,10 @@ func createTestRuntime(t *testing.T, s *SQLiteStore, name string) *Runtime {
 	return rt
 }
 
-// createTestEndpoint is a helper that inserts an endpoint and returns it.
-func createTestEndpoint(t *testing.T, s *SQLiteStore, runtimeID, name string) *Endpoint {
+// createTestAgent is a helper that inserts an agent and returns it.
+func createTestAgent(t *testing.T, s *SQLiteStore, runtimeID, name string) *Agent {
 	t.Helper()
-	ep := &Endpoint{
+	agent := &Agent{
 		ID:        uuid.New().String(),
 		OrgID:     "default",
 		RuntimeID: runtimeID,
@@ -65,25 +65,25 @@ func createTestEndpoint(t *testing.T, s *SQLiteStore, runtimeID, name string) *E
 		Caps:      `{"streaming":true}`,
 		Security:  "{}",
 	}
-	if err := s.UpsertEndpoint(context.Background(), ep); err != nil {
-		t.Fatalf("createTestEndpoint(%s): %v", name, err)
+	if err := s.UpsertAgent(context.Background(), agent); err != nil {
+		t.Fatalf("createTestAgent(%s): %v", name, err)
 	}
-	return ep
+	return agent
 }
 
 // createTestSession is a helper that inserts a session and returns it.
-func createTestSession(t *testing.T, s *SQLiteStore, userID, endpointID, runtimeID, state string) *Session {
+func createTestSession(t *testing.T, s *SQLiteStore, userID, agentID, runtimeID, state string) *Session {
 	t.Helper()
 	sess := &Session{
-		ID:         uuid.New().String(),
-		OrgID:      "default",
-		UserID:     userID,
-		EndpointID: endpointID,
-		RuntimeID:  runtimeID,
-		Profile:    "test-profile",
-		State:      state,
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
+		ID:        uuid.New().String(),
+		OrgID:     "default",
+		UserID:    userID,
+		AgentID:   agentID,
+		RuntimeID: runtimeID,
+		Profile:   "test-profile",
+		State:     state,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	}
 	if err := s.CreateSession(context.Background(), sess); err != nil {
 		t.Fatalf("createTestSession: %v", err)
@@ -280,14 +280,14 @@ func TestListRuntimes(t *testing.T) {
 	}
 }
 
-func TestUpsertEndpoint(t *testing.T) {
+func TestUpsertAgent(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
 	rt := createTestRuntime(t, s, "runtime-1")
 
-	ep := &Endpoint{
-		ID:        "ep-1",
+	agent := &Agent{
+		ID:        "agent-1",
 		OrgID:     "default",
 		RuntimeID: rt.ID,
 		Profile:   "chat-v1",
@@ -297,16 +297,16 @@ func TestUpsertEndpoint(t *testing.T) {
 		Security:  "{}",
 	}
 
-	if err := s.UpsertEndpoint(ctx, ep); err != nil {
-		t.Fatalf("UpsertEndpoint: %v", err)
+	if err := s.UpsertAgent(ctx, agent); err != nil {
+		t.Fatalf("UpsertAgent: %v", err)
 	}
 
-	got, err := s.GetEndpoint(ctx, "ep-1")
+	got, err := s.GetAgent(ctx, "agent-1")
 	if err != nil {
-		t.Fatalf("GetEndpoint: %v", err)
+		t.Fatalf("GetAgent: %v", err)
 	}
 	if got == nil {
-		t.Fatal("GetEndpoint returned nil")
+		t.Fatal("GetAgent returned nil")
 	}
 	if got.RuntimeID != rt.ID {
 		t.Errorf("RuntimeID: got %q, want %q", got.RuntimeID, rt.ID)
@@ -325,73 +325,73 @@ func TestUpsertEndpoint(t *testing.T) {
 	}
 }
 
-func TestListEndpoints(t *testing.T) {
+func TestListAgents(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
 	rt := createTestRuntime(t, s, "runtime-1")
-	createTestEndpoint(t, s, rt.ID, "ep-a")
-	createTestEndpoint(t, s, rt.ID, "ep-b")
+	createTestAgent(t, s, rt.ID, "agent-a")
+	createTestAgent(t, s, rt.ID, "agent-b")
 
-	eps, err := s.ListEndpoints(ctx, "default")
+	agents, err := s.ListAgents(ctx, "default")
 	if err != nil {
-		t.Fatalf("ListEndpoints: %v", err)
+		t.Fatalf("ListAgents: %v", err)
 	}
-	if len(eps) != 2 {
-		t.Fatalf("ListEndpoints: got %d, want 2", len(eps))
+	if len(agents) != 2 {
+		t.Fatalf("ListAgents: got %d, want 2", len(agents))
 	}
 }
 
-func TestListEndpointsByRuntime(t *testing.T) {
+func TestListAgentsByRuntime(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
 	rt1 := createTestRuntime(t, s, "runtime-1")
 	rt2 := createTestRuntime(t, s, "runtime-2")
-	createTestEndpoint(t, s, rt1.ID, "ep-a")
-	createTestEndpoint(t, s, rt1.ID, "ep-b")
-	createTestEndpoint(t, s, rt2.ID, "ep-c")
+	createTestAgent(t, s, rt1.ID, "agent-a")
+	createTestAgent(t, s, rt1.ID, "agent-b")
+	createTestAgent(t, s, rt2.ID, "agent-c")
 
-	eps, err := s.ListEndpointsByRuntime(ctx, rt1.ID)
+	agents, err := s.ListAgentsByRuntime(ctx, rt1.ID)
 	if err != nil {
-		t.Fatalf("ListEndpointsByRuntime: %v", err)
+		t.Fatalf("ListAgentsByRuntime: %v", err)
 	}
-	if len(eps) != 2 {
-		t.Fatalf("ListEndpointsByRuntime(rt1): got %d, want 2", len(eps))
+	if len(agents) != 2 {
+		t.Fatalf("ListAgentsByRuntime(rt1): got %d, want 2", len(agents))
 	}
 
-	eps2, err := s.ListEndpointsByRuntime(ctx, rt2.ID)
+	agents2, err := s.ListAgentsByRuntime(ctx, rt2.ID)
 	if err != nil {
-		t.Fatalf("ListEndpointsByRuntime(rt2): %v", err)
+		t.Fatalf("ListAgentsByRuntime(rt2): %v", err)
 	}
-	if len(eps2) != 1 {
-		t.Fatalf("ListEndpointsByRuntime(rt2): got %d, want 1", len(eps2))
+	if len(agents2) != 1 {
+		t.Fatalf("ListAgentsByRuntime(rt2): got %d, want 1", len(agents2))
 	}
 }
 
-func TestDeleteEndpointsByRuntime(t *testing.T) {
+func TestDeleteAgentsByRuntime(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
 	rt1 := createTestRuntime(t, s, "runtime-1")
 	rt2 := createTestRuntime(t, s, "runtime-2")
-	createTestEndpoint(t, s, rt1.ID, "ep-a")
-	createTestEndpoint(t, s, rt1.ID, "ep-b")
-	createTestEndpoint(t, s, rt2.ID, "ep-c")
+	createTestAgent(t, s, rt1.ID, "agent-a")
+	createTestAgent(t, s, rt1.ID, "agent-b")
+	createTestAgent(t, s, rt2.ID, "agent-c")
 
-	if err := s.DeleteEndpointsByRuntime(ctx, rt1.ID); err != nil {
-		t.Fatalf("DeleteEndpointsByRuntime: %v", err)
+	if err := s.DeleteAgentsByRuntime(ctx, rt1.ID); err != nil {
+		t.Fatalf("DeleteAgentsByRuntime: %v", err)
 	}
 
-	eps, _ := s.ListEndpointsByRuntime(ctx, rt1.ID)
-	if len(eps) != 0 {
-		t.Errorf("expected 0 endpoints for rt1 after delete, got %d", len(eps))
+	agents, _ := s.ListAgentsByRuntime(ctx, rt1.ID)
+	if len(agents) != 0 {
+		t.Errorf("expected 0 agents for rt1 after delete, got %d", len(agents))
 	}
 
-	// rt2 endpoints should be unaffected
-	eps2, _ := s.ListEndpointsByRuntime(ctx, rt2.ID)
-	if len(eps2) != 1 {
-		t.Errorf("expected 1 endpoint for rt2 after delete, got %d", len(eps2))
+	// rt2 agents should be unaffected
+	agents2, _ := s.ListAgentsByRuntime(ctx, rt2.ID)
+	if len(agents2) != 1 {
+		t.Errorf("expected 1 agent for rt2 after delete, got %d", len(agents2))
 	}
 }
 
@@ -401,18 +401,18 @@ func TestCreateAndGetSession(t *testing.T) {
 
 	user := createTestUser(t, s, "alice", "user")
 	rt := createTestRuntime(t, s, "runtime-1")
-	ep := createTestEndpoint(t, s, rt.ID, "ep-1")
+	agent := createTestAgent(t, s, rt.ID, "agent-1")
 
 	sess := &Session{
-		ID:         uuid.New().String(),
-		OrgID:      "default",
-		UserID:     user.ID,
-		EndpointID: ep.ID,
-		RuntimeID:  rt.ID,
-		Profile:    "chat-v1",
-		State:      "active",
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
+		ID:        uuid.New().String(),
+		OrgID:     "default",
+		UserID:    user.ID,
+		AgentID:   agent.ID,
+		RuntimeID: rt.ID,
+		Profile:   "chat-v1",
+		State:     "active",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	}
 
 	if err := s.CreateSession(ctx, sess); err != nil {
@@ -429,8 +429,8 @@ func TestCreateAndGetSession(t *testing.T) {
 	if got.UserID != user.ID {
 		t.Errorf("UserID: got %q, want %q", got.UserID, user.ID)
 	}
-	if got.EndpointID != ep.ID {
-		t.Errorf("EndpointID: got %q, want %q", got.EndpointID, ep.ID)
+	if got.AgentID != agent.ID {
+		t.Errorf("AgentID: got %q, want %q", got.AgentID, agent.ID)
 	}
 	if got.State != "active" {
 		t.Errorf("State: got %q, want %q", got.State, "active")
@@ -444,11 +444,11 @@ func TestListSessionsByUser(t *testing.T) {
 	user1 := createTestUser(t, s, "alice", "user")
 	user2 := createTestUser(t, s, "bob", "user")
 	rt := createTestRuntime(t, s, "runtime-1")
-	ep := createTestEndpoint(t, s, rt.ID, "ep-1")
+	agent := createTestAgent(t, s, rt.ID, "agent-1")
 
-	createTestSession(t, s, user1.ID, ep.ID, rt.ID, "active")
-	createTestSession(t, s, user1.ID, ep.ID, rt.ID, "active")
-	createTestSession(t, s, user2.ID, ep.ID, rt.ID, "active")
+	createTestSession(t, s, user1.ID, agent.ID, rt.ID, "active")
+	createTestSession(t, s, user1.ID, agent.ID, rt.ID, "active")
+	createTestSession(t, s, user2.ID, agent.ID, rt.ID, "active")
 
 	sessions, err := s.ListSessionsByUser(ctx, user1.ID)
 	if err != nil {
@@ -473,8 +473,8 @@ func TestUpdateSessionState(t *testing.T) {
 
 	user := createTestUser(t, s, "alice", "user")
 	rt := createTestRuntime(t, s, "runtime-1")
-	ep := createTestEndpoint(t, s, rt.ID, "ep-1")
-	sess := createTestSession(t, s, user.ID, ep.ID, rt.ID, "active")
+	agent := createTestAgent(t, s, rt.ID, "agent-1")
+	sess := createTestSession(t, s, user.ID, agent.ID, rt.ID, "active")
 
 	// Transition to idle
 	if err := s.UpdateSessionState(ctx, sess.ID, "idle"); err != nil {
@@ -501,8 +501,8 @@ func TestSetSessionNativeHandle(t *testing.T) {
 
 	user := createTestUser(t, s, "alice", "user")
 	rt := createTestRuntime(t, s, "runtime-1")
-	ep := createTestEndpoint(t, s, rt.ID, "ep-1")
-	sess := createTestSession(t, s, user.ID, ep.ID, rt.ID, "active")
+	agent := createTestAgent(t, s, rt.ID, "agent-1")
+	sess := createTestSession(t, s, user.ID, agent.ID, rt.ID, "active")
 
 	if err := s.SetSessionNativeHandle(ctx, sess.ID, "pid-12345"); err != nil {
 		t.Fatalf("SetSessionNativeHandle: %v", err)
@@ -520,11 +520,11 @@ func TestListActiveSessions(t *testing.T) {
 
 	user := createTestUser(t, s, "alice", "user")
 	rt := createTestRuntime(t, s, "runtime-1")
-	ep := createTestEndpoint(t, s, rt.ID, "ep-1")
+	agent := createTestAgent(t, s, rt.ID, "agent-1")
 
-	sess1 := createTestSession(t, s, user.ID, ep.ID, rt.ID, "active")
-	createTestSession(t, s, user.ID, ep.ID, rt.ID, "idle")
-	sess3 := createTestSession(t, s, user.ID, ep.ID, rt.ID, "active")
+	sess1 := createTestSession(t, s, user.ID, agent.ID, rt.ID, "active")
+	createTestSession(t, s, user.ID, agent.ID, rt.ID, "idle")
+	sess3 := createTestSession(t, s, user.ID, agent.ID, rt.ID, "active")
 
 	// Close sess1
 	if err := s.UpdateSessionState(ctx, sess1.ID, "closed"); err != nil {
@@ -555,11 +555,11 @@ func TestCountActiveSessionsByUser(t *testing.T) {
 
 	user := createTestUser(t, s, "alice", "user")
 	rt := createTestRuntime(t, s, "runtime-1")
-	ep := createTestEndpoint(t, s, rt.ID, "ep-1")
+	agent := createTestAgent(t, s, rt.ID, "agent-1")
 
-	createTestSession(t, s, user.ID, ep.ID, rt.ID, "active")
-	sess2 := createTestSession(t, s, user.ID, ep.ID, rt.ID, "active")
-	createTestSession(t, s, user.ID, ep.ID, rt.ID, "idle")
+	createTestSession(t, s, user.ID, agent.ID, rt.ID, "active")
+	sess2 := createTestSession(t, s, user.ID, agent.ID, rt.ID, "active")
+	createTestSession(t, s, user.ID, agent.ID, rt.ID, "idle")
 
 	count, err := s.CountActiveSessionsByUser(ctx, user.ID)
 	if err != nil {
@@ -583,8 +583,8 @@ func TestAppendAndGetMessages(t *testing.T) {
 
 	user := createTestUser(t, s, "alice", "user")
 	rt := createTestRuntime(t, s, "runtime-1")
-	ep := createTestEndpoint(t, s, rt.ID, "ep-1")
-	sess := createTestSession(t, s, user.ID, ep.ID, rt.ID, "active")
+	agent := createTestAgent(t, s, rt.ID, "agent-1")
+	sess := createTestSession(t, s, user.ID, agent.ID, rt.ID, "active")
 
 	msgs := []Message{
 		{ID: uuid.New().String(), SessionID: sess.ID, Seq: 1, Direction: "user", Channel: "stdin", Content: "hello", CreatedAt: time.Now()},
@@ -635,8 +635,8 @@ func TestAtomicSeqAssignment(t *testing.T) {
 
 	user := createTestUser(t, s, "alice", "user")
 	rt := createTestRuntime(t, s, "runtime-1")
-	ep := createTestEndpoint(t, s, rt.ID, "ep-1")
-	sess := createTestSession(t, s, user.ID, ep.ID, rt.ID, "active")
+	agent := createTestAgent(t, s, rt.ID, "agent-1")
+	sess := createTestSession(t, s, user.ID, agent.ID, rt.ID, "active")
 
 	// First message should get seq 1
 	msg := &Message{ID: uuid.New().String(), SessionID: sess.ID, Seq: 0, Direction: "user", Channel: "stdin", Content: "hello", CreatedAt: time.Now()}
@@ -681,8 +681,8 @@ func TestMessageExists(t *testing.T) {
 
 	user := createTestUser(t, s, "alice", "user")
 	rt := createTestRuntime(t, s, "runtime-1")
-	ep := createTestEndpoint(t, s, rt.ID, "ep-1")
-	sess := createTestSession(t, s, user.ID, ep.ID, rt.ID, "active")
+	agent := createTestAgent(t, s, rt.ID, "agent-1")
+	sess := createTestSession(t, s, user.ID, agent.ID, rt.ID, "active")
 
 	msgID := uuid.New().String()
 	msg := &Message{ID: msgID, SessionID: sess.ID, Seq: 0, Direction: "user", Channel: "stdin", Content: "hello", CreatedAt: time.Now()}
@@ -707,62 +707,62 @@ func TestMessageExists(t *testing.T) {
 	}
 }
 
-func TestEndpointPermissions(t *testing.T) {
+func TestAgentPermissions(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
 	userID := uuid.New().String()
-	epID1 := "ep-1"
-	epID2 := "ep-2"
+	agentID1 := "agent-1"
+	agentID2 := "agent-2"
 
 	// Grant access
-	if err := s.GrantEndpointAccess(ctx, userID, epID1); err != nil {
-		t.Fatalf("GrantEndpointAccess: %v", err)
+	if err := s.GrantAgentAccess(ctx, userID, agentID1); err != nil {
+		t.Fatalf("GrantAgentAccess: %v", err)
 	}
-	if err := s.GrantEndpointAccess(ctx, userID, epID2); err != nil {
-		t.Fatalf("GrantEndpointAccess: %v", err)
+	if err := s.GrantAgentAccess(ctx, userID, agentID2); err != nil {
+		t.Fatalf("GrantAgentAccess: %v", err)
 	}
 
 	// Check access
-	has, err := s.HasEndpointAccess(ctx, userID, epID1)
+	has, err := s.HasAgentAccess(ctx, userID, agentID1)
 	if err != nil {
-		t.Fatalf("HasEndpointAccess: %v", err)
+		t.Fatalf("HasAgentAccess: %v", err)
 	}
 	if !has {
-		t.Error("expected access to ep-1")
+		t.Error("expected access to agent-1")
 	}
 
-	// List endpoints
-	eps, err := s.ListUserEndpoints(ctx, userID)
+	// List agents
+	agents, err := s.ListUserAgents(ctx, userID)
 	if err != nil {
-		t.Fatalf("ListUserEndpoints: %v", err)
+		t.Fatalf("ListUserAgents: %v", err)
 	}
-	if len(eps) != 2 {
-		t.Fatalf("ListUserEndpoints: got %d, want 2", len(eps))
+	if len(agents) != 2 {
+		t.Fatalf("ListUserAgents: got %d, want 2", len(agents))
 	}
 
 	// Revoke access
-	if err := s.RevokeEndpointAccess(ctx, userID, epID1); err != nil {
-		t.Fatalf("RevokeEndpointAccess: %v", err)
+	if err := s.RevokeAgentAccess(ctx, userID, agentID1); err != nil {
+		t.Fatalf("RevokeAgentAccess: %v", err)
 	}
 
-	has, _ = s.HasEndpointAccess(ctx, userID, epID1)
+	has, _ = s.HasAgentAccess(ctx, userID, agentID1)
 	if has {
-		t.Error("expected no access to ep-1 after revoke")
+		t.Error("expected no access to agent-1 after revoke")
 	}
 
-	eps, _ = s.ListUserEndpoints(ctx, userID)
-	if len(eps) != 1 {
-		t.Fatalf("ListUserEndpoints after revoke: got %d, want 1", len(eps))
+	agents, _ = s.ListUserAgents(ctx, userID)
+	if len(agents) != 1 {
+		t.Fatalf("ListUserAgents after revoke: got %d, want 1", len(agents))
 	}
 
 	// Grant duplicate should not error (ON CONFLICT DO NOTHING)
-	if err := s.GrantEndpointAccess(ctx, userID, epID2); err != nil {
-		t.Fatalf("GrantEndpointAccess (duplicate): %v", err)
+	if err := s.GrantAgentAccess(ctx, userID, agentID2); err != nil {
+		t.Fatalf("GrantAgentAccess (duplicate): %v", err)
 	}
-	eps, _ = s.ListUserEndpoints(ctx, userID)
-	if len(eps) != 1 {
-		t.Fatalf("ListUserEndpoints after dup grant: got %d, want 1", len(eps))
+	agents, _ = s.ListUserAgents(ctx, userID)
+	if len(agents) != 1 {
+		t.Fatalf("ListUserAgents after dup grant: got %d, want 1", len(agents))
 	}
 }
 
@@ -817,11 +817,11 @@ func TestListAllSessions(t *testing.T) {
 	user1 := createTestUser(t, s, "alice", "user")
 	user2 := createTestUser(t, s, "bob", "user")
 	rt := createTestRuntime(t, s, "runtime-1")
-	ep := createTestEndpoint(t, s, rt.ID, "ep-1")
+	agent := createTestAgent(t, s, rt.ID, "agent-1")
 
-	createTestSession(t, s, user1.ID, ep.ID, rt.ID, "active")
-	createTestSession(t, s, user2.ID, ep.ID, rt.ID, "active")
-	createTestSession(t, s, user1.ID, ep.ID, rt.ID, "closed")
+	createTestSession(t, s, user1.ID, agent.ID, rt.ID, "active")
+	createTestSession(t, s, user2.ID, agent.ID, rt.ID, "active")
+	createTestSession(t, s, user1.ID, agent.ID, rt.ID, "closed")
 
 	all, err := s.ListAllSessions(ctx, "default")
 	if err != nil {

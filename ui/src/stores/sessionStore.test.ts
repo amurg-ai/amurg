@@ -21,7 +21,7 @@ vi.mock("@/api/client", () => ({
     login: vi.fn(),
     logout: vi.fn(),
     getMe: vi.fn(),
-    listEndpoints: vi.fn(() => Promise.resolve([])),
+    listAgents: vi.fn(() => Promise.resolve([])),
     listSessions: vi.fn(() => Promise.resolve([])),
     createSession: vi.fn(),
     getMessages: vi.fn(() => Promise.resolve([])),
@@ -42,7 +42,7 @@ describe("sessionStore", () => {
     useSessionStore.setState({
       user: null,
       isAuthenticated: false,
-      endpoints: [],
+      agents: [],
       sessions: [],
       activeSessionId: null,
       messages: new Map(),
@@ -72,8 +72,8 @@ describe("sessionStore", () => {
       expect(useSessionStore.getState().activeSessionId).toBeNull();
     });
 
-    it("has empty endpoints", () => {
-      expect(useSessionStore.getState().endpoints).toEqual([]);
+    it("has empty agents", () => {
+      expect(useSessionStore.getState().agents).toEqual([]);
     });
 
     it("has disconnected connection state", () => {
@@ -173,7 +173,7 @@ describe("sessionStore", () => {
         username: "admin",
         role: "admin",
       });
-      mockedApi.listEndpoints.mockResolvedValue([]);
+      mockedApi.listAgents.mockResolvedValue([]);
       mockedApi.listSessions.mockResolvedValue([]);
 
       await useSessionStore.getState().login("admin", "admin");
@@ -195,7 +195,7 @@ describe("sessionStore", () => {
         username: "admin",
         role: "admin",
       });
-      mockedApi.listEndpoints.mockResolvedValue([]);
+      mockedApi.listAgents.mockResolvedValue([]);
       mockedApi.listSessions.mockResolvedValue([]);
 
       await useSessionStore.getState().login("admin", "admin");
@@ -215,7 +215,7 @@ describe("sessionStore", () => {
           {
             id: "s1",
             user_id: "u1",
-            endpoint_id: "e1",
+            agent_id: "e1",
             runtime_id: "r1",
             profile: "cli",
             state: "active",
@@ -237,9 +237,9 @@ describe("sessionStore", () => {
     });
   });
 
-  // --- loadEndpoints ---
-  describe("loadEndpoints", () => {
-    it("fetches and sets endpoints", async () => {
+  // --- loadAgents ---
+  describe("loadAgents", () => {
+    it("fetches and sets agents", async () => {
       const eps = [
         {
           id: "ep1",
@@ -250,25 +250,25 @@ describe("sessionStore", () => {
           caps: "{}",
         },
       ];
-      mockedApi.listEndpoints.mockResolvedValue(eps);
+      mockedApi.listAgents.mockResolvedValue(eps);
 
-      await useSessionStore.getState().loadEndpoints();
+      await useSessionStore.getState().loadAgents();
 
-      expect(useSessionStore.getState().endpoints).toEqual(eps);
+      expect(useSessionStore.getState().agents).toEqual(eps);
     });
 
     it("handles null response by setting empty array", async () => {
-      mockedApi.listEndpoints.mockResolvedValue(
-        null as unknown as ReturnType<typeof api.listEndpoints> extends Promise<
+      mockedApi.listAgents.mockResolvedValue(
+        null as unknown as ReturnType<typeof api.listAgents> extends Promise<
           infer T
         >
           ? T
           : never,
       );
 
-      await useSessionStore.getState().loadEndpoints();
+      await useSessionStore.getState().loadAgents();
 
-      expect(useSessionStore.getState().endpoints).toEqual([]);
+      expect(useSessionStore.getState().agents).toEqual([]);
     });
   });
 
@@ -279,7 +279,7 @@ describe("sessionStore", () => {
         {
           id: "s1",
           user_id: "u1",
-          endpoint_id: "ep1",
+          agent_id: "ep1",
           runtime_id: "r1",
           profile: "cli",
           state: "active",
@@ -289,7 +289,7 @@ describe("sessionStore", () => {
         {
           id: "s2",
           user_id: "u1",
-          endpoint_id: "ep1",
+          agent_id: "ep1",
           runtime_id: "r1",
           profile: "cli",
           state: "active",
@@ -303,7 +303,7 @@ describe("sessionStore", () => {
 
       const stored = useSessionStore.getState().sessions;
       expect(stored.length).toBe(2);
-      // Sequence numbers should be assigned per endpoint
+      // Sequence numbers should be assigned per agent
       expect(stored.find((s) => s.id === "s1")?.seq).toBe(1);
       expect(stored.find((s) => s.id === "s2")?.seq).toBe(2);
     });

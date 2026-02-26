@@ -35,8 +35,8 @@ func setupTestRouter(t *testing.T) (*Router, store.Store, *auth.Service) {
 	return rt, s, authSvc
 }
 
-// seedRuntimeAndEndpoint inserts a runtime and endpoint into the store.
-func seedRuntimeAndEndpoint(t *testing.T, s store.Store, runtimeID, endpointID string) {
+// seedRuntimeAndAgent inserts a runtime and agent into the store.
+func seedRuntimeAndAgent(t *testing.T, s store.Store, runtimeID, agentID string) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -51,12 +51,12 @@ func seedRuntimeAndEndpoint(t *testing.T, s store.Store, runtimeID, endpointID s
 		t.Fatal(err)
 	}
 
-	err = s.UpsertEndpoint(ctx, &store.Endpoint{
-		ID:        endpointID,
+	err = s.UpsertAgent(ctx, &store.Agent{
+		ID:        agentID,
 		OrgID:     "default",
 		RuntimeID: runtimeID,
 		Profile:   "default",
-		Name:      "test-endpoint",
+		Name:      "test-agent",
 		Tags:      "{}",
 		Caps:      "{}",
 		Security:  "{}",
@@ -81,13 +81,13 @@ func TestCreateSession_Success(t *testing.T) {
 	rt, s, authSvc := setupTestRouter(t)
 
 	runtimeID := "rt-test-1"
-	endpointID := "ep-test-1"
-	seedRuntimeAndEndpoint(t, s, runtimeID, endpointID)
+	agentID := "ag-test-1"
+	seedRuntimeAndAgent(t, s, runtimeID, agentID)
 
 	userID := seedUser(t, authSvc, "sessionuser")
 
 	ctx := context.Background()
-	sess, err := rt.CreateSession(ctx, userID, endpointID)
+	sess, err := rt.CreateSession(ctx, userID, agentID)
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}
@@ -101,8 +101,8 @@ func TestCreateSession_Success(t *testing.T) {
 	if sess.UserID != userID {
 		t.Errorf("expected user_id %q, got %q", userID, sess.UserID)
 	}
-	if sess.EndpointID != endpointID {
-		t.Errorf("expected endpoint_id %q, got %q", endpointID, sess.EndpointID)
+	if sess.AgentID != agentID {
+		t.Errorf("expected agent_id %q, got %q", agentID, sess.AgentID)
 	}
 	if sess.RuntimeID != runtimeID {
 		t.Errorf("expected runtime_id %q, got %q", runtimeID, sess.RuntimeID)
@@ -124,22 +124,22 @@ func TestCreateSession_Success(t *testing.T) {
 	}
 }
 
-func TestCreateSession_EndpointNotFound(t *testing.T) {
+func TestCreateSession_AgentNotFound(t *testing.T) {
 	rt, _, authSvc := setupTestRouter(t)
 
-	userID := seedUser(t, authSvc, "noendpointuser")
+	userID := seedUser(t, authSvc, "noagentuser")
 
 	ctx := context.Background()
-	sess, err := rt.CreateSession(ctx, userID, "nonexistent-endpoint")
+	sess, err := rt.CreateSession(ctx, userID, "nonexistent-agent")
 
-	// The implementation returns (nil, nil) when the endpoint is not found
-	// since store.GetEndpoint returns (nil, nil) for missing rows.
+	// The implementation returns (nil, nil) when the agent is not found
+	// since store.GetAgent returns (nil, nil) for missing rows.
 	if sess != nil {
-		t.Errorf("expected nil session for missing endpoint, got %+v", sess)
+		t.Errorf("expected nil session for missing agent, got %+v", sess)
 	}
 	// Either err is non-nil or sess is nil -- both indicate failure.
 	if sess != nil && err == nil {
-		t.Error("expected either an error or nil session for missing endpoint")
+		t.Error("expected either an error or nil session for missing agent")
 	}
 }
 
@@ -147,15 +147,15 @@ func TestCreateSession_MaxPerUser(t *testing.T) {
 	rt, s, authSvc := setupTestRouter(t)
 
 	runtimeID := "rt-max-test"
-	endpointID := "ep-max-test"
-	seedRuntimeAndEndpoint(t, s, runtimeID, endpointID)
+	agentID := "ag-max-test"
+	seedRuntimeAndAgent(t, s, runtimeID, agentID)
 
 	userID := seedUser(t, authSvc, "maxsessionsuser")
 	ctx := context.Background()
 
 	// Create sessions up to the limit (5).
 	for i := 0; i < 5; i++ {
-		sess, err := rt.CreateSession(ctx, userID, endpointID)
+		sess, err := rt.CreateSession(ctx, userID, agentID)
 		if err != nil {
 			t.Fatalf("CreateSession #%d failed: %v", i+1, err)
 		}
@@ -165,7 +165,7 @@ func TestCreateSession_MaxPerUser(t *testing.T) {
 	}
 
 	// The 6th session should fail because maxPerUser is 5.
-	sess, err := rt.CreateSession(ctx, userID, endpointID)
+	sess, err := rt.CreateSession(ctx, userID, agentID)
 	if err == nil {
 		t.Fatalf("expected error for 6th session, but got session %+v", sess)
 	}
@@ -180,8 +180,8 @@ func TestCreateSession_MaxPerUser_ClosedSessionsNotCounted(t *testing.T) {
 	rt, s, authSvc := setupTestRouter(t)
 
 	runtimeID := "rt-closed-test"
-	endpointID := "ep-closed-test"
-	seedRuntimeAndEndpoint(t, s, runtimeID, endpointID)
+	agentID := "ag-closed-test"
+	seedRuntimeAndAgent(t, s, runtimeID, agentID)
 
 	userID := seedUser(t, authSvc, "closedsessuser")
 	ctx := context.Background()
@@ -189,7 +189,7 @@ func TestCreateSession_MaxPerUser_ClosedSessionsNotCounted(t *testing.T) {
 	// Create 5 sessions, then close one.
 	var firstSessID string
 	for i := 0; i < 5; i++ {
-		sess, err := rt.CreateSession(ctx, userID, endpointID)
+		sess, err := rt.CreateSession(ctx, userID, agentID)
 		if err != nil {
 			t.Fatalf("CreateSession #%d failed: %v", i+1, err)
 		}
@@ -204,7 +204,7 @@ func TestCreateSession_MaxPerUser_ClosedSessionsNotCounted(t *testing.T) {
 	}
 
 	// Now a 6th creation should succeed because one is closed.
-	sess, err := rt.CreateSession(ctx, userID, endpointID)
+	sess, err := rt.CreateSession(ctx, userID, agentID)
 	if err != nil {
 		t.Fatalf("expected success after closing a session, got error: %v", err)
 	}
@@ -240,23 +240,23 @@ func TestIdleReaper(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Seed runtime and endpoint.
+	// Seed runtime and agent.
 	runtimeID := "rt-idle-1"
-	endpointID := "ep-idle-1"
-	seedRuntimeAndEndpoint(t, s, runtimeID, endpointID)
+	agentID := "ag-idle-1"
+	seedRuntimeAndAgent(t, s, runtimeID, agentID)
 
 	// Create two sessions: one recent, one old.
 	recentSessID := uuid.New().String()
 	err = s.CreateSession(ctx, &store.Session{
-		ID:         recentSessID,
-		OrgID:      "default",
-		UserID:     user.ID,
-		EndpointID: endpointID,
-		RuntimeID:  runtimeID,
-		Profile:    "default",
-		State:      "active",
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
+		ID:        recentSessID,
+		OrgID:     "default",
+		UserID:    user.ID,
+		AgentID:   agentID,
+		RuntimeID: runtimeID,
+		Profile:   "default",
+		State:     "active",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -265,15 +265,15 @@ func TestIdleReaper(t *testing.T) {
 	oldSessID := uuid.New().String()
 	oldTime := time.Now().Add(-2 * time.Hour)
 	err = s.CreateSession(ctx, &store.Session{
-		ID:         oldSessID,
-		OrgID:      "default",
-		UserID:     user.ID,
-		EndpointID: endpointID,
-		RuntimeID:  runtimeID,
-		Profile:    "default",
-		State:      "active",
-		CreatedAt:  oldTime,
-		UpdatedAt:  oldTime,
+		ID:        oldSessID,
+		OrgID:     "default",
+		UserID:    user.ID,
+		AgentID:   agentID,
+		RuntimeID: runtimeID,
+		Profile:   "default",
+		State:     "active",
+		CreatedAt: oldTime,
+		UpdatedAt: oldTime,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -365,19 +365,19 @@ func TestRouter_NewDefaults(t *testing.T) {
 	}
 }
 
-func TestCreateSession_MultipleEndpoints(t *testing.T) {
+func TestCreateSession_MultipleAgents(t *testing.T) {
 	rt, s, authSvc := setupTestRouter(t)
 
 	runtimeID := "rt-multi"
-	seedRuntimeAndEndpoint(t, s, runtimeID, "ep-1")
-	// Add a second endpoint for the same runtime.
+	seedRuntimeAndAgent(t, s, runtimeID, "ag-1")
+	// Add a second agent for the same runtime.
 	ctx := context.Background()
-	err := s.UpsertEndpoint(ctx, &store.Endpoint{
-		ID:        "ep-2",
+	err := s.UpsertAgent(ctx, &store.Agent{
+		ID:        "ag-2",
 		OrgID:     "default",
 		RuntimeID: runtimeID,
 		Profile:   "advanced",
-		Name:      "advanced-endpoint",
+		Name:      "advanced-agent",
 		Tags:      "{}",
 		Caps:      "{}",
 		Security:  "{}",
@@ -386,19 +386,19 @@ func TestCreateSession_MultipleEndpoints(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	userID := seedUser(t, authSvc, "multiepuser")
+	userID := seedUser(t, authSvc, "multiagentuser")
 
-	sess1, err := rt.CreateSession(ctx, userID, "ep-1")
+	sess1, err := rt.CreateSession(ctx, userID, "ag-1")
 	if err != nil {
-		t.Fatalf("CreateSession for ep-1 failed: %v", err)
+		t.Fatalf("CreateSession for ag-1 failed: %v", err)
 	}
 	if sess1.Profile != "default" {
 		t.Errorf("expected profile 'default', got %q", sess1.Profile)
 	}
 
-	sess2, err := rt.CreateSession(ctx, userID, "ep-2")
+	sess2, err := rt.CreateSession(ctx, userID, "ag-2")
 	if err != nil {
-		t.Fatalf("CreateSession for ep-2 failed: %v", err)
+		t.Fatalf("CreateSession for ag-2 failed: %v", err)
 	}
 	if sess2.Profile != "advanced" {
 		t.Errorf("expected profile 'advanced', got %q", sess2.Profile)
@@ -413,13 +413,13 @@ func TestCreateSession_AuditEvent(t *testing.T) {
 	rt, s, authSvc := setupTestRouter(t)
 
 	runtimeID := "rt-audit"
-	endpointID := "ep-audit"
-	seedRuntimeAndEndpoint(t, s, runtimeID, endpointID)
+	agentID := "ag-audit"
+	seedRuntimeAndAgent(t, s, runtimeID, agentID)
 
 	userID := seedUser(t, authSvc, "audituser")
 
 	ctx := context.Background()
-	_, err := rt.CreateSession(ctx, userID, endpointID)
+	_, err := rt.CreateSession(ctx, userID, agentID)
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}

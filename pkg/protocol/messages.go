@@ -23,10 +23,10 @@ type RuntimeHello struct {
 	RuntimeID string                 `json:"runtime_id"`
 	Token     string                 `json:"token"`
 	OrgID     string                 `json:"org_id,omitempty"` // empty defaults to "default"
-	Endpoints []EndpointRegistration `json:"endpoints"`
+	Agents []AgentRegistration `json:"agents"`
 }
 
-// SecurityProfile defines security constraints for an endpoint.
+// SecurityProfile defines security constraints for an agent.
 type SecurityProfile struct {
 	AllowedPaths   []string `json:"allowed_paths,omitempty"`
 	DeniedPaths    []string `json:"denied_paths,omitempty"`
@@ -36,8 +36,8 @@ type SecurityProfile struct {
 	EnvWhitelist   []string `json:"env_whitelist,omitempty"`
 }
 
-// EndpointRegistration describes an agent endpoint the runtime offers.
-type EndpointRegistration struct {
+// AgentRegistration describes an agent the runtime offers.
+type AgentRegistration struct {
 	ID       string            `json:"id"`
 	Profile  string            `json:"profile"`
 	Name     string            `json:"name"`
@@ -74,8 +74,8 @@ type HelloAck struct {
 // SessionCreate is sent by the hub to the runtime to create a new session.
 type SessionCreate struct {
 	SessionID  string `json:"session_id"`
-	EndpointID string `json:"endpoint_id"`
-	UserID     string `json:"user_id"`
+	AgentID string `json:"agent_id"`
+	UserID  string `json:"user_id"`
 }
 
 // SessionCreated is the runtime's response to SessionCreate.
@@ -171,7 +171,7 @@ const (
 	TypeClientSubscribe   = "client.subscribe"
 	TypeClientUnsubscribe = "client.unsubscribe"
 	TypeHistoryResponse   = "history.response"
-	TypeEndpointList      = "endpoint.list"
+	TypeAgentList         = "agent.list"
 	TypeSessionList       = "session.list"
 	TypeErrorResponse     = "error"
 	TypeSessionClosed     = "session.closed"
@@ -184,9 +184,9 @@ const (
 	TypeFileUpload    = "file.upload"    // hub → runtime: user uploaded a file
 	TypeFileAvailable = "file.available" // runtime → hub: agent produced a file
 
-	// Endpoint config management (hub → runtime)
-	TypeEndpointConfigUpdate = "endpoint.config_update" // hub → runtime: apply config override
-	TypeEndpointConfigAck    = "endpoint.config_ack"    // runtime → hub: acknowledge config update
+	// Agent config management (hub → runtime)
+	TypeAgentConfigUpdate = "agent.config_update" // hub → runtime: apply config override
+	TypeAgentConfigAck    = "agent.config_ack"    // runtime → hub: acknowledge config update
 )
 
 // --- Client ↔ Hub messages ---
@@ -219,8 +219,8 @@ type StoredMessage struct {
 	Timestamp time.Time `json:"ts"`
 }
 
-// EndpointInfo describes an endpoint visible to a user.
-type EndpointInfo struct {
+// AgentInfo describes an agent visible to a user.
+type AgentInfo struct {
 	ID          string            `json:"id"`
 	RuntimeID   string            `json:"runtime_id"`
 	RuntimeName string            `json:"runtime_name"`
@@ -235,9 +235,9 @@ type EndpointInfo struct {
 // SessionInfo describes a session visible to a user.
 type SessionInfo struct {
 	ID         string    `json:"id"`
-	EndpointID string    `json:"endpoint_id"`
-	Profile    string    `json:"profile"`
-	State      string    `json:"state"` // "active", "idle", "closed"
+	AgentID string    `json:"agent_id"`
+	Profile string    `json:"profile"`
+	State   string    `json:"state"` // "active", "idle", "closed"
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }
@@ -270,28 +270,28 @@ type PermissionResponse struct {
 	AlwaysAllow bool   `json:"always_allow,omitempty"`
 }
 
-// --- Endpoint config management ---
+// --- Agent config management ---
 
-// EndpointConfigUpdate is sent by the hub to the runtime to apply config overrides.
-type EndpointConfigUpdate struct {
-	EndpointID string           `json:"endpoint_id"`
-	Security   *SecurityProfile `json:"security,omitempty"`
-	Limits     *EndpointLimits  `json:"limits,omitempty"`
+// AgentConfigUpdate is sent by the hub to the runtime to apply config overrides.
+type AgentConfigUpdate struct {
+	AgentID  string           `json:"agent_id"`
+	Security *SecurityProfile `json:"security,omitempty"`
+	Limits   *AgentLimits     `json:"limits,omitempty"`
 }
 
-// EndpointLimits carries operational limits as wire-friendly strings.
-type EndpointLimits struct {
+// AgentLimits carries operational limits as wire-friendly strings.
+type AgentLimits struct {
 	MaxSessions    int    `json:"max_sessions,omitempty"`
 	SessionTimeout string `json:"session_timeout,omitempty"` // duration string, e.g. "30m"
 	MaxOutputBytes int64  `json:"max_output_bytes,omitempty"`
 	IdleTimeout    string `json:"idle_timeout,omitempty"` // duration string, e.g. "5m"
 }
 
-// EndpointConfigAck is the runtime's acknowledgment of a config update.
-type EndpointConfigAck struct {
-	EndpointID string `json:"endpoint_id"`
-	OK         bool   `json:"ok"`
-	Error      string `json:"error,omitempty"`
+// AgentConfigAck is the runtime's acknowledgment of a config update.
+type AgentConfigAck struct {
+	AgentID string `json:"agent_id"`
+	OK      bool   `json:"ok"`
+	Error   string `json:"error,omitempty"`
 }
 
 // --- File transfer ---

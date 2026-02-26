@@ -16,7 +16,7 @@ import (
 // spawning a new process per Send() call and using --continue for session continuity.
 type GitHubCopilotAdapter struct{}
 
-func (a *GitHubCopilotAdapter) Start(ctx context.Context, cfg config.EndpointConfig) (AgentSession, error) {
+func (a *GitHubCopilotAdapter) Start(ctx context.Context, cfg config.AgentConfig) (AgentSession, error) {
 	copCfg := cfg.Copilot
 	if copCfg == nil {
 		copCfg = &config.CopilotConfig{}

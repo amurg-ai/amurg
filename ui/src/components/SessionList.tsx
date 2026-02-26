@@ -55,7 +55,7 @@ export function SessionList({ onSelect }: SessionListProps) {
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="font-medium truncate">
-                    {session.endpoint_name || profile.label}
+                    {session.agent_name || profile.label}
                     {session.seq != null && ` #${session.seq}`}
                   </span>
                   <span

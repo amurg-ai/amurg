@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from "react";
 import { api } from "@/api/client";
-import type { SessionInfo, UserInfo, AuditEvent, RuntimeInfo, AdminEndpointInfo, SecurityProfile, EndpointLimitsWire } from "@/types";
+import type { SessionInfo, UserInfo, AuditEvent, RuntimeInfo, AdminAgentInfo, SecurityProfile, AgentLimitsWire } from "@/types";
 import { PROFILE_DISPLAY } from "@/types";
 
 type Tab = "agents" | "runtimes" | "users" | "sessions" | "audit";
@@ -24,30 +24,30 @@ function RefreshButton({ onClick }: { onClick: () => void }) {
   );
 }
 
-function EndpointConfigEditor({
-  endpoint,
+function AgentConfigEditor({
+  agent,
   onBack,
 }: {
-  endpoint: AdminEndpointInfo;
+  agent: AdminAgentInfo;
   onBack: () => void;
 }) {
-  // Parse initial values from config_override or endpoint's security.
+  // Parse initial values from config_override or agent's security.
   const parseSecurity = (): SecurityProfile => {
-    if (endpoint.config_override) {
+    if (agent.config_override) {
       try {
-        return JSON.parse(endpoint.config_override.security);
+        return JSON.parse(agent.config_override.security);
       } catch { /* fall through */ }
     }
-    if (typeof endpoint.security === "string") {
-      try { return JSON.parse(endpoint.security); } catch { return {}; }
+    if (typeof agent.security === "string") {
+      try { return JSON.parse(agent.security); } catch { return {}; }
     }
-    return endpoint.security || {};
+    return agent.security || {};
   };
 
-  const parseLimits = (): EndpointLimitsWire => {
-    if (endpoint.config_override) {
+  const parseLimits = (): AgentLimitsWire => {
+    if (agent.config_override) {
       try {
-        return JSON.parse(endpoint.config_override.limits);
+        return JSON.parse(agent.config_override.limits);
       } catch { /* fall through */ }
     }
     return {};
@@ -86,12 +86,12 @@ function EndpointConfigEditor({
       const ew = splitLines(envWhitelist);
       if (ew.length) security.env_whitelist = ew;
 
-      const limits: EndpointLimitsWire = {};
+      const limits: AgentLimitsWire = {};
       if (maxSessions) limits.max_sessions = parseInt(maxSessions, 10);
       if (sessionTimeout) limits.session_timeout = sessionTimeout;
       if (idleTimeout) limits.idle_timeout = idleTimeout;
 
-      const result = await api.updateEndpointConfig(endpoint.id, { security, limits });
+      const result = await api.updateAgentConfig(agent.id, { security, limits });
       const pushed = result.pushed_to_runtime ? "pushed to runtime" : "runtime offline, will apply on reconnect";
       setToast({ msg: `Saved - ${pushed}`, ok: true });
     } catch (e) {
@@ -101,7 +101,7 @@ function EndpointConfigEditor({
     }
   };
 
-  const profileInfo = PROFILE_DISPLAY[endpoint.profile] || { label: endpoint.profile, color: "bg-slate-600", icon: "?" };
+  const profileInfo = PROFILE_DISPLAY[agent.profile] || { label: agent.profile, color: "bg-slate-600", icon: "?" };
 
   return (
     <div className="p-4 space-y-5">
@@ -114,7 +114,7 @@ function EndpointConfigEditor({
         </button>
         <div className="flex items-center gap-2">
           <span className={`text-xs px-2 py-0.5 rounded-full text-white ${profileInfo.color}`}>{profileInfo.label}</span>
-          <h3 className="text-slate-100 font-medium">{endpoint.name || endpoint.id}</h3>
+          <h3 className="text-slate-100 font-medium">{agent.name || agent.id}</h3>
         </div>
       </div>
 
@@ -206,14 +206,14 @@ function EndpointConfigEditor({
 }
 
 function AgentsTab() {
-  const [endpoints, setEndpoints] = useState<AdminEndpointInfo[]>([]);
+  const [agents, setAgents] = useState<AdminAgentInfo[]>([]);
   const [loading, setLoading] = useState(true);
-  const [editing, setEditing] = useState<AdminEndpointInfo | null>(null);
+  const [editing, setEditing] = useState<AdminAgentInfo | null>(null);
 
   const load = async () => {
     setLoading(true);
     try {
-      setEndpoints(await api.listAdminEndpoints());
+      setAgents(await api.listAdminAgents());
     } catch { /* ignore */ }
     setLoading(false);
   };
@@ -222,8 +222,8 @@ function AgentsTab() {
 
   if (editing) {
     return (
-      <EndpointConfigEditor
-        endpoint={editing}
+      <AgentConfigEditor
+        agent={editing}
         onBack={() => { setEditing(null); load(); }}
       />
     );
@@ -231,14 +231,14 @@ function AgentsTab() {
 
   if (loading) return <div className="text-slate-500 p-4 text-center">Loading...</div>;
 
-  // Group endpoints by runtime.
-  const grouped = new Map<string, { name: string; online: boolean; endpoints: AdminEndpointInfo[] }>();
-  for (const ep of endpoints) {
-    const key = ep.runtime_id;
+  // Group agents by runtime.
+  const grouped = new Map<string, { name: string; online: boolean; agents: AdminAgentInfo[] }>();
+  for (const agent of agents) {
+    const key = agent.runtime_id;
     if (!grouped.has(key)) {
-      grouped.set(key, { name: ep.runtime_name || ep.runtime_id, online: ep.runtime_online, endpoints: [] });
+      grouped.set(key, { name: agent.runtime_name || agent.runtime_id, online: agent.runtime_online, agents: [] });
     }
-    grouped.get(key)!.endpoints.push(ep);
+    grouped.get(key)!.agents.push(agent);
   }
 
   return (
@@ -246,7 +246,7 @@ function AgentsTab() {
       <div className="flex justify-end px-4 pt-3">
         <RefreshButton onClick={load} />
       </div>
-      {endpoints.length === 0 ? (
+      {agents.length === 0 ? (
         <div className="text-slate-500 p-4 text-center">No agents registered</div>
       ) : (
         <div className="overflow-x-auto">
@@ -271,7 +271,7 @@ function AgentsTab() {
                       </div>
                     </td>
                   </tr>
-                  {group.endpoints.map((ep) => {
+                  {group.agents.map((ep) => {
                     const profileInfo = PROFILE_DISPLAY[ep.profile] || { label: ep.profile, color: "bg-slate-600", icon: "?" };
                     const sec = typeof ep.security === "string" ? (() => { try { return JSON.parse(ep.security); } catch { return {}; } })() : (ep.security || {});
                     return (
@@ -470,7 +470,7 @@ function SessionsTab() {
           <table className="w-full text-sm text-left">
             <thead className="text-xs text-slate-400 border-b border-slate-700">
               <tr>
-                <th className="px-4 py-2">Endpoint</th>
+                <th className="px-4 py-2">Agent</th>
                 <th className="px-4 py-2">User</th>
                 <th className="px-4 py-2">State</th>
                 <th className="px-4 py-2">Profile</th>
@@ -481,7 +481,7 @@ function SessionsTab() {
             <tbody>
               {sessions.map((s) => (
                 <tr key={s.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
-                  <td className="px-4 py-2 text-slate-200">{s.endpoint_name || s.endpoint_id.slice(0, 12)}</td>
+                  <td className="px-4 py-2 text-slate-200">{s.agent_name || s.agent_id.slice(0, 12)}</td>
                   <td className="px-4 py-2 text-slate-400 font-mono text-xs">{s.user_id.slice(0, 8)}</td>
                   <td className="px-4 py-2">
                     <span className={`text-xs px-2 py-0.5 rounded-full ${
@@ -584,7 +584,7 @@ function AuditTab() {
                   <th className="px-4 py-2">Action</th>
                   <th className="px-4 py-2">User</th>
                   <th className="px-4 py-2">Session</th>
-                  <th className="px-4 py-2">Endpoint</th>
+                  <th className="px-4 py-2">Agent</th>
                   <th className="px-4 py-2">Detail</th>
                 </tr>
               </thead>
@@ -602,7 +602,7 @@ function AuditTab() {
                       {e.session_id ? e.session_id.slice(0, 8) : "-"}
                     </td>
                     <td className="px-4 py-2 text-slate-400 font-mono text-xs">
-                      {e.endpoint_id ? e.endpoint_id.slice(0, 8) : "-"}
+                      {e.agent_id ? e.agent_id.slice(0, 8) : "-"}
                     </td>
                     <td className="px-4 py-2 text-slate-400 text-xs truncate max-w-48" title={formatDetail(e.detail)}>
                       {formatDetail(e.detail)}

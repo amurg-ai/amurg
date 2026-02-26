@@ -134,7 +134,7 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	// Audit log.
 	if err := s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
 		ID: uuid.New().String(), OrgID: identity.OrgID, Action: "file.upload",
-		UserID: identity.UserID, SessionID: sessionID, EndpointID: sess.EndpointID,
+		UserID: identity.UserID, SessionID: sessionID, AgentID: sess.AgentID,
 		Detail:    json.RawMessage(fmt.Sprintf(`{"file_id":%q,"name":%q,"size":%d}`, fileID, fileName, len(data))),
 		CreatedAt: time.Now(),
 	}); err != nil {

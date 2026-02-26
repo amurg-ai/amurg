@@ -89,7 +89,7 @@ type runtimeConn struct {
 	orgID     string
 	conn      *websocket.Conn
 	mu        sync.Mutex
-	endpoints map[string]protocol.EndpointRegistration
+	agents map[string]protocol.AgentRegistration
 }
 
 type clientConn struct {
@@ -250,10 +250,10 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 		id:        hello.RuntimeID,
 		orgID:     orgID,
 		conn:      conn,
-		endpoints: make(map[string]protocol.EndpointRegistration),
+		agents: make(map[string]protocol.AgentRegistration),
 	}
-	for _, ep := range hello.Endpoints {
-		rtConn.endpoints[ep.ID] = ep
+	for _, agent := range hello.Agents {
+		rtConn.agents[agent.ID] = agent
 	}
 
 	r.mu.Lock()
@@ -276,30 +276,30 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 		r.logger.Warn("failed to upsert runtime", "runtime_id", hello.RuntimeID, "error", err)
 	}
 
-	// Register endpoints in store.
-	if err := r.store.DeleteEndpointsByRuntime(ctx, hello.RuntimeID); err != nil {
-		r.logger.Warn("failed to delete endpoints by runtime", "runtime_id", hello.RuntimeID, "error", err)
+	// Register agents in store.
+	if err := r.store.DeleteAgentsByRuntime(ctx, hello.RuntimeID); err != nil {
+		r.logger.Warn("failed to delete agents by runtime", "runtime_id", hello.RuntimeID, "error", err)
 	}
-	for _, ep := range hello.Endpoints {
-		capsJSON, _ := json.Marshal(ep.Caps)
-		tagsJSON, _ := json.Marshal(ep.Tags)
+	for _, agent := range hello.Agents {
+		capsJSON, _ := json.Marshal(agent.Caps)
+		tagsJSON, _ := json.Marshal(agent.Tags)
 		secJSON := "{}"
-		if ep.Security != nil {
-			if b, err := json.Marshal(ep.Security); err == nil {
+		if agent.Security != nil {
+			if b, err := json.Marshal(agent.Security); err == nil {
 				secJSON = string(b)
 			}
 		}
-		if err := r.store.UpsertEndpoint(ctx, &store.Endpoint{
-			ID:        ep.ID,
+		if err := r.store.UpsertAgent(ctx, &store.Agent{
+			ID:        agent.ID,
 			OrgID:     orgID,
 			RuntimeID: hello.RuntimeID,
-			Profile:   ep.Profile,
-			Name:      ep.Name,
+			Profile:   agent.Profile,
+			Name:      agent.Name,
 			Tags:      string(tagsJSON),
 			Caps:      string(capsJSON),
 			Security:  secJSON,
 		}); err != nil {
-			r.logger.Warn("failed to upsert endpoint", "endpoint_id", ep.ID, "error", err)
+			r.logger.Warn("failed to upsert agent", "agent_id", agent.ID, "error", err)
 		}
 	}
 
@@ -307,10 +307,10 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 	r.sendToConn(conn, protocol.TypeHelloAck, "", protocol.HelloAck{OK: true})
 
 	// Push any stored config overrides to the runtime on reconnect.
-	for _, ep := range hello.Endpoints {
-		override, err := r.store.GetEndpointConfigOverride(ctx, ep.ID)
+	for _, agent := range hello.Agents {
+		override, err := r.store.GetAgentConfigOverride(ctx, agent.ID)
 		if err != nil {
-			r.logger.Warn("failed to load config override on reconnect", "endpoint_id", ep.ID, "error", err)
+			r.logger.Warn("failed to load config override on reconnect", "agent_id", agent.ID, "error", err)
 			continue
 		}
 		if override != nil {
@@ -318,26 +318,26 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 			if override.Security != "" && override.Security != "{}" {
 				sec = &protocol.SecurityProfile{}
 				if err := json.Unmarshal([]byte(override.Security), sec); err != nil {
-					r.logger.Warn("failed to unmarshal security override", "endpoint_id", ep.ID, "error", err)
+					r.logger.Warn("failed to unmarshal security override", "agent_id", agent.ID, "error", err)
 				}
 			}
-			var lim *protocol.EndpointLimits
+			var lim *protocol.AgentLimits
 			if override.Limits != "" && override.Limits != "{}" {
-				lim = &protocol.EndpointLimits{}
+				lim = &protocol.AgentLimits{}
 				if err := json.Unmarshal([]byte(override.Limits), lim); err != nil {
-					r.logger.Warn("failed to unmarshal limits override", "endpoint_id", ep.ID, "error", err)
+					r.logger.Warn("failed to unmarshal limits override", "agent_id", agent.ID, "error", err)
 				}
 			}
-			r.sendToConn(conn, protocol.TypeEndpointConfigUpdate, "", protocol.EndpointConfigUpdate{
-				EndpointID: ep.ID,
-				Security:   sec,
-				Limits:     lim,
+			r.sendToConn(conn, protocol.TypeAgentConfigUpdate, "", protocol.AgentConfigUpdate{
+				AgentID:  agent.ID,
+				Security: sec,
+				Limits:   lim,
 			})
-			r.logger.Info("pushed config override on reconnect", "endpoint_id", ep.ID, "runtime_id", hello.RuntimeID)
+			r.logger.Info("pushed config override on reconnect", "agent_id", agent.ID, "runtime_id", hello.RuntimeID)
 		}
 	}
 
-	r.logger.Info("runtime connected", "runtime_id", hello.RuntimeID, "endpoints", len(hello.Endpoints))
+	r.logger.Info("runtime connected", "runtime_id", hello.RuntimeID, "agents", len(hello.Agents))
 
 	if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{
 		ID: uuid.New().String(), OrgID: orgID, Action: "runtime.connect", RuntimeID: hello.RuntimeID, CreatedAt: time.Now(),
@@ -583,10 +583,10 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 		r.mu.Unlock()
 
 		sess, _ := r.store.GetSession(ctx, tc.SessionID)
-		endpointID := ""
+		agentID := ""
 		orgID := ""
 		if sess != nil {
-			endpointID = sess.EndpointID
+			agentID = sess.AgentID
 			orgID = sess.OrgID
 		}
 
@@ -602,7 +602,7 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 
 		if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{
 			ID: uuid.New().String(), OrgID: orgID, Action: "turn.completed",
-			SessionID: tc.SessionID, EndpointID: endpointID, Detail: detailJSON, CreatedAt: time.Now(),
+			SessionID: tc.SessionID, AgentID: agentID, Detail: detailJSON, CreatedAt: time.Now(),
 		}); err != nil {
 			r.logger.Warn("failed to log audit event", "action", "turn.completed", "error", err)
 		}
@@ -639,14 +639,14 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 		ctx := context.Background()
 		sess, _ := r.store.GetSession(ctx, req.SessionID)
 		permOrgID := ""
-		permEndpointID := ""
+		permAgentID := ""
 		if sess != nil {
 			permOrgID = sess.OrgID
-			permEndpointID = sess.EndpointID
+			permAgentID = sess.AgentID
 		}
 		if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{
 			ID: uuid.New().String(), OrgID: permOrgID, Action: "permission.requested",
-			SessionID: req.SessionID, EndpointID: permEndpointID,
+			SessionID: req.SessionID, AgentID: permAgentID,
 			Detail:    json.RawMessage(fmt.Sprintf(`{"tool":%q,"resource":%q,"request_id":%q}`, req.Tool, req.Resource, req.RequestID)),
 			CreatedAt: time.Now(),
 		}); err != nil {
@@ -744,16 +744,16 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 			Content:   string(metaJSON),
 		})
 
-	case protocol.TypeEndpointConfigAck:
+	case protocol.TypeAgentConfigAck:
 		data, _ := json.Marshal(env.Payload)
-		var ack protocol.EndpointConfigAck
+		var ack protocol.AgentConfigAck
 		if err := json.Unmarshal(data, &ack); err != nil {
-			r.logger.Warn("unmarshal endpoint config ack failed", "error", err)
+			r.logger.Warn("unmarshal agent config ack failed", "error", err)
 		}
 		if ack.OK {
-			r.logger.Info("endpoint config update acknowledged", "endpoint_id", ack.EndpointID, "runtime", runtimeID)
+			r.logger.Info("agent config update acknowledged", "agent_id", ack.AgentID, "runtime", runtimeID)
 		} else {
-			r.logger.Warn("endpoint config update rejected", "endpoint_id", ack.EndpointID, "runtime", runtimeID, "error", ack.Error)
+			r.logger.Warn("agent config update rejected", "agent_id", ack.AgentID, "runtime", runtimeID, "error", ack.Error)
 		}
 
 	case protocol.TypePong:
@@ -833,7 +833,7 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 
 		if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{
 			ID: uuid.New().String(), OrgID: cc.orgID, Action: "message.sent", UserID: cc.userID,
-			SessionID: msg.SessionID, EndpointID: sess.EndpointID, CreatedAt: time.Now(),
+			SessionID: msg.SessionID, AgentID: sess.AgentID, CreatedAt: time.Now(),
 		}); err != nil {
 			r.logger.Warn("failed to log audit event", "action", "message.sent", "error", err)
 		}
@@ -921,7 +921,7 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 			r.sendToRuntime(sess.RuntimeID, protocol.TypeStopRequest, req.SessionID, req)
 			if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{
 				ID: uuid.New().String(), OrgID: cc.orgID, Action: "session.stop", UserID: cc.userID,
-				SessionID: req.SessionID, EndpointID: sess.EndpointID, CreatedAt: time.Now(),
+				SessionID: req.SessionID, AgentID: sess.AgentID, CreatedAt: time.Now(),
 			}); err != nil {
 				r.logger.Warn("failed to log audit event", "action", "session.stop", "error", err)
 			}
@@ -965,7 +965,7 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 		}
 		if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{
 			ID: uuid.New().String(), OrgID: cc.orgID, Action: action,
-			UserID: cc.userID, SessionID: resp.SessionID, EndpointID: sess.EndpointID,
+			UserID: cc.userID, SessionID: resp.SessionID, AgentID: sess.AgentID,
 			Detail:    json.RawMessage(fmt.Sprintf(`{"request_id":%q,"approved":%t}`, resp.RequestID, resp.Approved)),
 			CreatedAt: time.Now(),
 		}); err != nil {
@@ -1008,9 +1008,9 @@ func (cc *clientConn) allowMessage() bool {
 }
 
 // CreateSession creates a new session and sends the create request to the runtime.
-func (r *Router) CreateSession(ctx context.Context, userID, endpointID string) (*store.Session, error) {
-	ep, err := r.store.GetEndpoint(ctx, endpointID)
-	if err != nil || ep == nil {
+func (r *Router) CreateSession(ctx context.Context, userID, agentID string) (*store.Session, error) {
+	agent, err := r.store.GetAgent(ctx, agentID)
+	if err != nil || agent == nil {
 		return nil, err
 	}
 
@@ -1026,15 +1026,15 @@ func (r *Router) CreateSession(ctx context.Context, userID, endpointID string) (
 	}
 
 	sess := &store.Session{
-		ID:         uuid.New().String(),
-		OrgID:      ep.OrgID,
-		UserID:     userID,
-		EndpointID: endpointID,
-		RuntimeID:  ep.RuntimeID,
-		Profile:    ep.Profile,
-		State:      "creating",
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
+		ID:        uuid.New().String(),
+		OrgID:     agent.OrgID,
+		UserID:    userID,
+		AgentID:   agentID,
+		RuntimeID: agent.RuntimeID,
+		Profile:   agent.Profile,
+		State:     "creating",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	}
 
 	if err := r.store.CreateSession(ctx, sess); err != nil {
@@ -1042,15 +1042,15 @@ func (r *Router) CreateSession(ctx context.Context, userID, endpointID string) (
 	}
 
 	// Send create request to runtime.
-	r.sendToRuntime(ep.RuntimeID, protocol.TypeSessionCreate, sess.ID, protocol.SessionCreate{
-		SessionID:  sess.ID,
-		EndpointID: endpointID,
-		UserID:     userID,
+	r.sendToRuntime(agent.RuntimeID, protocol.TypeSessionCreate, sess.ID, protocol.SessionCreate{
+		SessionID: sess.ID,
+		AgentID:   agentID,
+		UserID:    userID,
 	})
 
 	if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{
-		ID: uuid.New().String(), OrgID: ep.OrgID, Action: "session.create", UserID: userID,
-		RuntimeID: ep.RuntimeID, SessionID: sess.ID, EndpointID: endpointID, CreatedAt: time.Now(),
+		ID: uuid.New().String(), OrgID: agent.OrgID, Action: "session.create", UserID: userID,
+		RuntimeID: agent.RuntimeID, SessionID: sess.ID, AgentID: agentID, CreatedAt: time.Now(),
 	}); err != nil {
 		r.logger.Warn("failed to log audit event", "action", "session.create", "error", err)
 	}
@@ -1160,7 +1160,7 @@ func (r *Router) StartIdleReaper(ctx context.Context, defaultTimeout time.Durati
 						if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{
 							ID: uuid.New().String(), Action: "session.idle_close",
 							OrgID: sess.OrgID, SessionID: sess.ID, UserID: sess.UserID,
-							EndpointID: sess.EndpointID, CreatedAt: time.Now(),
+							AgentID: sess.AgentID, CreatedAt: time.Now(),
 						}); err != nil {
 							r.logger.Warn("idle reaper: log audit event failed", "session_id", sess.ID, "error", err)
 						}
@@ -1227,15 +1227,15 @@ func (r *Router) handlePermissionTimeout(requestID string) {
 	ctx := context.Background()
 	sess, _ := r.store.GetSession(ctx, pp.sessionID)
 	orgID := ""
-	endpointID := ""
+	agentID := ""
 	if sess != nil {
 		orgID = sess.OrgID
-		endpointID = sess.EndpointID
+		agentID = sess.AgentID
 	}
 
 	if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{
 		ID: uuid.New().String(), OrgID: orgID, Action: "permission.timeout",
-		SessionID: pp.sessionID, EndpointID: endpointID,
+		SessionID: pp.sessionID, AgentID: agentID,
 		Detail:    json.RawMessage(fmt.Sprintf(`{"request_id":%q}`, requestID)),
 		CreatedAt: time.Now(),
 	}); err != nil {
@@ -1276,13 +1276,13 @@ func (r *Router) BroadcastSessionClosed(sessionID string) {
 	})
 }
 
-// PushEndpointConfigUpdate sends a config update to the runtime that owns the endpoint.
+// PushAgentConfigUpdate sends a config update to the runtime that owns the agent.
 // Returns true if the runtime was online and the message was sent.
-func (r *Router) PushEndpointConfigUpdate(endpointID string, security *protocol.SecurityProfile, limits *protocol.EndpointLimits) bool {
+func (r *Router) PushAgentConfigUpdate(agentID string, security *protocol.SecurityProfile, limits *protocol.AgentLimits) bool {
 	r.mu.RLock()
 	var target *runtimeConn
 	for _, rt := range r.runtimes {
-		if _, ok := rt.endpoints[endpointID]; ok {
+		if _, ok := rt.agents[agentID]; ok {
 			target = rt
 			break
 		}
@@ -1294,12 +1294,12 @@ func (r *Router) PushEndpointConfigUpdate(endpointID string, security *protocol.
 	}
 
 	env := protocol.Envelope{
-		Type:      protocol.TypeEndpointConfigUpdate,
+		Type:      protocol.TypeAgentConfigUpdate,
 		Timestamp: time.Now(),
-		Payload: protocol.EndpointConfigUpdate{
-			EndpointID: endpointID,
-			Security:   security,
-			Limits:     limits,
+		Payload: protocol.AgentConfigUpdate{
+			AgentID:  agentID,
+			Security: security,
+			Limits:   limits,
 		},
 	}
 
@@ -1312,7 +1312,7 @@ func (r *Router) PushEndpointConfigUpdate(endpointID string, security *protocol.
 	target.mu.Lock()
 	defer target.mu.Unlock()
 	if err := target.conn.WriteMessage(websocket.TextMessage, data); err != nil {
-		r.logger.Warn("send config update failed", "endpoint_id", endpointID, "error", err)
+		r.logger.Warn("send config update failed", "agent_id", agentID, "error", err)
 		return false
 	}
 	return true

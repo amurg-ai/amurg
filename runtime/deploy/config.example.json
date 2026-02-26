@@ -14,7 +14,7 @@
     "idle_timeout": "30s",
     "log_level": "info"
   },
-  "endpoints": [
+  "agents": [
     {
       "id": "echo-cli",
       "name": "Echo CLI",

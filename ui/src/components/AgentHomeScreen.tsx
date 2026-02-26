@@ -5,16 +5,16 @@ import { SecurityBadge } from "@/components/SecurityBadge";
 import { OnboardingGuide } from "@/components/OnboardingGuide";
 
 export function AgentHomeScreen() {
-  const { endpoints, createSession, loadEndpoints } = useSessionStore();
+  const { agents, createSession, loadAgents } = useSessionStore();
   const [creating, setCreating] = useState<string | null>(null);
 
-  useEffect(() => { loadEndpoints(); }, [loadEndpoints]);
+  useEffect(() => { loadAgents(); }, [loadAgents]);
 
-  const handleSelect = async (endpointId: string) => {
+  const handleSelect = async (agentId: string) => {
     if (creating) return;
-    setCreating(endpointId);
+    setCreating(agentId);
     try {
-      await createSession(endpointId);
+      await createSession(agentId);
     } catch (err) {
       console.error("Failed to create session:", err);
     } finally {
@@ -22,7 +22,7 @@ export function AgentHomeScreen() {
     }
   };
 
-  if (!endpoints || endpoints.length === 0) {
+  if (!agents || agents.length === 0) {
     return <OnboardingGuide />;
   }
 
@@ -35,7 +35,7 @@ export function AgentHomeScreen() {
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {endpoints.map((ep) => {
+          {agents.map((ep) => {
             const profile = PROFILE_DISPLAY[ep.profile] || {
               label: ep.profile,
               color: "bg-slate-600",

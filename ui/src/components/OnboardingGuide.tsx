@@ -56,7 +56,7 @@ function Step({ number, title, children }: {
 }
 
 export function OnboardingGuide() {
-  const loadEndpoints = useSessionStore((s) => s.loadEndpoints);
+  const loadAgents = useSessionStore((s) => s.loadAgents);
   const [copied, setCopied] = useState<number | null>(null);
 
   const hubUrl = useMemo(
@@ -64,11 +64,11 @@ export function OnboardingGuide() {
     [],
   );
 
-  // Poll for endpoints every 5 seconds
+  // Poll for agents every 5 seconds
   useEffect(() => {
-    const interval = setInterval(() => { loadEndpoints(); }, 5000);
+    const interval = setInterval(() => { loadAgents(); }, 5000);
     return () => clearInterval(interval);
-  }, [loadEndpoints]);
+  }, [loadAgents]);
 
   const handleCopy = (text: string, id: number) => {
     navigator.clipboard.writeText(text).then(() => {
@@ -149,7 +149,7 @@ export function OnboardingGuide() {
         {/* Refresh + docs link */}
         <div className="flex items-center justify-center gap-4 mt-3">
           <button
-            onClick={() => loadEndpoints()}
+            onClick={() => loadAgents()}
             className="text-sm text-teal-400 hover:text-teal-300 transition-colors"
           >
             Refresh

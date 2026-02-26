@@ -35,7 +35,7 @@ func setupTestServer(t *testing.T) (*Server, *auth.Service, store.Store) {
 		Auth: config.AuthConfig{
 			JWTSecret:             "test-secret-at-least-32-chars-long",
 			JWTExpiry:             config.Duration{Duration: 1 * time.Hour},
-			DefaultEndpointAccess: "all",
+			DefaultAgentAccess: "all",
 			RuntimeTokens:        []config.RuntimeTokenEntry{{RuntimeID: "rt-1", Token: "tok-1"}},
 			RuntimeTokenLifetime:  config.Duration{Duration: 1 * time.Hour},
 		},
@@ -69,13 +69,13 @@ func createTestUserAndGetToken(t *testing.T, authSvc *auth.Service, s store.Stor
 	return token
 }
 
-// seedEndpointAndRuntime inserts a runtime and endpoint into the store so that
-// session creation and endpoint listing work properly.
-func seedEndpointAndRuntime(t *testing.T, s store.Store) (runtimeID, endpointID string) {
+// seedAgentAndRuntime inserts a runtime and agent into the store so that
+// session creation and agent listing work properly.
+func seedAgentAndRuntime(t *testing.T, s store.Store) (runtimeID, agentID string) {
 	t.Helper()
 	ctx := context.Background()
 	runtimeID = "rt-test-" + uuid.New().String()[:8]
-	endpointID = "ep-test-" + uuid.New().String()[:8]
+	agentID = "ag-test-" + uuid.New().String()[:8]
 
 	err := s.UpsertRuntime(ctx, &store.Runtime{
 		ID:       runtimeID,
@@ -88,12 +88,12 @@ func seedEndpointAndRuntime(t *testing.T, s store.Store) (runtimeID, endpointID 
 		t.Fatal(err)
 	}
 
-	err = s.UpsertEndpoint(ctx, &store.Endpoint{
-		ID:        endpointID,
+	err = s.UpsertAgent(ctx, &store.Agent{
+		ID:        agentID,
 		OrgID:     "default",
 		RuntimeID: runtimeID,
 		Profile:   "default",
-		Name:      "test-endpoint",
+		Name:      "test-agent",
 		Tags:      "{}",
 		Caps:      "{}",
 		Security:  "{}",
@@ -101,7 +101,7 @@ func seedEndpointAndRuntime(t *testing.T, s store.Store) (runtimeID, endpointID 
 	if err != nil {
 		t.Fatal(err)
 	}
-	return runtimeID, endpointID
+	return runtimeID, agentID
 }
 
 // parseJSONResponse decodes the JSON body of the response into the given target.
@@ -306,7 +306,7 @@ func TestAuthMiddleware_ExpiredToken(t *testing.T) {
 		Auth: config.AuthConfig{
 			JWTSecret:             "test-secret-at-least-32-chars-long",
 			JWTExpiry:             config.Duration{Duration: 1 * time.Millisecond}, // extremely short
-			DefaultEndpointAccess: "all",
+			DefaultAgentAccess: "all",
 			RuntimeTokens:        []config.RuntimeTokenEntry{{RuntimeID: "rt-1", Token: "tok-1"}},
 			RuntimeTokenLifetime:  config.Duration{Duration: 1 * time.Hour},
 		},
@@ -371,11 +371,11 @@ func TestAuthenticatedRoutes_RequireAuth(t *testing.T) {
 	}
 }
 
-func TestListEndpoints(t *testing.T) {
+func TestListAgents(t *testing.T) {
 	srv, authSvc, s := setupTestServer(t)
 	token := createTestUserAndGetToken(t, authSvc, s)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/endpoints", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 	srv.mux.ServeHTTP(w, req)
@@ -384,11 +384,11 @@ func TestListEndpoints(t *testing.T) {
 		t.Fatalf("expected status 200, got %d; body: %s", w.Code, w.Body.String())
 	}
 
-	var endpoints []store.Endpoint
-	parseJSONResponse(t, w, &endpoints)
+	var agents []store.Agent
+	parseJSONResponse(t, w, &agents)
 
-	if len(endpoints) != 0 {
-		t.Errorf("expected empty array, got %d endpoints", len(endpoints))
+	if len(agents) != 0 {
+		t.Errorf("expected empty array, got %d agents", len(agents))
 	}
 
 	// Verify the response body is a JSON array, not null.
@@ -401,10 +401,10 @@ func TestListEndpoints(t *testing.T) {
 func TestCreateSession(t *testing.T) {
 	srv, authSvc, s := setupTestServer(t)
 	token := createTestUserAndGetToken(t, authSvc, s)
-	_, endpointID := seedEndpointAndRuntime(t, s)
+	_, agentID := seedAgentAndRuntime(t, s)
 
 	body, _ := json.Marshal(map[string]string{
-		"endpoint_id": endpointID,
+		"agent_id": agentID,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -422,8 +422,8 @@ func TestCreateSession(t *testing.T) {
 	if sess.ID == "" {
 		t.Error("expected non-empty session ID")
 	}
-	if sess.EndpointID != endpointID {
-		t.Errorf("expected endpoint_id %q, got %q", endpointID, sess.EndpointID)
+	if sess.AgentID != agentID {
+		t.Errorf("expected agent_id %q, got %q", agentID, sess.AgentID)
 	}
 	if sess.State != "creating" {
 		t.Errorf("expected state 'creating', got %q", sess.State)
@@ -433,7 +433,7 @@ func TestCreateSession(t *testing.T) {
 func TestGetMessages(t *testing.T) {
 	srv, authSvc, s := setupTestServer(t)
 	token := createTestUserAndGetToken(t, authSvc, s)
-	_, endpointID := seedEndpointAndRuntime(t, s)
+	_, agentID := seedAgentAndRuntime(t, s)
 
 	// Look up the user to get the user ID.
 	ctx := context.Background()
@@ -442,15 +442,15 @@ func TestGetMessages(t *testing.T) {
 	// Create a session directly in the store.
 	sessID := uuid.New().String()
 	err := s.CreateSession(ctx, &store.Session{
-		ID:         sessID,
-		OrgID:      "default",
-		UserID:     user.ID,
-		EndpointID: endpointID,
-		RuntimeID:  "rt-1",
-		Profile:    "default",
-		State:      "active",
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
+		ID:        sessID,
+		OrgID:     "default",
+		UserID:    user.ID,
+		AgentID:   agentID,
+		RuntimeID: "rt-1",
+		Profile:   "default",
+		State:     "active",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -510,20 +510,20 @@ func TestGetMessages_OtherUserSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, endpointID := seedEndpointAndRuntime(t, s)
+	_, agentID := seedAgentAndRuntime(t, s)
 
 	// Create a session owned by the first user.
 	sessID := uuid.New().String()
 	err = s.CreateSession(ctx, &store.Session{
-		ID:         sessID,
-		OrgID:      "default",
-		UserID:     owner.ID,
-		EndpointID: endpointID,
-		RuntimeID:  "rt-1",
-		Profile:    "default",
-		State:      "active",
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
+		ID:        sessID,
+		OrgID:     "default",
+		UserID:    owner.ID,
+		AgentID:   agentID,
+		RuntimeID: "rt-1",
+		Profile:   "default",
+		State:     "active",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -564,7 +564,7 @@ func TestRateLimiting(t *testing.T) {
 		Auth: config.AuthConfig{
 			JWTSecret:             "test-secret-at-least-32-chars-long",
 			JWTExpiry:             config.Duration{Duration: 1 * time.Hour},
-			DefaultEndpointAccess: "all",
+			DefaultAgentAccess: "all",
 			RuntimeTokens:        []config.RuntimeTokenEntry{{RuntimeID: "rt-1", Token: "tok-1"}},
 			RuntimeTokenLifetime:  config.Duration{Duration: 1 * time.Hour},
 		},
@@ -596,7 +596,7 @@ func TestRateLimiting(t *testing.T) {
 	// Send enough requests to exhaust the burst. The bucket starts full (3 tokens),
 	// so we need to exceed that.
 	for i := 0; i < 20; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/api/endpoints", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
 		req.Header.Set("Authorization", "Bearer "+token)
 		w := httptest.NewRecorder()
 		srv.mux.ServeHTTP(w, req)
@@ -665,7 +665,7 @@ func TestCreateSession_InvalidBody(t *testing.T) {
 func TestCORS_Preflight(t *testing.T) {
 	srv, _, _ := setupTestServer(t)
 
-	req := httptest.NewRequest(http.MethodOptions, "/api/endpoints", nil)
+	req := httptest.NewRequest(http.MethodOptions, "/api/agents", nil)
 	req.Header.Set("Origin", "http://localhost:3000")
 	w := httptest.NewRecorder()
 	srv.mux.ServeHTTP(w, req)
@@ -720,19 +720,19 @@ func TestGetMessages_OtherUserDenied(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, endpointID := seedEndpointAndRuntime(t, s)
+	_, agentID := seedAgentAndRuntime(t, s)
 
 	sessID := uuid.New().String()
 	err = s.CreateSession(ctx, &store.Session{
-		ID:         sessID,
-		OrgID:      "default",
-		UserID:     owner.ID,
-		EndpointID: endpointID,
-		RuntimeID:  "rt-1",
-		Profile:    "default",
-		State:      "active",
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
+		ID:        sessID,
+		OrgID:     "default",
+		UserID:    owner.ID,
+		AgentID:   agentID,
+		RuntimeID: "rt-1",
+		Profile:   "default",
+		State:     "active",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	})
 	if err != nil {
 		t.Fatal(err)

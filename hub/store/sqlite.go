@@ -49,6 +49,12 @@ func NewSQLite(dsn string) (*SQLiteStore, error) {
 	return s, nil
 }
 
+func tableExists(db *sql.DB, name string) bool {
+	var count int
+	_ = db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", name).Scan(&count)
+	return count > 0
+}
+
 func (s *SQLiteStore) addColumnIfNotExists(table, column, definition string) error {
 	_, err := s.db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition))
 	if err != nil && strings.Contains(err.Error(), "duplicate column") {
@@ -72,7 +78,7 @@ func (s *SQLiteStore) migrate() error {
 			online INTEGER NOT NULL DEFAULT 0,
 			last_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
-		`CREATE TABLE IF NOT EXISTS endpoints (
+		`CREATE TABLE IF NOT EXISTS agents (
 			id TEXT PRIMARY KEY,
 			runtime_id TEXT NOT NULL REFERENCES runtimes(id),
 			profile TEXT NOT NULL,
@@ -84,7 +90,7 @@ func (s *SQLiteStore) migrate() error {
 		`CREATE TABLE IF NOT EXISTS sessions (
 			id TEXT PRIMARY KEY,
 			user_id TEXT NOT NULL REFERENCES users(id),
-			endpoint_id TEXT NOT NULL,
+			agent_id TEXT NOT NULL,
 			runtime_id TEXT NOT NULL,
 			profile TEXT NOT NULL,
 			state TEXT NOT NULL DEFAULT 'active',
@@ -104,11 +110,11 @@ func (s *SQLiteStore) migrate() error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(session_id, seq)`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)`,
-		`CREATE TABLE IF NOT EXISTS endpoint_permissions (
+		`CREATE TABLE IF NOT EXISTS agent_permissions (
 			user_id TEXT NOT NULL,
-			endpoint_id TEXT NOT NULL,
+			agent_id TEXT NOT NULL,
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			PRIMARY KEY (user_id, endpoint_id)
+			PRIMARY KEY (user_id, agent_id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS audit_events (
 			id TEXT PRIMARY KEY,
@@ -116,13 +122,13 @@ func (s *SQLiteStore) migrate() error {
 			user_id TEXT NOT NULL DEFAULT '',
 			runtime_id TEXT NOT NULL DEFAULT '',
 			session_id TEXT NOT NULL DEFAULT '',
-			endpoint_id TEXT NOT NULL DEFAULT '',
+			agent_id TEXT NOT NULL DEFAULT '',
 			detail TEXT NOT NULL DEFAULT '',
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_events_created_at ON audit_events(created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action)`,
-		`CREATE INDEX IF NOT EXISTS idx_audit_events_endpoint_id ON audit_events(endpoint_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_events_agent_id ON audit_events(agent_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_state ON sessions(state)`,
 
 		// Phase 3: organizations table
@@ -148,11 +154,11 @@ func (s *SQLiteStore) migrate() error {
 		{"users", "org_id", "TEXT NOT NULL DEFAULT 'default'"},
 		{"users", "external_id", "TEXT NOT NULL DEFAULT ''"},
 		{"runtimes", "org_id", "TEXT NOT NULL DEFAULT 'default'"},
-		{"endpoints", "org_id", "TEXT NOT NULL DEFAULT 'default'"},
+		{"agents", "org_id", "TEXT NOT NULL DEFAULT 'default'"},
 		{"sessions", "org_id", "TEXT NOT NULL DEFAULT 'default'"},
 		{"audit_events", "org_id", "TEXT NOT NULL DEFAULT 'default'"},
-		{"audit_events", "endpoint_id", "TEXT NOT NULL DEFAULT ''"},
-		{"endpoints", "security", "TEXT NOT NULL DEFAULT '{}'"},
+		{"audit_events", "agent_id", "TEXT NOT NULL DEFAULT ''"},
+		{"agents", "security", "TEXT NOT NULL DEFAULT '{}'"},
 	}
 	for _, cm := range columnMigrations {
 		if err := s.addColumnIfNotExists(cm.table, cm.column, cm.definition); err != nil {
@@ -164,7 +170,7 @@ func (s *SQLiteStore) migrate() error {
 	orgIndexes := []string{
 		`CREATE INDEX IF NOT EXISTS idx_users_org_id ON users(org_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_runtimes_org_id ON runtimes(org_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_endpoints_org_id ON endpoints(org_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_agents_org_id ON agents(org_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_org_id ON sessions(org_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_events_org_id ON audit_events(org_id)`,
 	}
@@ -174,10 +180,10 @@ func (s *SQLiteStore) migrate() error {
 		}
 	}
 
-	// Endpoint config overrides table.
+	// Agent config overrides table.
 	configOverrideMigrations := []string{
-		`CREATE TABLE IF NOT EXISTS endpoint_config_overrides (
-			endpoint_id TEXT PRIMARY KEY,
+		`CREATE TABLE IF NOT EXISTS agent_config_overrides (
+			agent_id TEXT PRIMARY KEY,
 			org_id TEXT NOT NULL DEFAULT 'default',
 			security TEXT NOT NULL DEFAULT '{}',
 			limits TEXT NOT NULL DEFAULT '{}',
@@ -248,6 +254,28 @@ func (s *SQLiteStore) migrate() error {
 	// Add plan column to organizations (idempotent).
 	if err := s.addColumnIfNotExists("organizations", "plan", "TEXT NOT NULL DEFAULT 'free'"); err != nil {
 		return fmt.Errorf("add column organizations.plan: %w", err)
+	}
+
+	// Phase: rename endpoint -> agent (migration for existing databases)
+	if tableExists(s.db, "endpoints") {
+		renameStmts := []string{
+			`ALTER TABLE endpoints RENAME TO agents`,
+			`ALTER TABLE endpoint_permissions RENAME TO agent_permissions`,
+			`ALTER TABLE endpoint_config_overrides RENAME TO agent_config_overrides`,
+			`ALTER TABLE sessions RENAME COLUMN endpoint_id TO agent_id`,
+			`ALTER TABLE audit_events RENAME COLUMN endpoint_id TO agent_id`,
+			`ALTER TABLE agent_permissions RENAME COLUMN endpoint_id TO agent_id`,
+			`ALTER TABLE agent_config_overrides RENAME COLUMN endpoint_id TO agent_id`,
+			`DROP INDEX IF EXISTS idx_endpoints_org_id`,
+			`CREATE INDEX IF NOT EXISTS idx_agents_org_id ON agents(org_id)`,
+			`DROP INDEX IF EXISTS idx_audit_events_endpoint_id`,
+			`CREATE INDEX IF NOT EXISTS idx_audit_events_agent_id ON audit_events(agent_id)`,
+		}
+		for _, stmt := range renameStmts {
+			if _, err := s.db.Exec(stmt); err != nil {
+				return fmt.Errorf("rename migration failed: %w\n  SQL: %s", err, stmt)
+			}
+		}
 	}
 
 	return nil
@@ -398,31 +426,31 @@ func (s *SQLiteStore) SetRuntimeOnline(ctx context.Context, id string, online bo
 	return err
 }
 
-// --- Endpoints ---
+// --- Agents ---
 
-func (s *SQLiteStore) UpsertEndpoint(ctx context.Context, ep *Endpoint) error {
+func (s *SQLiteStore) UpsertAgent(ctx context.Context, agent *Agent) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO endpoints (id, org_id, runtime_id, profile, name, tags, caps, security) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO agents (id, org_id, runtime_id, profile, name, tags, caps, security) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET runtime_id=excluded.runtime_id, profile=excluded.profile, name=excluded.name, tags=excluded.tags, caps=excluded.caps, security=excluded.security`,
-		ep.ID, ep.OrgID, ep.RuntimeID, ep.Profile, ep.Name, ep.Tags, ep.Caps, ep.Security,
+		agent.ID, agent.OrgID, agent.RuntimeID, agent.Profile, agent.Name, agent.Tags, agent.Caps, agent.Security,
 	)
 	return err
 }
 
-func (s *SQLiteStore) GetEndpoint(ctx context.Context, id string) (*Endpoint, error) {
-	var ep Endpoint
+func (s *SQLiteStore) GetAgent(ctx context.Context, id string) (*Agent, error) {
+	var agent Agent
 	err := s.db.QueryRowContext(ctx,
-		"SELECT id, org_id, runtime_id, profile, name, tags, caps, security FROM endpoints WHERE id = ?", id,
-	).Scan(&ep.ID, &ep.OrgID, &ep.RuntimeID, &ep.Profile, &ep.Name, &ep.Tags, &ep.Caps, &ep.Security)
+		"SELECT id, org_id, runtime_id, profile, name, tags, caps, security FROM agents WHERE id = ?", id,
+	).Scan(&agent.ID, &agent.OrgID, &agent.RuntimeID, &agent.Profile, &agent.Name, &agent.Tags, &agent.Caps, &agent.Security)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	return &ep, err
+	return &agent, err
 }
 
-func (s *SQLiteStore) ListEndpoints(ctx context.Context, orgID string) ([]Endpoint, error) {
+func (s *SQLiteStore) ListAgents(ctx context.Context, orgID string) ([]Agent, error) {
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT id, org_id, runtime_id, profile, name, tags, caps, security FROM endpoints WHERE org_id = ? ORDER BY name",
+		"SELECT id, org_id, runtime_id, profile, name, tags, caps, security FROM agents WHERE org_id = ? ORDER BY name",
 		orgID,
 	)
 	if err != nil {
@@ -430,20 +458,20 @@ func (s *SQLiteStore) ListEndpoints(ctx context.Context, orgID string) ([]Endpoi
 	}
 	defer func() { _ = rows.Close() }()
 
-	var endpoints []Endpoint
+	var agents []Agent
 	for rows.Next() {
-		var ep Endpoint
-		if err := rows.Scan(&ep.ID, &ep.OrgID, &ep.RuntimeID, &ep.Profile, &ep.Name, &ep.Tags, &ep.Caps, &ep.Security); err != nil {
+		var agent Agent
+		if err := rows.Scan(&agent.ID, &agent.OrgID, &agent.RuntimeID, &agent.Profile, &agent.Name, &agent.Tags, &agent.Caps, &agent.Security); err != nil {
 			return nil, err
 		}
-		endpoints = append(endpoints, ep)
+		agents = append(agents, agent)
 	}
-	return endpoints, rows.Err()
+	return agents, rows.Err()
 }
 
-func (s *SQLiteStore) ListEndpointsByRuntime(ctx context.Context, runtimeID string) ([]Endpoint, error) {
+func (s *SQLiteStore) ListAgentsByRuntime(ctx context.Context, runtimeID string) ([]Agent, error) {
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT id, org_id, runtime_id, profile, name, tags, caps, security FROM endpoints WHERE runtime_id = ? ORDER BY name",
+		"SELECT id, org_id, runtime_id, profile, name, tags, caps, security FROM agents WHERE runtime_id = ? ORDER BY name",
 		runtimeID,
 	)
 	if err != nil {
@@ -451,19 +479,19 @@ func (s *SQLiteStore) ListEndpointsByRuntime(ctx context.Context, runtimeID stri
 	}
 	defer func() { _ = rows.Close() }()
 
-	var endpoints []Endpoint
+	var agents []Agent
 	for rows.Next() {
-		var ep Endpoint
-		if err := rows.Scan(&ep.ID, &ep.OrgID, &ep.RuntimeID, &ep.Profile, &ep.Name, &ep.Tags, &ep.Caps, &ep.Security); err != nil {
+		var agent Agent
+		if err := rows.Scan(&agent.ID, &agent.OrgID, &agent.RuntimeID, &agent.Profile, &agent.Name, &agent.Tags, &agent.Caps, &agent.Security); err != nil {
 			return nil, err
 		}
-		endpoints = append(endpoints, ep)
+		agents = append(agents, agent)
 	}
-	return endpoints, rows.Err()
+	return agents, rows.Err()
 }
 
-func (s *SQLiteStore) DeleteEndpointsByRuntime(ctx context.Context, runtimeID string) error {
-	_, err := s.db.ExecContext(ctx, "DELETE FROM endpoints WHERE runtime_id = ?", runtimeID)
+func (s *SQLiteStore) DeleteAgentsByRuntime(ctx context.Context, runtimeID string) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM agents WHERE runtime_id = ?", runtimeID)
 	return err
 }
 
@@ -471,9 +499,9 @@ func (s *SQLiteStore) DeleteEndpointsByRuntime(ctx context.Context, runtimeID st
 
 func (s *SQLiteStore) CreateSession(ctx context.Context, sess *Session) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO sessions (id, org_id, user_id, endpoint_id, runtime_id, profile, state, native_handle, created_at, updated_at)
+		`INSERT INTO sessions (id, org_id, user_id, agent_id, runtime_id, profile, state, native_handle, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		sess.ID, sess.OrgID, sess.UserID, sess.EndpointID, sess.RuntimeID, sess.Profile,
+		sess.ID, sess.OrgID, sess.UserID, sess.AgentID, sess.RuntimeID, sess.Profile,
 		sess.State, sess.NativeHandle, sess.CreatedAt, sess.UpdatedAt,
 	)
 	return err
@@ -482,9 +510,9 @@ func (s *SQLiteStore) CreateSession(ctx context.Context, sess *Session) error {
 func (s *SQLiteStore) GetSession(ctx context.Context, id string) (*Session, error) {
 	var sess Session
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, org_id, user_id, endpoint_id, runtime_id, profile, state, native_handle, created_at, updated_at
+		`SELECT id, org_id, user_id, agent_id, runtime_id, profile, state, native_handle, created_at, updated_at
 		 FROM sessions WHERE id = ?`, id,
-	).Scan(&sess.ID, &sess.OrgID, &sess.UserID, &sess.EndpointID, &sess.RuntimeID, &sess.Profile,
+	).Scan(&sess.ID, &sess.OrgID, &sess.UserID, &sess.AgentID, &sess.RuntimeID, &sess.Profile,
 		&sess.State, &sess.NativeHandle, &sess.CreatedAt, &sess.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -494,9 +522,9 @@ func (s *SQLiteStore) GetSession(ctx context.Context, id string) (*Session, erro
 
 func (s *SQLiteStore) ListSessionsByUser(ctx context.Context, userID string) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT s.id, s.org_id, s.user_id, s.endpoint_id, s.runtime_id, s.profile, s.state, s.native_handle,
-		        s.created_at, s.updated_at, COALESCE(e.name, '') as endpoint_name
-		 FROM sessions s LEFT JOIN endpoints e ON s.endpoint_id = e.id
+		`SELECT s.id, s.org_id, s.user_id, s.agent_id, s.runtime_id, s.profile, s.state, s.native_handle,
+		        s.created_at, s.updated_at, COALESCE(a.name, '') as agent_name
+		 FROM sessions s LEFT JOIN agents a ON s.agent_id = a.id
 		 WHERE s.user_id = ? ORDER BY s.updated_at DESC`, userID,
 	)
 	if err != nil {
@@ -507,8 +535,8 @@ func (s *SQLiteStore) ListSessionsByUser(ctx context.Context, userID string) ([]
 	var sessions []Session
 	for rows.Next() {
 		var sess Session
-		if err := rows.Scan(&sess.ID, &sess.OrgID, &sess.UserID, &sess.EndpointID, &sess.RuntimeID, &sess.Profile,
-			&sess.State, &sess.NativeHandle, &sess.CreatedAt, &sess.UpdatedAt, &sess.EndpointName); err != nil {
+		if err := rows.Scan(&sess.ID, &sess.OrgID, &sess.UserID, &sess.AgentID, &sess.RuntimeID, &sess.Profile,
+			&sess.State, &sess.NativeHandle, &sess.CreatedAt, &sess.UpdatedAt, &sess.AgentName); err != nil {
 			return nil, err
 		}
 		sessions = append(sessions, sess)
@@ -582,11 +610,11 @@ func (s *SQLiteStore) ListActiveSessions(ctx context.Context, orgID string) ([]S
 	var err error
 	if orgID == "" {
 		rows, err = s.db.QueryContext(ctx,
-			`SELECT id, org_id, user_id, endpoint_id, runtime_id, profile, state, native_handle, created_at, updated_at
+			`SELECT id, org_id, user_id, agent_id, runtime_id, profile, state, native_handle, created_at, updated_at
 			 FROM sessions WHERE state NOT IN ('closed') ORDER BY updated_at DESC`)
 	} else {
 		rows, err = s.db.QueryContext(ctx,
-			`SELECT id, org_id, user_id, endpoint_id, runtime_id, profile, state, native_handle, created_at, updated_at
+			`SELECT id, org_id, user_id, agent_id, runtime_id, profile, state, native_handle, created_at, updated_at
 			 FROM sessions WHERE org_id = ? AND state NOT IN ('closed') ORDER BY updated_at DESC`,
 			orgID)
 	}
@@ -598,7 +626,7 @@ func (s *SQLiteStore) ListActiveSessions(ctx context.Context, orgID string) ([]S
 	var sessions []Session
 	for rows.Next() {
 		var sess Session
-		if err := rows.Scan(&sess.ID, &sess.OrgID, &sess.UserID, &sess.EndpointID, &sess.RuntimeID, &sess.Profile,
+		if err := rows.Scan(&sess.ID, &sess.OrgID, &sess.UserID, &sess.AgentID, &sess.RuntimeID, &sess.Profile,
 			&sess.State, &sess.NativeHandle, &sess.CreatedAt, &sess.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -615,28 +643,28 @@ func (s *SQLiteStore) CountActiveSessionsByUser(ctx context.Context, userID stri
 	return count, err
 }
 
-// --- Endpoint Permissions ---
+// --- Agent Permissions ---
 
-func (s *SQLiteStore) GrantEndpointAccess(ctx context.Context, userID, endpointID string) error {
+func (s *SQLiteStore) GrantAgentAccess(ctx context.Context, userID, agentID string) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO endpoint_permissions (user_id, endpoint_id, created_at) VALUES (?, ?, ?)
-		 ON CONFLICT(user_id, endpoint_id) DO NOTHING`,
-		userID, endpointID, time.Now(),
+		`INSERT INTO agent_permissions (user_id, agent_id, created_at) VALUES (?, ?, ?)
+		 ON CONFLICT(user_id, agent_id) DO NOTHING`,
+		userID, agentID, time.Now(),
 	)
 	return err
 }
 
-func (s *SQLiteStore) RevokeEndpointAccess(ctx context.Context, userID, endpointID string) error {
+func (s *SQLiteStore) RevokeAgentAccess(ctx context.Context, userID, agentID string) error {
 	_, err := s.db.ExecContext(ctx,
-		"DELETE FROM endpoint_permissions WHERE user_id = ? AND endpoint_id = ?",
-		userID, endpointID,
+		"DELETE FROM agent_permissions WHERE user_id = ? AND agent_id = ?",
+		userID, agentID,
 	)
 	return err
 }
 
-func (s *SQLiteStore) ListUserEndpoints(ctx context.Context, userID string) ([]string, error) {
+func (s *SQLiteStore) ListUserAgents(ctx context.Context, userID string) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT endpoint_id FROM endpoint_permissions WHERE user_id = ?", userID,
+		"SELECT agent_id FROM agent_permissions WHERE user_id = ?", userID,
 	)
 	if err != nil {
 		return nil, err
@@ -654,11 +682,11 @@ func (s *SQLiteStore) ListUserEndpoints(ctx context.Context, userID string) ([]s
 	return ids, rows.Err()
 }
 
-func (s *SQLiteStore) HasEndpointAccess(ctx context.Context, userID, endpointID string) (bool, error) {
+func (s *SQLiteStore) HasAgentAccess(ctx context.Context, userID, agentID string) (bool, error) {
 	var count int
 	err := s.db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM endpoint_permissions WHERE user_id = ? AND endpoint_id = ?",
-		userID, endpointID,
+		"SELECT COUNT(*) FROM agent_permissions WHERE user_id = ? AND agent_id = ?",
+		userID, agentID,
 	).Scan(&count)
 	return count > 0, err
 }
@@ -671,16 +699,16 @@ func (s *SQLiteStore) LogAuditEvent(ctx context.Context, event *AuditEvent) erro
 		detail = string(event.Detail)
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO audit_events (id, org_id, action, user_id, runtime_id, session_id, endpoint_id, detail, created_at)
+		`INSERT INTO audit_events (id, org_id, action, user_id, runtime_id, session_id, agent_id, detail, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		event.ID, event.OrgID, event.Action, event.UserID, event.RuntimeID, event.SessionID, event.EndpointID, detail, event.CreatedAt,
+		event.ID, event.OrgID, event.Action, event.UserID, event.RuntimeID, event.SessionID, event.AgentID, detail, event.CreatedAt,
 	)
 	return err
 }
 
 func (s *SQLiteStore) ListAuditEvents(ctx context.Context, orgID string, limit, offset int) ([]AuditEvent, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, org_id, action, user_id, runtime_id, session_id, endpoint_id, detail, created_at
+		`SELECT id, org_id, action, user_id, runtime_id, session_id, agent_id, detail, created_at
 		 FROM audit_events WHERE org_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`,
 		orgID, limit, offset,
 	)
@@ -693,7 +721,7 @@ func (s *SQLiteStore) ListAuditEvents(ctx context.Context, orgID string, limit, 
 	for rows.Next() {
 		var e AuditEvent
 		var detail string
-		if err := rows.Scan(&e.ID, &e.OrgID, &e.Action, &e.UserID, &e.RuntimeID, &e.SessionID, &e.EndpointID, &detail, &e.CreatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.OrgID, &e.Action, &e.UserID, &e.RuntimeID, &e.SessionID, &e.AgentID, &detail, &e.CreatedAt); err != nil {
 			return nil, err
 		}
 		if detail != "" {
@@ -705,7 +733,7 @@ func (s *SQLiteStore) ListAuditEvents(ctx context.Context, orgID string, limit, 
 }
 
 func (s *SQLiteStore) ListAuditEventsFiltered(ctx context.Context, orgID string, filter AuditFilter) ([]AuditEvent, error) {
-	query := `SELECT id, org_id, action, user_id, runtime_id, session_id, endpoint_id, detail, created_at
+	query := `SELECT id, org_id, action, user_id, runtime_id, session_id, agent_id, detail, created_at
 	          FROM audit_events WHERE org_id = ?`
 	args := []any{orgID}
 
@@ -721,9 +749,9 @@ func (s *SQLiteStore) ListAuditEventsFiltered(ctx context.Context, orgID string,
 		query += " AND session_id = ?"
 		args = append(args, filter.SessionID)
 	}
-	if filter.EndpointID != "" {
-		query += " AND endpoint_id = ?"
-		args = append(args, filter.EndpointID)
+	if filter.AgentID != "" {
+		query += " AND agent_id = ?"
+		args = append(args, filter.AgentID)
 	}
 
 	query += " ORDER BY created_at DESC"
@@ -750,7 +778,7 @@ func (s *SQLiteStore) ListAuditEventsFiltered(ctx context.Context, orgID string,
 	for rows.Next() {
 		var e AuditEvent
 		var detail string
-		if err := rows.Scan(&e.ID, &e.OrgID, &e.Action, &e.UserID, &e.RuntimeID, &e.SessionID, &e.EndpointID, &detail, &e.CreatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.OrgID, &e.Action, &e.UserID, &e.RuntimeID, &e.SessionID, &e.AgentID, &detail, &e.CreatedAt); err != nil {
 			return nil, err
 		}
 		if detail != "" {
@@ -765,9 +793,9 @@ func (s *SQLiteStore) ListAuditEventsFiltered(ctx context.Context, orgID string,
 
 func (s *SQLiteStore) ListAllSessions(ctx context.Context, orgID string) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT s.id, s.org_id, s.user_id, s.endpoint_id, s.runtime_id, s.profile, s.state, s.native_handle,
-		        s.created_at, s.updated_at, COALESCE(e.name, '') as endpoint_name
-		 FROM sessions s LEFT JOIN endpoints e ON s.endpoint_id = e.id
+		`SELECT s.id, s.org_id, s.user_id, s.agent_id, s.runtime_id, s.profile, s.state, s.native_handle,
+		        s.created_at, s.updated_at, COALESCE(a.name, '') as agent_name
+		 FROM sessions s LEFT JOIN agents a ON s.agent_id = a.id
 		 WHERE s.org_id = ?
 		 ORDER BY s.updated_at DESC`,
 		orgID,
@@ -780,8 +808,8 @@ func (s *SQLiteStore) ListAllSessions(ctx context.Context, orgID string) ([]Sess
 	var sessions []Session
 	for rows.Next() {
 		var sess Session
-		if err := rows.Scan(&sess.ID, &sess.OrgID, &sess.UserID, &sess.EndpointID, &sess.RuntimeID, &sess.Profile,
-			&sess.State, &sess.NativeHandle, &sess.CreatedAt, &sess.UpdatedAt, &sess.EndpointName); err != nil {
+		if err := rows.Scan(&sess.ID, &sess.OrgID, &sess.UserID, &sess.AgentID, &sess.RuntimeID, &sess.Profile,
+			&sess.State, &sess.NativeHandle, &sess.CreatedAt, &sess.UpdatedAt, &sess.AgentName); err != nil {
 			return nil, err
 		}
 		sessions = append(sessions, sess)
@@ -811,38 +839,38 @@ func (s *SQLiteStore) PurgeOldAuditEvents(ctx context.Context, before time.Time)
 	return result.RowsAffected()
 }
 
-// --- Endpoint Config Overrides ---
+// --- Agent Config Overrides ---
 
-func (s *SQLiteStore) UpsertEndpointConfigOverride(ctx context.Context, override *EndpointConfigOverride) error {
+func (s *SQLiteStore) UpsertAgentConfigOverride(ctx context.Context, override *AgentConfigOverride) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO endpoint_config_overrides (endpoint_id, org_id, security, limits, updated_by, updated_at)
+		`INSERT INTO agent_config_overrides (agent_id, org_id, security, limits, updated_by, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(endpoint_id) DO UPDATE SET
+		 ON CONFLICT(agent_id) DO UPDATE SET
 		   security = excluded.security,
 		   limits = excluded.limits,
 		   updated_by = excluded.updated_by,
 		   updated_at = excluded.updated_at`,
-		override.EndpointID, override.OrgID, override.Security, override.Limits,
+		override.AgentID, override.OrgID, override.Security, override.Limits,
 		override.UpdatedBy, override.UpdatedAt,
 	)
 	return err
 }
 
-func (s *SQLiteStore) GetEndpointConfigOverride(ctx context.Context, endpointID string) (*EndpointConfigOverride, error) {
-	var o EndpointConfigOverride
+func (s *SQLiteStore) GetAgentConfigOverride(ctx context.Context, agentID string) (*AgentConfigOverride, error) {
+	var o AgentConfigOverride
 	err := s.db.QueryRowContext(ctx,
-		"SELECT endpoint_id, org_id, security, limits, updated_by, updated_at FROM endpoint_config_overrides WHERE endpoint_id = ?",
-		endpointID,
-	).Scan(&o.EndpointID, &o.OrgID, &o.Security, &o.Limits, &o.UpdatedBy, &o.UpdatedAt)
+		"SELECT agent_id, org_id, security, limits, updated_by, updated_at FROM agent_config_overrides WHERE agent_id = ?",
+		agentID,
+	).Scan(&o.AgentID, &o.OrgID, &o.Security, &o.Limits, &o.UpdatedBy, &o.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	return &o, err
 }
 
-func (s *SQLiteStore) ListEndpointConfigOverrides(ctx context.Context, orgID string) ([]EndpointConfigOverride, error) {
+func (s *SQLiteStore) ListAgentConfigOverrides(ctx context.Context, orgID string) ([]AgentConfigOverride, error) {
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT endpoint_id, org_id, security, limits, updated_by, updated_at FROM endpoint_config_overrides WHERE org_id = ?",
+		"SELECT agent_id, org_id, security, limits, updated_by, updated_at FROM agent_config_overrides WHERE org_id = ?",
 		orgID,
 	)
 	if err != nil {
@@ -850,10 +878,10 @@ func (s *SQLiteStore) ListEndpointConfigOverrides(ctx context.Context, orgID str
 	}
 	defer func() { _ = rows.Close() }()
 
-	var overrides []EndpointConfigOverride
+	var overrides []AgentConfigOverride
 	for rows.Next() {
-		var o EndpointConfigOverride
-		if err := rows.Scan(&o.EndpointID, &o.OrgID, &o.Security, &o.Limits, &o.UpdatedBy, &o.UpdatedAt); err != nil {
+		var o AgentConfigOverride
+		if err := rows.Scan(&o.AgentID, &o.OrgID, &o.Security, &o.Limits, &o.UpdatedBy, &o.UpdatedAt); err != nil {
 			return nil, err
 		}
 		overrides = append(overrides, o)
@@ -861,8 +889,8 @@ func (s *SQLiteStore) ListEndpointConfigOverrides(ctx context.Context, orgID str
 	return overrides, rows.Err()
 }
 
-func (s *SQLiteStore) DeleteEndpointConfigOverride(ctx context.Context, endpointID string) error {
-	_, err := s.db.ExecContext(ctx, "DELETE FROM endpoint_config_overrides WHERE endpoint_id = ?", endpointID)
+func (s *SQLiteStore) DeleteAgentConfigOverride(ctx context.Context, agentID string) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM agent_config_overrides WHERE agent_id = ?", agentID)
 	return err
 }
 

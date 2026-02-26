@@ -26,12 +26,12 @@ type Store interface {
 	ListRuntimes(ctx context.Context, orgID string) ([]Runtime, error)
 	SetRuntimeOnline(ctx context.Context, id string, online bool) error
 
-	// Endpoints
-	UpsertEndpoint(ctx context.Context, ep *Endpoint) error
-	GetEndpoint(ctx context.Context, id string) (*Endpoint, error)
-	ListEndpoints(ctx context.Context, orgID string) ([]Endpoint, error)
-	ListEndpointsByRuntime(ctx context.Context, runtimeID string) ([]Endpoint, error)
-	DeleteEndpointsByRuntime(ctx context.Context, runtimeID string) error
+	// Agents
+	UpsertAgent(ctx context.Context, agent *Agent) error
+	GetAgent(ctx context.Context, id string) (*Agent, error)
+	ListAgents(ctx context.Context, orgID string) ([]Agent, error)
+	ListAgentsByRuntime(ctx context.Context, runtimeID string) ([]Agent, error)
+	DeleteAgentsByRuntime(ctx context.Context, runtimeID string) error
 
 	// Sessions
 	CreateSession(ctx context.Context, sess *Session) error
@@ -49,11 +49,11 @@ type Store interface {
 	GetMessages(ctx context.Context, sessionID string, afterSeq int64, limit int) ([]Message, error)
 	MessageExists(ctx context.Context, sessionID, messageID string) (bool, error)
 
-	// Endpoint Permissions
-	GrantEndpointAccess(ctx context.Context, userID, endpointID string) error
-	RevokeEndpointAccess(ctx context.Context, userID, endpointID string) error
-	ListUserEndpoints(ctx context.Context, userID string) ([]string, error)
-	HasEndpointAccess(ctx context.Context, userID, endpointID string) (bool, error)
+	// Agent Permissions
+	GrantAgentAccess(ctx context.Context, userID, agentID string) error
+	RevokeAgentAccess(ctx context.Context, userID, agentID string) error
+	ListUserAgents(ctx context.Context, userID string) ([]string, error)
+	HasAgentAccess(ctx context.Context, userID, agentID string) (bool, error)
 
 	// Audit
 	LogAuditEvent(ctx context.Context, event *AuditEvent) error
@@ -67,11 +67,11 @@ type Store interface {
 	// Admin
 	ListAllSessions(ctx context.Context, orgID string) ([]Session, error)
 
-	// Endpoint Config Overrides
-	UpsertEndpointConfigOverride(ctx context.Context, override *EndpointConfigOverride) error
-	GetEndpointConfigOverride(ctx context.Context, endpointID string) (*EndpointConfigOverride, error)
-	ListEndpointConfigOverrides(ctx context.Context, orgID string) ([]EndpointConfigOverride, error)
-	DeleteEndpointConfigOverride(ctx context.Context, endpointID string) error
+	// Agent Config Overrides
+	UpsertAgentConfigOverride(ctx context.Context, override *AgentConfigOverride) error
+	GetAgentConfigOverride(ctx context.Context, agentID string) (*AgentConfigOverride, error)
+	ListAgentConfigOverrides(ctx context.Context, orgID string) ([]AgentConfigOverride, error)
+	DeleteAgentConfigOverride(ctx context.Context, agentID string) error
 
 	// Device Codes
 	CreateDeviceCode(ctx context.Context, dc *DeviceCode) error
@@ -143,8 +143,8 @@ type Runtime struct {
 	LastSeen time.Time `json:"last_seen"`
 }
 
-// Endpoint represents an agent endpoint.
-type Endpoint struct {
+// Agent represents an agent.
+type Agent struct {
 	ID        string `json:"id"`
 	OrgID     string `json:"org_id"`
 	RuntimeID string `json:"runtime_id"`
@@ -160,14 +160,14 @@ type Session struct {
 	ID           string    `json:"id"`
 	OrgID        string    `json:"org_id"`
 	UserID       string    `json:"user_id"`
-	EndpointID   string    `json:"endpoint_id"`
+	AgentID      string    `json:"agent_id"`
 	RuntimeID    string    `json:"runtime_id"`
 	Profile      string    `json:"profile"`
 	State        string    `json:"state"` // "active", "idle", "closed"
 	NativeHandle string    `json:"native_handle,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
-	EndpointName string    `json:"endpoint_name,omitempty"`
+	AgentName    string    `json:"agent_name,omitempty"`
 }
 
 // Message represents a stored message in a transcript.
@@ -181,14 +181,14 @@ type Message struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// EndpointConfigOverride stores admin-set config overrides for an endpoint.
-type EndpointConfigOverride struct {
-	EndpointID string    `json:"endpoint_id"`
-	OrgID      string    `json:"org_id"`
-	Security   string    `json:"security"`   // JSON-encoded SecurityProfile
-	Limits     string    `json:"limits"`     // JSON-encoded EndpointLimits
-	UpdatedBy  string    `json:"updated_by"`
-	UpdatedAt  time.Time `json:"updated_at"`
+// AgentConfigOverride stores admin-set config overrides for an agent.
+type AgentConfigOverride struct {
+	AgentID   string    `json:"agent_id"`
+	OrgID     string    `json:"org_id"`
+	Security  string    `json:"security"`  // JSON-encoded SecurityProfile
+	Limits    string    `json:"limits"`    // JSON-encoded AgentLimits
+	UpdatedBy string    `json:"updated_by"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // AuditEvent is a log entry for audit purposes.
@@ -199,7 +199,7 @@ type AuditEvent struct {
 	UserID     string          `json:"user_id,omitempty"`
 	RuntimeID  string          `json:"runtime_id,omitempty"`
 	SessionID  string          `json:"session_id,omitempty"`
-	EndpointID string          `json:"endpoint_id,omitempty"`
+	AgentID    string          `json:"agent_id,omitempty"`
 	Detail     json.RawMessage `json:"detail,omitempty"`
 	CreatedAt  time.Time       `json:"created_at"`
 }
@@ -235,7 +235,7 @@ type AuditFilter struct {
 	Action     string
 	UserID     string
 	SessionID  string
-	EndpointID string
-	Limit      int
-	Offset     int
+	AgentID string
+	Limit   int
+	Offset  int
 }
