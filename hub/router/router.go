@@ -264,6 +264,10 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 	r.runtimes[hello.RuntimeID] = rtConn
 	r.mu.Unlock()
 
+	// Set up WebSocket-level keepalive using the runtimeConn mutex for write safety.
+	cancelRtKeepalive := startWSKeepalive(conn, &rtConn.mu)
+	defer cancelRtKeepalive()
+
 	// Update store.
 	ctx := context.Background()
 	if err := r.store.UpsertRuntime(ctx, &store.Runtime{
@@ -378,6 +382,7 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 			r.logger.Debug("runtime read error", "runtime_id", hello.RuntimeID, "error", err)
 			return
 		}
+		_ = conn.SetReadDeadline(time.Now().Add(wsPongWait))
 
 		var env protocol.Envelope
 		if err := json.Unmarshal(msg, &env); err != nil {
@@ -441,6 +446,10 @@ func (r *Router) HandleClientWS(w http.ResponseWriter, req *http.Request) {
 	// Set read limit for client connections.
 	conn.SetReadLimit(r.maxClientMessageSize)
 
+	// Set up WebSocket-level keepalive using the clientConn mutex for write safety.
+	cancelClientKeepalive := startWSKeepalive(conn, &cc.mu)
+	defer cancelClientKeepalive()
+
 	r.logger.Info("client connected", "user", identity.Username, "conn_id", connID)
 
 	defer func() {
@@ -467,6 +476,8 @@ func (r *Router) HandleClientWS(w http.ResponseWriter, req *http.Request) {
 			r.logger.Debug("client read error", "conn_id", connID, "error", err)
 			return
 		}
+		// Any message resets the read deadline.
+		_ = conn.SetReadDeadline(time.Now().Add(wsPongWait))
 
 		if !cc.allowMessage() {
 			r.logger.Debug("client message rate limited", "conn_id", connID)

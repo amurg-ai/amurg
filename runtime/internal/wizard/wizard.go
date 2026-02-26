@@ -131,7 +131,7 @@ func (w *Wizard) Run(outputPath string, generateSystemd bool) (string, bool, err
 
 	for i := range numAgents {
 		_, _ = fmt.Fprintf(w.p.Out, "\n  ── Agent %d of %d ──\n", i+1, numAgents)
-		agent := w.configureAgent(i)
+		agent := w.ConfigureAgent(i)
 		cfg.Agents = append(cfg.Agents, agent)
 	}
 
@@ -301,7 +301,8 @@ func wsToHTTP(wsURL string) string {
 	return u
 }
 
-func (w *Wizard) configureAgent(index int) config.AgentConfig {
+// ConfigureAgent runs the interactive prompt to configure a single agent.
+func (w *Wizard) ConfigureAgent(index int) config.AgentConfig {
 	// Build display options.
 	options := make([]string, len(orderedProfiles))
 	for i, p := range orderedProfiles {
