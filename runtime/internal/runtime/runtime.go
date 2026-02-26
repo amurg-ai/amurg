@@ -17,7 +17,9 @@ import (
 	"github.com/amurg-ai/amurg/pkg/protocol"
 	"github.com/amurg-ai/amurg/runtime/internal/adapter"
 	"github.com/amurg-ai/amurg/runtime/internal/config"
+	"github.com/amurg-ai/amurg/runtime/internal/eventbus"
 	"github.com/amurg-ai/amurg/runtime/internal/hub"
+	"github.com/amurg-ai/amurg/runtime/internal/ipc"
 	"github.com/amurg-ai/amurg/runtime/internal/session"
 )
 
@@ -28,18 +30,29 @@ type Runtime struct {
 	sessions           *session.Manager
 	hubClient          *hub.Client
 	logger             *slog.Logger
+	bus                *eventbus.Bus
+	startedAt          time.Time
 	mu                 sync.Mutex
 	pendingPermissions map[string]chan bool
+	hubConnected       bool
+	hubReconnecting    bool
 }
 
 // New creates a new runtime from configuration.
-func New(cfg *config.Config, logger *slog.Logger) *Runtime {
+// If bus is nil, events are not published.
+func New(cfg *config.Config, logger *slog.Logger, bus *eventbus.Bus) *Runtime {
 	registry := adapter.DefaultRegistry()
+
+	if bus == nil {
+		bus = eventbus.New()
+	}
 
 	rt := &Runtime{
 		cfg:                cfg,
 		registry:           registry,
 		logger:             logger.With("component", "runtime", "runtime_id", cfg.Runtime.ID),
+		bus:                bus,
+		startedAt:          time.Now(),
 		pendingPermissions: make(map[string]chan bool),
 	}
 
@@ -85,7 +98,65 @@ func New(cfg *config.Config, logger *slog.Logger) *Runtime {
 
 	rt.hubClient = hub.NewClient(cfg.Hub, cfg.Runtime.ID, cfg.Runtime.OrgID, agents, rt.handleHubMessage, logger)
 
+	// Wire hub state change notifications to event bus.
+	rt.hubClient.SetStateChangeHandler(func(connected, reconnecting bool) {
+		rt.mu.Lock()
+		rt.hubConnected = connected
+		rt.hubReconnecting = reconnecting
+		rt.mu.Unlock()
+
+		if connected {
+			rt.bus.PublishType(eventbus.HubConnected, nil)
+		} else if reconnecting {
+			rt.bus.PublishType(eventbus.HubReconnecting, nil)
+		} else {
+			rt.bus.PublishType(eventbus.HubDisconnected, nil)
+		}
+	})
+
 	return rt
+}
+
+// Bus returns the runtime's event bus.
+func (r *Runtime) Bus() *eventbus.Bus {
+	return r.bus
+}
+
+// Status returns the current runtime status (implements ipc.StateProvider).
+func (r *Runtime) Status() ipc.StatusResult {
+	r.mu.Lock()
+	connected := r.hubConnected
+	reconnecting := r.hubReconnecting
+	r.mu.Unlock()
+
+	return ipc.StatusResult{
+		RuntimeID:    r.cfg.Runtime.ID,
+		HubURL:       r.cfg.Hub.URL,
+		HubConnected: connected,
+		Reconnecting: reconnecting,
+		StartedAt:    r.startedAt,
+		Uptime:       time.Since(r.startedAt).Truncate(time.Second).String(),
+		Sessions:     r.sessions.ActiveCount(),
+		MaxSessions:  r.cfg.Runtime.MaxSessions,
+		Agents:       len(r.cfg.Agents),
+	}
+}
+
+// Sessions returns info about active sessions (implements ipc.StateProvider).
+func (r *Runtime) Sessions() []ipc.SessionInfo {
+	sessInfos := r.sessions.List()
+	result := make([]ipc.SessionInfo, len(sessInfos))
+	for i, s := range sessInfos {
+		result[i] = ipc.SessionInfo{
+			ID:        s.ID,
+			AgentID:   s.AgentID,
+			AgentName: s.AgentName,
+			UserID:    s.UserID,
+			State:     s.State,
+			CreatedAt: s.CreatedAt,
+		}
+	}
+	return result
 }
 
 // Run starts the runtime and blocks until the context is canceled.
@@ -164,6 +235,12 @@ func (r *Runtime) handleSessionCreate(env protocol.Envelope) error {
 	if err != nil {
 		resp.Error = err.Error()
 		r.logger.Warn("session creation failed", "session_id", req.SessionID, "error", err)
+	} else {
+		r.bus.PublishType(eventbus.SessionCreated, map[string]string{
+			"session_id": req.SessionID,
+			"agent_id":   req.AgentID,
+			"user_id":    req.UserID,
+		})
 	}
 
 	return r.hubClient.Send(protocol.TypeSessionCreated, req.SessionID, resp)
@@ -179,6 +256,10 @@ func (r *Runtime) handleSessionClose(env protocol.Envelope) error {
 	if err := r.sessions.Close(req.SessionID); err != nil {
 		r.logger.Warn("session close error", "session_id", req.SessionID, "error", err)
 	}
+
+	r.bus.PublishType(eventbus.SessionClosed, map[string]string{
+		"session_id": req.SessionID,
+	})
 
 	return nil
 }

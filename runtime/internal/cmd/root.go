@@ -7,7 +7,8 @@ import (
 var version = "dev"
 
 // NewRootCmd creates the root cobra command for amurg-runtime.
-// When invoked without a subcommand, it delegates to "run" for backward compat.
+// When invoked without a subcommand in a TTY, it uses smart default logic:
+// daemon running → attach, no config → init wizard, otherwise → run.
 func NewRootCmd(v string) *cobra.Command {
 	version = v
 
@@ -15,10 +16,8 @@ func NewRootCmd(v string) *cobra.Command {
 		Use:   "amurg-runtime",
 		Short: "Amurg runtime — lightweight agent gateway",
 		Long:  "Amurg runtime manages agent sessions and connects outbound to the hub.",
-		// Bare invocation (no subcommand) behaves as "run".
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return runRun(cmd, args)
-		},
+		// Bare invocation uses smart default logic.
+		RunE: runDefault,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -32,6 +31,7 @@ func NewRootCmd(v string) *cobra.Command {
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newAgentsCmd())
 	root.AddCommand(newConfigCmd())
+	root.AddCommand(newAttachCmd())
 
 	root.PersistentFlags().StringP("config", "c", "", "path to config file")
 

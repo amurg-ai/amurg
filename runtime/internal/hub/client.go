@@ -26,6 +26,9 @@ const (
 // MessageHandler processes messages received from the hub.
 type MessageHandler func(env protocol.Envelope) error
 
+// StateChangeFunc is called when the hub connection state changes.
+type StateChangeFunc func(connected bool, reconnecting bool)
+
 // Client manages the WebSocket connection from runtime to hub.
 type Client struct {
 	cfg     config.HubConfig
@@ -35,10 +38,11 @@ type Client struct {
 	handler MessageHandler
 	logger  *slog.Logger
 
-	mu           sync.Mutex
-	conn         *websocket.Conn
-	done         chan struct{}
-	currentToken string // latest token (updated via refresh)
+	mu            sync.Mutex
+	conn          *websocket.Conn
+	done          chan struct{}
+	currentToken  string // latest token (updated via refresh)
+	onStateChange StateChangeFunc
 }
 
 // NewClient creates a hub client.
@@ -52,6 +56,22 @@ func NewClient(cfg config.HubConfig, runtimeID, orgID string, agents []protocol.
 		logger:       logger.With("component", "hub-client"),
 		done:         make(chan struct{}),
 		currentToken: cfg.Token,
+	}
+}
+
+// SetStateChangeHandler sets a callback for connection state changes.
+func (c *Client) SetStateChangeHandler(fn StateChangeFunc) {
+	c.mu.Lock()
+	c.onStateChange = fn
+	c.mu.Unlock()
+}
+
+func (c *Client) notifyStateChange(connected, reconnecting bool) {
+	c.mu.Lock()
+	fn := c.onStateChange
+	c.mu.Unlock()
+	if fn != nil {
+		fn(connected, reconnecting)
 	}
 }
 
@@ -69,6 +89,7 @@ func (c *Client) Connect(ctx context.Context) error {
 		err := c.connectOnce(ctx)
 		if err != nil {
 			c.logger.Warn("connection failed", "error", err)
+			c.notifyStateChange(false, true)
 
 			// Exponential backoff: double delay on each failure, cap at max.
 			c.logger.Info("reconnecting", "delay", delay)
@@ -116,6 +137,7 @@ func (c *Client) connectOnce(ctx context.Context) error {
 		c.conn = nil
 		c.mu.Unlock()
 		_ = conn.Close()
+		c.notifyStateChange(false, false)
 	}()
 
 	// Set up WebSocket-level keepalive.
@@ -166,6 +188,7 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	}
 
 	c.logger.Info("connected to hub", "url", c.cfg.URL)
+	c.notifyStateChange(true, false)
 
 	// Read messages until disconnected.
 	for {

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -8,6 +9,7 @@ import (
 
 	"github.com/amurg-ai/amurg/runtime/internal/config"
 	"github.com/amurg-ai/amurg/runtime/internal/daemon"
+	"github.com/amurg-ai/amurg/runtime/internal/ipc"
 )
 
 func newStatusCmd() *cobra.Command {
@@ -19,6 +21,25 @@ func newStatusCmd() *cobra.Command {
 }
 
 func runStatus(cmd *cobra.Command, args []string) error {
+	// Try IPC first for live status.
+	if status, err := queryIPCStatus(); err == nil {
+		connStatus := "disconnected"
+		if status.HubConnected {
+			connStatus = "connected"
+		} else if status.Reconnecting {
+			connStatus = "reconnecting"
+		}
+
+		_, _ = fmt.Fprintf(os.Stdout, "Status:   running\n")
+		_, _ = fmt.Fprintf(os.Stdout, "Runtime:  %s\n", status.RuntimeID)
+		_, _ = fmt.Fprintf(os.Stdout, "Hub:      %s (%s)\n", status.HubURL, connStatus)
+		_, _ = fmt.Fprintf(os.Stdout, "Uptime:   %s\n", status.Uptime)
+		_, _ = fmt.Fprintf(os.Stdout, "Sessions: %d/%d\n", status.Sessions, status.MaxSessions)
+		_, _ = fmt.Fprintf(os.Stdout, "Agents:   %d\n", status.Agents)
+		return nil
+	}
+
+	// Fall back to PID + config.
 	pid, _ := daemon.ReadPID()
 
 	if pid == 0 {
@@ -46,4 +67,23 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+func queryIPCStatus() (*ipc.StatusResult, error) {
+	client, err := ipc.Dial(daemon.SocketPath())
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = client.Close() }()
+
+	resp, err := client.Call("status", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var status ipc.StatusResult
+	if err := json.Unmarshal(resp.Data, &status); err != nil {
+		return nil, err
+	}
+	return &status, nil
 }

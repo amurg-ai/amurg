@@ -11,17 +11,22 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/amurg-ai/amurg/runtime/internal/config"
+	"github.com/amurg-ai/amurg/runtime/internal/daemon"
+	"github.com/amurg-ai/amurg/runtime/internal/eventbus"
+	"github.com/amurg-ai/amurg/runtime/internal/ipc"
 	"github.com/amurg-ai/amurg/runtime/internal/runtime"
 	"github.com/amurg-ai/amurg/runtime/internal/wizard"
 )
 
 func newRunCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "run [config-file]",
 		Short: "Start the runtime (default when no subcommand is given)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE:  runRun,
 	}
+	cmd.Flags().Bool("no-tui", false, "disable TUI dashboard (headless JSON mode)")
+	return cmd
 }
 
 func runRun(cmd *cobra.Command, args []string) error {
@@ -32,7 +37,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("error: %w", err)
 	}
 
-	// Set up structured logging.
+	// Set up structured logging with event bus tee.
 	logLevel := slog.LevelInfo
 	switch cfg.Runtime.LogLevel {
 	case "debug":
@@ -43,12 +48,25 @@ func runRun(cmd *cobra.Command, args []string) error {
 		logLevel = slog.LevelError
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+	bus := eventbus.New()
+
+	jsonHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: logLevel,
-	}))
+	})
+	teeHandler := eventbus.NewSlogHandler(jsonHandler, bus)
+	logger := slog.New(teeHandler)
 
 	// Create and run the runtime.
-	rt := runtime.New(cfg, logger)
+	rt := runtime.New(cfg, logger, bus)
+
+	// Start IPC server (non-fatal if it fails).
+	socketPath := daemon.SocketPath()
+	ipcServer := ipc.NewServer(socketPath, rt, bus, logger)
+	if err := ipcServer.Start(); err != nil {
+		logger.Warn("IPC server failed to start", "error", err)
+	} else {
+		defer func() { _ = ipcServer.Close() }()
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -70,6 +88,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	}
 
 	logger.Info("runtime stopped")
+	bus.Close()
 	return nil
 }
 

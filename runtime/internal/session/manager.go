@@ -283,3 +283,37 @@ func (m *Manager) ActiveCount() int {
 	defer m.mu.RUnlock()
 	return len(m.sessions)
 }
+
+// SessionInfo describes a session for external consumers (IPC, dashboard).
+type SessionInfo struct {
+	ID        string
+	AgentID   string
+	AgentName string
+	UserID    string
+	State     string
+	CreatedAt time.Time
+}
+
+// List returns info about all active sessions.
+func (m *Manager) List() []SessionInfo {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	infos := make([]SessionInfo, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		agentName := s.AgentID
+		if cfg, ok := m.agentCfgs[s.AgentID]; ok {
+			agentName = cfg.Name
+		}
+
+		infos = append(infos, SessionInfo{
+			ID:        s.ID,
+			AgentID:   s.AgentID,
+			AgentName: agentName,
+			UserID:    s.UserID,
+			State:     string(s.State()),
+			CreatedAt: s.CreatedAt,
+		})
+	}
+	return infos
+}

@@ -28,6 +28,11 @@ func LogPath() string {
 	return filepath.Join(DefaultDir(), "runtime.log")
 }
 
+// SocketPath returns the path to the IPC Unix socket.
+func SocketPath() string {
+	return filepath.Join(DefaultDir(), "runtime.sock")
+}
+
 // WritePID writes the given PID to the PID file.
 func WritePID(pid int) error {
 	dir := DefaultDir()
