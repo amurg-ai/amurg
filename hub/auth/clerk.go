@@ -54,8 +54,18 @@ func (c *ClerkProvider) ValidateToken(ctx context.Context, tokenStr string) (*Id
 		return nil, ErrUnauthorized
 	}
 
+	// Clerk v2 JWTs store org info in a nested "o" object;
+	// older tokens use flat "org_id" / "org_role" claims.
 	orgID, _ := claims["org_id"].(string)
 	orgRole, _ := claims["org_role"].(string)
+	if o, ok := claims["o"].(map[string]any); ok {
+		if id, _ := o["id"].(string); id != "" {
+			orgID = id
+		}
+		if rol, _ := o["rol"].(string); rol != "" {
+			orgRole = "org:" + rol // normalize "admin" → "org:admin"
+		}
+	}
 
 	role := "user"
 	if orgRole == "org:admin" {

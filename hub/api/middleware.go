@@ -51,16 +51,21 @@ func (s *Server) ensureUserMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// Normalize empty org to "default" so all downstream handlers see a
+		// consistent org ID (Clerk users without an active organization have
+		// an empty org_id claim).
+		if identity.OrgID == "" {
+			identity.OrgID = "default"
+			ctx := context.WithValue(r.Context(), identityKey, identity)
+			r = r.WithContext(ctx)
+		}
+
 		ctx := r.Context()
 
 		// Check if user already exists by their external ID (Clerk sub).
 		existing, _ := s.store.GetUserByExternalID(ctx, identity.UserID)
 		if existing == nil {
-			// Ensure the organization exists.
 			orgID := identity.OrgID
-			if orgID == "" {
-				orgID = "default"
-			}
 			org, _ := s.store.GetOrganization(ctx, orgID)
 			if org == nil {
 				_ = s.store.CreateOrganization(ctx, &store.Organization{
