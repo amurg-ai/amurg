@@ -80,7 +80,7 @@ func (s *PostgresStore) migrate() error {
 		`CREATE TABLE IF NOT EXISTS sessions (
 			id TEXT PRIMARY KEY,
 			org_id TEXT NOT NULL DEFAULT 'default' REFERENCES organizations(id),
-			user_id TEXT NOT NULL REFERENCES users(id),
+			user_id TEXT NOT NULL,
 			agent_id TEXT NOT NULL,
 			runtime_id TEXT NOT NULL,
 			profile TEXT NOT NULL,
@@ -223,6 +223,24 @@ func (s *PostgresStore) migrate() error {
 		}
 	}
 
+	// Fix partial rename state: agent_config_overrides may still have endpoint_id
+	// column if a previous migration was partially applied.
+	if pgTableExists(s.db, "agent_config_overrides") {
+		var hasEndpointID bool
+		_ = s.db.QueryRow(
+			`SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='agent_config_overrides' AND column_name='endpoint_id')`,
+		).Scan(&hasEndpointID)
+		if hasEndpointID {
+			if _, err := s.db.Exec(`ALTER TABLE agent_config_overrides RENAME COLUMN endpoint_id TO agent_id`); err != nil {
+				return fmt.Errorf("fix agent_config_overrides column: %w", err)
+			}
+		}
+	}
+
+	// Drop sessions_user_id_fkey if it exists: sessions.user_id stores external
+	// IDs (e.g. Clerk user IDs), not the internal UUID from users(id).
+	_, _ = s.db.Exec(`ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_user_id_fkey`)
+
 	return nil
 }
 
@@ -238,7 +256,7 @@ func (s *PostgresStore) Close() error {
 
 func (s *PostgresStore) CreateOrganization(ctx context.Context, org *Organization) error {
 	_, err := s.db.ExecContext(ctx,
-		"INSERT INTO organizations (id, name, created_at) VALUES ($1, $2, $3)",
+		"INSERT INTO organizations (id, name, created_at) VALUES ($1, $2, $3) ON CONFLICT(id) DO NOTHING",
 		org.ID, org.Name, org.CreatedAt,
 	)
 	return err

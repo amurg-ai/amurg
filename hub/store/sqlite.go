@@ -293,7 +293,7 @@ func (s *SQLiteStore) Close() error {
 
 func (s *SQLiteStore) CreateOrganization(ctx context.Context, org *Organization) error {
 	_, err := s.db.ExecContext(ctx,
-		"INSERT INTO organizations (id, name, created_at) VALUES (?, ?, ?)",
+		"INSERT INTO organizations (id, name, created_at) VALUES (?, ?, ?) ON CONFLICT(id) DO NOTHING",
 		org.ID, org.Name, org.CreatedAt)
 	return err
 }

@@ -270,6 +270,16 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 
 	// Update store.
 	ctx := context.Background()
+
+	// Ensure org exists before upserting runtime/agents (prevents FK violations).
+	if orgID != "default" {
+		if err := r.store.CreateOrganization(ctx, &store.Organization{
+			ID: orgID, Name: orgID, Plan: "free", CreatedAt: time.Now(),
+		}); err != nil {
+			r.logger.Warn("failed to ensure organization", "org_id", orgID, "error", err)
+		}
+	}
+
 	if err := r.store.UpsertRuntime(ctx, &store.Runtime{
 		ID:       hello.RuntimeID,
 		OrgID:    orgID,
@@ -362,9 +372,19 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 		if refreshCancel != nil {
 			refreshCancel()
 		}
+		// Only remove from map and mark offline if this connection is still the
+		// active one. A newer reconnection may have already replaced us.
 		r.mu.Lock()
-		delete(r.runtimes, hello.RuntimeID)
+		current, ok := r.runtimes[hello.RuntimeID]
+		if ok && current == rtConn {
+			delete(r.runtimes, hello.RuntimeID)
+		}
+		replaced := ok && current != rtConn
 		r.mu.Unlock()
+		if replaced {
+			r.logger.Info("runtime connection superseded, skipping cleanup", "runtime_id", hello.RuntimeID)
+			return
+		}
 		if err := r.store.SetRuntimeOnline(ctx, hello.RuntimeID, false); err != nil {
 			r.logger.Warn("failed to set runtime offline", "runtime_id", hello.RuntimeID, "error", err)
 		}
