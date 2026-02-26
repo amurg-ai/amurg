@@ -135,10 +135,9 @@ func (w *Wizard) Run(outputPath string, generateSystemd bool) (string, bool, err
 		cfg.Agents = append(cfg.Agents, agent)
 	}
 
-	// Output path.
-	_, _ = fmt.Fprintln(w.p.Out)
+	// Output path — use default unless explicitly overridden via flag.
 	if outputPath == "" {
-		outputPath = w.p.Ask("Config file output path", DefaultConfigPath())
+		outputPath = DefaultConfigPath()
 	}
 
 	// Ensure parent directory exists.
@@ -330,13 +329,18 @@ func (w *Wizard) ConfigureAgent(index int) config.AgentConfig {
 		Profile: profile,
 	}
 
+	// Default working directory for agents that support it.
+	defaultWorkDir, _ := os.Getwd()
+	if defaultWorkDir == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			defaultWorkDir = home
+		}
+	}
+
 	switch profile {
 	case protocol.ProfileClaudeCode:
 		cc := &config.ClaudeCodeConfig{}
-		workDir := w.p.Ask("  Working directory (leave empty for home dir)", "")
-		if workDir != "" {
-			cc.WorkDir = workDir
-		}
+		cc.WorkDir = w.p.Ask("  Working directory", defaultWorkDir)
 		model := w.p.Ask("  Model (leave empty for default)", "")
 		if model != "" {
 			cc.Model = model
@@ -349,6 +353,7 @@ func (w *Wizard) ConfigureAgent(index int) config.AgentConfig {
 
 	case protocol.ProfileGitHubCopilot:
 		cp := &config.CopilotConfig{}
+		cp.WorkDir = w.p.Ask("  Working directory", defaultWorkDir)
 		model := w.p.Ask("  Model (leave empty for default)", "")
 		if model != "" {
 			cp.Model = model
@@ -357,6 +362,7 @@ func (w *Wizard) ConfigureAgent(index int) config.AgentConfig {
 
 	case protocol.ProfileCodex:
 		cx := &config.CodexConfig{}
+		cx.WorkDir = w.p.Ask("  Working directory", defaultWorkDir)
 		model := w.p.Ask("  Model (leave empty for default)", "")
 		if model != "" {
 			cx.Model = model
@@ -365,6 +371,7 @@ func (w *Wizard) ConfigureAgent(index int) config.AgentConfig {
 
 	case protocol.ProfileKilo:
 		kc := &config.KiloConfig{}
+		kc.WorkDir = w.p.Ask("  Working directory", defaultWorkDir)
 		model := w.p.Ask("  Model (leave empty for default)", "")
 		if model != "" {
 			kc.Model = model
