@@ -105,6 +105,25 @@ func (m *Manager) CreateWithResume(ctx context.Context, sessionID, agentID, user
 	sess := NewSession(sessionID, agentID, userID, agentSess, m.onOutput, m.logger)
 	m.sessions[sessionID] = sess
 
+	// Load native history if this is a resumed session.
+	// History is loaded and emitted directly via onOutput (bypassing the
+	// adapter output channel) to avoid drain timing issues.
+	if resumeSessionID != "" {
+		if hl, ok := agentSess.(adapter.HistoryLoader); ok {
+			onOut := m.onOutput
+			go func() {
+				history := hl.LoadNativeHistory()
+				for _, out := range history {
+					onOut(sessionID, out, false)
+				}
+				onOut(sessionID, adapter.Output{
+					Channel: "system",
+					Data:    []byte("Session history loaded. Send a message to continue."),
+				}, true)
+			}()
+		}
+	}
+
 	m.logger.Info("session created", "session_id", sessionID, "agent_id", agentID, "user_id", userID,
 		"resume_session_id", resumeSessionID)
 	return nil

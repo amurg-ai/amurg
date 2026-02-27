@@ -69,6 +69,13 @@ type ResumeSeeder interface {
 	SetResumeSessionID(id string)
 }
 
+// HistoryLoader is an optional interface for agent sessions that can load
+// native conversation history. Returns history items to be emitted by the
+// caller (bypassing the output channel to avoid drain timing issues).
+type HistoryLoader interface {
+	LoadNativeHistory() []Output
+}
+
 // WriterAdapter is an optional interface for adapters that accept io.Writer
 // for output instead of using channels.
 type WriterAdapter interface {

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/amurg-ai/amurg/runtime/internal/config"
@@ -110,7 +111,12 @@ func (s *claudeCodeSession) Send(ctx context.Context, input []byte) error {
 	if dir := resolveWorkDir(s.cfg.WorkDir, s.security); dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = os.Environ()
+	// Filter out CLAUDECODE env var to prevent nested-session detection.
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(e, "CLAUDECODE=") {
+			cmd.Env = append(cmd.Env, e)
+		}
+	}
 	for k, v := range s.cfg.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
@@ -195,6 +201,9 @@ func truncateStr(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
+// maxToolResultLen limits stored tool result content to prevent DB bloat.
+const maxToolResultLen = 50000
+
 // handleStreamEvent parses a single NDJSON line from claude stream-json output.
 func (s *claudeCodeSession) handleStreamEvent(line []byte) {
 	var event struct {
@@ -219,15 +228,14 @@ func (s *claudeCodeSession) handleStreamEvent(line []byte) {
 			s.sessionID = event.SessionID
 			s.mu.Unlock()
 		}
-		if event.Result != "" {
-			s.output <- Output{Channel: "stdout", Data: []byte(event.Result)}
-		}
+		// Don't emit result text — it duplicates the assistant event content.
 
 	case "assistant":
 		// Parse message.content[] blocks.
 		var msg struct {
 			Content []struct {
 				Type  string          `json:"type"`
+				ID    string          `json:"id"`
 				Text  string          `json:"text"`
 				Name  string          `json:"name"`
 				Input json.RawMessage `json:"input"`
@@ -241,22 +249,16 @@ func (s *claudeCodeSession) handleStreamEvent(line []byte) {
 						s.output <- Output{Channel: "stdout", Data: []byte(c.Text)}
 					}
 				case "tool_use":
-					summary := fmt.Sprintf("**Tool: %s**", c.Name)
-					if len(c.Input) > 0 && string(c.Input) != "{}" && string(c.Input) != "null" {
-						var inputMap map[string]any
-						if err := json.Unmarshal(c.Input, &inputMap); err == nil {
-							if cmd, ok := inputMap["command"].(string); ok {
-								summary += fmt.Sprintf("\n`%s`", truncateStr(cmd, 200))
-							} else if fp, ok := inputMap["file_path"].(string); ok {
-								summary += fmt.Sprintf(" `%s`", fp)
-							} else if pat, ok := inputMap["pattern"].(string); ok {
-								summary += fmt.Sprintf(" `%s`", pat)
-							} else if query, ok := inputMap["query"].(string); ok {
-								summary += fmt.Sprintf(" `%s`", truncateStr(query, 100))
-							}
-						}
+					// Emit structured tool call on "tool" channel.
+					toolData := map[string]any{
+						"type":  "tool_use",
+						"id":    c.ID,
+						"name":  c.Name,
+						"input": json.RawMessage(c.Input),
 					}
-					s.output <- Output{Channel: "stdout", Data: []byte(summary)}
+					if data, err := json.Marshal(toolData); err == nil {
+						s.output <- Output{Channel: "tool", Data: data}
+					}
 				case "thinking":
 					if c.Text != "" {
 						s.output <- Output{Channel: "stdout", Data: []byte("*" + truncateStr(c.Text, 500) + "*")}
@@ -267,7 +269,42 @@ func (s *claudeCodeSession) handleStreamEvent(line []byte) {
 		}
 
 	case "user":
-		// User events are tool_result echoes. Skip to avoid noise.
+		// User events contain tool_result blocks. Emit them on the "tool" channel
+		// so the UI can pair them with tool_use messages.
+		var msg struct {
+			Content json.RawMessage `json:"content"`
+		}
+		if err := json.Unmarshal(event.Message, &msg); err != nil {
+			return
+		}
+		// content can be a string (plain prompt) or array of content blocks.
+		var blocks []struct {
+			Type      string          `json:"type"`
+			ToolUseID string          `json:"tool_use_id"`
+			Content   json.RawMessage `json:"content"`
+			IsError   bool            `json:"is_error"`
+		}
+		if err := json.Unmarshal(msg.Content, &blocks); err != nil {
+			return // string content = user prompt, skip
+		}
+		for _, b := range blocks {
+			if b.Type != "tool_result" {
+				continue
+			}
+			contentStr := extractToolResultText(b.Content)
+			if len(contentStr) > maxToolResultLen {
+				contentStr = contentStr[:maxToolResultLen] + "\n... (truncated)"
+			}
+			resultData := map[string]any{
+				"type":        "tool_result",
+				"tool_use_id": b.ToolUseID,
+				"content":     contentStr,
+				"is_error":    b.IsError,
+			}
+			if data, err := json.Marshal(resultData); err == nil {
+				s.output <- Output{Channel: "tool", Data: data}
+			}
+		}
 
 	case "system":
 		// System events — emit as system channel.
@@ -280,6 +317,34 @@ func (s *claudeCodeSession) handleStreamEvent(line []byte) {
 		// Unknown event types (content_block_start, content_block_delta, etc.)
 		// are intermediate streaming events. Skip silently.
 	}
+}
+
+// extractToolResultText extracts plain text from a tool_result content field,
+// which can be a string or an array of content blocks.
+func extractToolResultText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	// Try as string first.
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	// Try as array of content blocks.
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &blocks); err == nil {
+		var texts []string
+		for _, b := range blocks {
+			if b.Type == "text" && b.Text != "" {
+				texts = append(texts, b.Text)
+			}
+		}
+		return strings.Join(texts, "\n")
+	}
+	return string(raw)
 }
 
 func (s *claudeCodeSession) SetPermissionHandler(handler func(tool, description, resource string) bool) {
@@ -346,6 +411,131 @@ func (s *claudeCodeSession) SetResumeSessionID(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sessionID = id
+}
+
+// LoadNativeHistory reads the native Claude Code session JSONL and emits
+// conversation history through the output channel. This pre-populates the
+// UI when resuming an existing session.
+func (s *claudeCodeSession) LoadNativeHistory() []Output {
+	s.mu.Lock()
+	sid := s.sessionID
+	s.mu.Unlock()
+	if sid == "" {
+		return nil
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+
+	// Find the JSONL file across all project directories.
+	projectsDir := filepath.Join(home, ".claude", "projects")
+	dirEntries, err := os.ReadDir(projectsDir)
+	if err != nil {
+		return nil
+	}
+
+	var jsonlPath string
+	for _, de := range dirEntries {
+		if !de.IsDir() {
+			continue
+		}
+		candidate := filepath.Join(projectsDir, de.Name(), sid+".jsonl")
+		if _, err := os.Stat(candidate); err == nil {
+			jsonlPath = candidate
+			break
+		}
+	}
+	if jsonlPath == "" {
+		return nil
+	}
+
+	f, err := os.Open(jsonlPath)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = f.Close() }()
+
+	var history []Output
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		var entry struct {
+			Type    string          `json:"type"`
+			Message json.RawMessage `json:"message"`
+		}
+		if err := json.Unmarshal(line, &entry); err != nil {
+			continue
+		}
+
+		switch entry.Type {
+		case "user":
+			// Extract user prompt text.
+			var msg struct {
+				Content json.RawMessage `json:"content"`
+			}
+			if err := json.Unmarshal(entry.Message, &msg); err != nil {
+				continue
+			}
+			// Content can be a string or array of content blocks.
+			var textContent string
+			if err := json.Unmarshal(msg.Content, &textContent); err == nil {
+				if textContent != "" {
+					history = append(history, Output{Channel: "history_user", Data: []byte(textContent)})
+				}
+				continue
+			}
+			var blocks []struct {
+				Type      string `json:"type"`
+				Text      string `json:"text"`
+				ToolUseID string `json:"tool_use_id"`
+			}
+			if err := json.Unmarshal(msg.Content, &blocks); err == nil {
+				for _, b := range blocks {
+					if b.Type == "text" && b.Text != "" {
+						history = append(history, Output{Channel: "history_user", Data: []byte(b.Text)})
+					}
+					// Skip tool_result blocks in history — too verbose
+				}
+			}
+
+		case "assistant":
+			var msg struct {
+				Content []struct {
+					Type  string          `json:"type"`
+					ID    string          `json:"id"`
+					Text  string          `json:"text"`
+					Name  string          `json:"name"`
+					Input json.RawMessage `json:"input"`
+				} `json:"content"`
+			}
+			if err := json.Unmarshal(entry.Message, &msg); err != nil {
+				continue
+			}
+			for _, c := range msg.Content {
+				switch c.Type {
+				case "text":
+					if c.Text != "" {
+						history = append(history, Output{Channel: "history_assistant", Data: []byte(c.Text)})
+					}
+				case "tool_use":
+					toolData := map[string]any{
+						"type":  "tool_use",
+						"id":    c.ID,
+						"name":  c.Name,
+						"input": json.RawMessage(c.Input),
+					}
+					if data, err := json.Marshal(toolData); err == nil {
+						history = append(history, Output{Channel: "history_tool", Data: data})
+					}
+				}
+			}
+		}
+	}
+
+	return history
 }
 
 // NativeSessionEntry matches the structure in Claude Code's sessions-index.json.
