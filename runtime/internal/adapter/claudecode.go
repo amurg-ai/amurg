@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"sync"
 
@@ -185,12 +187,20 @@ func (s *claudeCodeSession) Send(ctx context.Context, input []byte) error {
 	return nil
 }
 
+// truncateStr limits s to maxLen characters, appending "..." if truncated.
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
 // handleStreamEvent parses a single NDJSON line from claude stream-json output.
 func (s *claudeCodeSession) handleStreamEvent(line []byte) {
 	var event struct {
-		Type      string `json:"type"`
-		SessionID string `json:"session_id"`
-		Result    string `json:"result"`
+		Type      string          `json:"type"`
+		SessionID string          `json:"session_id"`
+		Result    string          `json:"result"`
 		Message   json.RawMessage `json:"message"`
 	}
 	if err := json.Unmarshal(line, &event); err != nil {
@@ -214,20 +224,50 @@ func (s *claudeCodeSession) handleStreamEvent(line []byte) {
 		}
 
 	case "assistant":
-		// Parse message.content[].text
+		// Parse message.content[] blocks.
 		var msg struct {
 			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
+				Type  string          `json:"type"`
+				Text  string          `json:"text"`
+				Name  string          `json:"name"`
+				Input json.RawMessage `json:"input"`
 			} `json:"content"`
 		}
 		if err := json.Unmarshal(event.Message, &msg); err == nil {
 			for _, c := range msg.Content {
-				if c.Type == "text" && c.Text != "" {
-					s.output <- Output{Channel: "stdout", Data: []byte(c.Text)}
+				switch c.Type {
+				case "text":
+					if c.Text != "" {
+						s.output <- Output{Channel: "stdout", Data: []byte(c.Text)}
+					}
+				case "tool_use":
+					summary := fmt.Sprintf("**Tool: %s**", c.Name)
+					if len(c.Input) > 0 && string(c.Input) != "{}" && string(c.Input) != "null" {
+						var inputMap map[string]any
+						if err := json.Unmarshal(c.Input, &inputMap); err == nil {
+							if cmd, ok := inputMap["command"].(string); ok {
+								summary += fmt.Sprintf("\n`%s`", truncateStr(cmd, 200))
+							} else if fp, ok := inputMap["file_path"].(string); ok {
+								summary += fmt.Sprintf(" `%s`", fp)
+							} else if pat, ok := inputMap["pattern"].(string); ok {
+								summary += fmt.Sprintf(" `%s`", pat)
+							} else if query, ok := inputMap["query"].(string); ok {
+								summary += fmt.Sprintf(" `%s`", truncateStr(query, 100))
+							}
+						}
+					}
+					s.output <- Output{Channel: "stdout", Data: []byte(summary)}
+				case "thinking":
+					if c.Text != "" {
+						s.output <- Output{Channel: "stdout", Data: []byte("*" + truncateStr(c.Text, 500) + "*")}
+					}
+				// server_tool_use, etc. — skip silently
 				}
 			}
 		}
+
+	case "user":
+		// User events are tool_result echoes. Skip to avoid noise.
 
 	case "system":
 		// System events — emit as system channel.
@@ -237,10 +277,8 @@ func (s *claudeCodeSession) handleStreamEvent(line []byte) {
 		}
 
 	default:
-		// Other event types — emit raw JSON line for transparency.
-		cp := make([]byte, len(line))
-		copy(cp, line)
-		s.output <- Output{Channel: "stdout", Data: cp}
+		// Unknown event types (content_block_start, content_block_delta, etc.)
+		// are intermediate streaming events. Skip silently.
 	}
 }
 
@@ -300,4 +338,74 @@ func (s *claudeCodeSession) ExitCode() *int {
 		return &code
 	}
 	return nil
+}
+
+// SetResumeSessionID pre-seeds the native session ID so the first Send()
+// uses --resume to continue an existing Claude Code session.
+func (s *claudeCodeSession) SetResumeSessionID(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessionID = id
+}
+
+// NativeSessionEntry matches the structure in Claude Code's sessions-index.json.
+type NativeSessionEntry struct {
+	SessionID    string `json:"sessionId"`
+	Summary      string `json:"summary,omitempty"`
+	FirstPrompt  string `json:"firstPrompt,omitempty"`
+	MessageCount int    `json:"messageCount"`
+	ProjectPath  string `json:"projectPath,omitempty"`
+	GitBranch    string `json:"gitBranch,omitempty"`
+	Created      string `json:"created,omitempty"`
+	Modified     string `json:"modified,omitempty"`
+}
+
+// ListNativeSessions scans ~/.claude/projects/*/sessions-index.json
+// and returns all discovered native Claude Code sessions.
+func ListNativeSessions() ([]NativeSessionEntry, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("get home dir: %w", err)
+	}
+
+	projectsDir := filepath.Join(home, ".claude", "projects")
+	entries, err := os.ReadDir(projectsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read projects dir: %w", err)
+	}
+
+	var allSessions []NativeSessionEntry
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		indexPath := filepath.Join(projectsDir, entry.Name(), "sessions-index.json")
+		data, err := os.ReadFile(indexPath)
+		if err != nil {
+			continue // skip dirs without index
+		}
+
+		var index struct {
+			Entries []NativeSessionEntry `json:"entries"`
+		}
+		if err := json.Unmarshal(data, &index); err != nil {
+			continue
+		}
+		allSessions = append(allSessions, index.Entries...)
+	}
+
+	// Sort by modified time, most recent first.
+	sort.Slice(allSessions, func(i, j int) bool {
+		return allSessions[i].Modified > allSessions[j].Modified
+	})
+
+	// Limit to 50 most recent.
+	if len(allSessions) > 50 {
+		allSessions = allSessions[:50]
+	}
+
+	return allSessions, nil
 }

@@ -338,7 +338,8 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	identity := getIdentityFromContext(r.Context())
 
 	var req struct {
-		AgentID string `json:"agent_id"`
+		AgentID         string `json:"agent_id"`
+		ResumeSessionID string `json:"resume_session_id,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -377,7 +378,11 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	sess, err := s.router.CreateSession(r.Context(), identity.UserID, req.AgentID)
+	var createOpts []router.CreateSessionOption
+	if req.ResumeSessionID != "" {
+		createOpts = append(createOpts, router.CreateSessionOption{ResumeSessionID: req.ResumeSessionID})
+	}
+	sess, err := s.router.CreateSession(r.Context(), identity.UserID, req.AgentID, createOpts...)
 	if err != nil {
 		if strings.Contains(err.Error(), "max sessions") {
 			if err := s.store.LogAuditEvent(r.Context(), &store.AuditEvent{

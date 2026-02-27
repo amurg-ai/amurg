@@ -73,9 +73,10 @@ type HelloAck struct {
 
 // SessionCreate is sent by the hub to the runtime to create a new session.
 type SessionCreate struct {
-	SessionID  string `json:"session_id"`
-	AgentID string `json:"agent_id"`
-	UserID  string `json:"user_id"`
+	SessionID       string `json:"session_id"`
+	AgentID         string `json:"agent_id"`
+	UserID          string `json:"user_id"`
+	ResumeSessionID string `json:"resume_session_id,omitempty"` // native session ID for resume
 }
 
 // SessionCreated is the runtime's response to SessionCreate.
@@ -187,6 +188,10 @@ const (
 	// Agent config management (hub → runtime)
 	TypeAgentConfigUpdate = "agent.config_update" // hub → runtime: apply config override
 	TypeAgentConfigAck    = "agent.config_ack"    // runtime → hub: acknowledge config update
+
+	// Native sessions (client → hub → runtime → hub → client)
+	TypeNativeSessionsList    = "native.sessions.list"     // client → hub → runtime
+	TypeNativeSessionsResponse = "native.sessions.response" // runtime → hub → client
 )
 
 // --- Client ↔ Hub messages ---
@@ -316,4 +321,32 @@ type FileAvailable struct {
 	SessionID string       `json:"session_id"`
 	Metadata  FileMetadata `json:"metadata"`
 	Data      string       `json:"data"` // base64-encoded file content
+}
+
+// --- Native sessions ---
+
+// NativeSessionsList requests listing of native sessions for an agent.
+type NativeSessionsList struct {
+	AgentID   string `json:"agent_id"`
+	RequestID string `json:"request_id"` // for correlating response
+}
+
+// NativeSession describes a native session discovered on the runtime.
+type NativeSession struct {
+	SessionID   string `json:"session_id"`
+	Summary     string `json:"summary,omitempty"`
+	FirstPrompt string `json:"first_prompt,omitempty"`
+	MessageCount int   `json:"message_count"`
+	ProjectPath string `json:"project_path,omitempty"`
+	GitBranch   string `json:"git_branch,omitempty"`
+	Created     string `json:"created,omitempty"`
+	Modified    string `json:"modified,omitempty"`
+}
+
+// NativeSessionsResponse carries discovered native sessions back.
+type NativeSessionsResponse struct {
+	AgentID   string          `json:"agent_id"`
+	RequestID string          `json:"request_id"`
+	Sessions  []NativeSession `json:"sessions"`
+	Error     string          `json:"error,omitempty"`
 }

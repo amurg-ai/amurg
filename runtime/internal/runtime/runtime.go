@@ -129,6 +129,11 @@ func (r *Runtime) Status() ipc.StatusResult {
 	reconnecting := r.hubReconnecting
 	r.mu.Unlock()
 
+	agents := make([]ipc.AgentInfo, len(r.cfg.Agents))
+	for i, a := range r.cfg.Agents {
+		agents[i] = ipc.AgentInfo{ID: a.ID, Name: a.Name, Profile: a.Profile, WorkDir: a.WorkDir()}
+	}
+
 	return ipc.StatusResult{
 		RuntimeID:    r.cfg.Runtime.ID,
 		HubURL:       r.cfg.Hub.URL,
@@ -138,7 +143,7 @@ func (r *Runtime) Status() ipc.StatusResult {
 		Uptime:       time.Since(r.startedAt).Truncate(time.Second).String(),
 		Sessions:     r.sessions.ActiveCount(),
 		MaxSessions:  r.cfg.Runtime.MaxSessions,
-		Agents:       len(r.cfg.Agents),
+		Agents:       agents,
 	}
 }
 
@@ -195,6 +200,8 @@ func (r *Runtime) handleHubMessage(env protocol.Envelope) error {
 		return r.handleAgentConfigUpdate(env)
 	case protocol.TypePermissionResponse:
 		return r.handlePermissionResponse(env)
+	case protocol.TypeNativeSessionsList:
+		return r.handleNativeSessionsList(env)
 	case protocol.TypePing:
 		return r.hubClient.Send(protocol.TypePong, "", protocol.Pong{})
 	default:
@@ -226,7 +233,12 @@ func (r *Runtime) handleSessionCreate(env protocol.Envelope) error {
 	}
 
 	ctx := context.Background()
-	err := r.sessions.Create(ctx, req.SessionID, req.AgentID, req.UserID)
+	var err error
+	if req.ResumeSessionID != "" {
+		err = r.sessions.CreateWithResume(ctx, req.SessionID, req.AgentID, req.UserID, req.ResumeSessionID)
+	} else {
+		err = r.sessions.Create(ctx, req.SessionID, req.AgentID, req.UserID)
+	}
 
 	resp := protocol.SessionCreated{
 		SessionID: req.SessionID,
@@ -447,6 +459,49 @@ func (r *Runtime) handlePermissionRequest(sessionID, tool, description, resource
 		r.logger.Warn("permission request timed out locally", "request_id", requestID)
 		return false
 	}
+}
+
+func (r *Runtime) handleNativeSessionsList(env protocol.Envelope) error {
+	data, _ := json.Marshal(env.Payload)
+	var req protocol.NativeSessionsList
+	if err := json.Unmarshal(data, &req); err != nil {
+		return fmt.Errorf("unmarshal native sessions list: %w", err)
+	}
+
+	// Only claude-code agents support native sessions.
+	profile := r.sessions.GetAgentProfile(req.AgentID)
+	if profile != "claude-code" {
+		return r.hubClient.Send(protocol.TypeNativeSessionsResponse, "", protocol.NativeSessionsResponse{
+			AgentID:   req.AgentID,
+			RequestID: req.RequestID,
+			Error:     "agent profile does not support native sessions",
+		})
+	}
+
+	entries, err := adapter.ListNativeSessions()
+	resp := protocol.NativeSessionsResponse{
+		AgentID:   req.AgentID,
+		RequestID: req.RequestID,
+	}
+	if err != nil {
+		resp.Error = err.Error()
+	} else {
+		resp.Sessions = make([]protocol.NativeSession, len(entries))
+		for i, e := range entries {
+			resp.Sessions[i] = protocol.NativeSession{
+				SessionID:    e.SessionID,
+				Summary:      e.Summary,
+				FirstPrompt:  e.FirstPrompt,
+				MessageCount: e.MessageCount,
+				ProjectPath:  e.ProjectPath,
+				GitBranch:    e.GitBranch,
+				Created:      e.Created,
+				Modified:     e.Modified,
+			}
+		}
+	}
+
+	return r.hubClient.Send(protocol.TypeNativeSessionsResponse, "", resp)
 }
 
 func (r *Runtime) handlePermissionResponse(env protocol.Envelope) error {

@@ -56,6 +56,11 @@ func NewManager(
 
 // Create creates a new session for the given agent.
 func (m *Manager) Create(ctx context.Context, sessionID, agentID, userID string) error {
+	return m.CreateWithResume(ctx, sessionID, agentID, userID, "")
+}
+
+// CreateWithResume creates a new session, optionally resuming a native session.
+func (m *Manager) CreateWithResume(ctx context.Context, sessionID, agentID, userID, resumeSessionID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -82,6 +87,13 @@ func (m *Manager) Create(ctx context.Context, sessionID, agentID, userID string)
 		return fmt.Errorf("start agent: %w", err)
 	}
 
+	// Pre-seed native session ID for resume if provided.
+	if resumeSessionID != "" {
+		if rs, ok := agentSess.(adapter.ResumeSeeder); ok {
+			rs.SetResumeSessionID(resumeSessionID)
+		}
+	}
+
 	// Wire up permission handler if supported.
 	if pr, ok := agentSess.(adapter.PermissionRequester); ok && m.onPermissionRequest != nil {
 		sid := sessionID
@@ -93,8 +105,19 @@ func (m *Manager) Create(ctx context.Context, sessionID, agentID, userID string)
 	sess := NewSession(sessionID, agentID, userID, agentSess, m.onOutput, m.logger)
 	m.sessions[sessionID] = sess
 
-	m.logger.Info("session created", "session_id", sessionID, "agent_id", agentID, "user_id", userID)
+	m.logger.Info("session created", "session_id", sessionID, "agent_id", agentID, "user_id", userID,
+		"resume_session_id", resumeSessionID)
 	return nil
+}
+
+// GetAgentProfile returns the profile for an agent.
+func (m *Manager) GetAgentProfile(agentID string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if cfg, ok := m.agentCfgs[agentID]; ok {
+		return cfg.Profile
+	}
+	return ""
 }
 
 // Send delivers a user message to a session's agent.

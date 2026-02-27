@@ -63,10 +63,11 @@ type Router struct {
 	maxRuntimeMessageSize int64 // max WebSocket message size from runtimes
 	maxContentBytes       int64 // max message content size
 
-	permissionTimeout time.Duration
-	pendingPerms      map[string]*pendingPermission
-	fileStoragePath   string
-	maxFileBytes      int64
+	permissionTimeout     time.Duration
+	pendingPerms          map[string]*pendingPermission
+	pendingNativeSessions map[string]*clientConn // request_id -> requesting client
+	fileStoragePath       string
+	maxFileBytes          int64
 
 	mu                    sync.RWMutex
 	runtimes              map[string]*runtimeConn  // runtime_id -> conn
@@ -157,6 +158,7 @@ func New(s store.Store, ap auth.Provider, ra auth.RuntimeAuthProvider, logger *s
 		maxContentBytes:       clientLimit,
 		permissionTimeout:     permTimeout,
 		pendingPerms:          make(map[string]*pendingPermission),
+		pendingNativeSessions: make(map[string]*clientConn),
 		fileStoragePath:       opts.FileStoragePath,
 		maxFileBytes:          opts.MaxFileBytes,
 		runtimes:              make(map[string]*runtimeConn),
@@ -787,6 +789,26 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 			r.logger.Warn("agent config update rejected", "agent_id", ack.AgentID, "runtime", runtimeID, "error", ack.Error)
 		}
 
+	case protocol.TypeNativeSessionsResponse:
+		// Forward native sessions response to the client that requested it.
+		data, _ := json.Marshal(env.Payload)
+		var resp protocol.NativeSessionsResponse
+		if err := json.Unmarshal(data, &resp); err != nil {
+			r.logger.Warn("unmarshal native sessions response failed", "error", err)
+			return
+		}
+
+		r.mu.RLock()
+		ch, ok := r.pendingNativeSessions[resp.RequestID]
+		r.mu.RUnlock()
+		if ok {
+			r.mu.Lock()
+			delete(r.pendingNativeSessions, resp.RequestID)
+			r.mu.Unlock()
+			// Send response to the waiting client via the stored client conn.
+			r.sendToClient(ch, protocol.TypeNativeSessionsResponse, "", resp)
+		}
+
 	case protocol.TypePong:
 		// Heartbeat response, nothing to do.
 
@@ -1006,6 +1028,34 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 		// Relay to runtime.
 		r.sendToRuntime(pp.runtimeID, protocol.TypePermissionResponse, resp.SessionID, resp)
 
+	case protocol.TypeNativeSessionsList:
+		data, _ := json.Marshal(env.Payload)
+		var req protocol.NativeSessionsList
+		if err := json.Unmarshal(data, &req); err != nil {
+			r.logger.Warn("unmarshal native sessions list failed", "error", err)
+			return
+		}
+
+		// Find the runtime for this agent.
+		ctx := context.Background()
+		agent, err := r.store.GetAgent(ctx, req.AgentID)
+		if err != nil || agent == nil {
+			r.sendToClient(cc, protocol.TypeNativeSessionsResponse, "", protocol.NativeSessionsResponse{
+				AgentID:   req.AgentID,
+				RequestID: req.RequestID,
+				Error:     "agent not found",
+			})
+			return
+		}
+
+		// Store the requesting client so the response can be routed back.
+		r.mu.Lock()
+		r.pendingNativeSessions[req.RequestID] = cc
+		r.mu.Unlock()
+
+		// Forward to runtime.
+		r.sendToRuntime(agent.RuntimeID, protocol.TypeNativeSessionsList, "", req)
+
 	default:
 		r.logger.Warn("unknown client message type", "type", env.Type, "user", cc.username)
 	}
@@ -1038,8 +1088,18 @@ func (cc *clientConn) allowMessage() bool {
 	return true
 }
 
+// CreateSessionOption configures session creation.
+type CreateSessionOption struct {
+	ResumeSessionID string
+}
+
 // CreateSession creates a new session and sends the create request to the runtime.
-func (r *Router) CreateSession(ctx context.Context, userID, agentID string) (*store.Session, error) {
+func (r *Router) CreateSession(ctx context.Context, userID, agentID string, opts ...CreateSessionOption) (*store.Session, error) {
+	var opt CreateSessionOption
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+
 	agent, err := r.store.GetAgent(ctx, agentID)
 	if err != nil || agent == nil {
 		return nil, err
@@ -1074,9 +1134,10 @@ func (r *Router) CreateSession(ctx context.Context, userID, agentID string) (*st
 
 	// Send create request to runtime.
 	r.sendToRuntime(agent.RuntimeID, protocol.TypeSessionCreate, sess.ID, protocol.SessionCreate{
-		SessionID: sess.ID,
-		AgentID:   agentID,
-		UserID:    userID,
+		SessionID:       sess.ID,
+		AgentID:         agentID,
+		UserID:          userID,
+		ResumeSessionID: opt.ResumeSessionID,
 	})
 
 	if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{

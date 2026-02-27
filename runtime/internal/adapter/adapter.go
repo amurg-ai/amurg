@@ -63,6 +63,12 @@ type FileDeliverer interface {
 	DeliverFile(filePath, fileName, mimeType string) error
 }
 
+// ResumeSeeder is an optional interface for agent sessions that support
+// resuming a native session by pre-seeding the session ID.
+type ResumeSeeder interface {
+	SetResumeSessionID(id string)
+}
+
 // WriterAdapter is an optional interface for adapters that accept io.Writer
 // for output instead of using channels.
 type WriterAdapter interface {
