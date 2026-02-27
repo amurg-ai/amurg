@@ -262,6 +262,7 @@ func (s *Server) handleGetMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"id":       identity.UserID,
 		"username": identity.Username,
+		"role":     identity.Role,
 	})
 }
 
