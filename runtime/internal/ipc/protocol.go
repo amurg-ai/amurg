@@ -21,16 +21,24 @@ type Response struct {
 
 // StatusResult is returned by the "status" method.
 type StatusResult struct {
-	RuntimeID    string    `json:"runtime_id"`
-	HubURL       string    `json:"hub_url"`
-	HubConnected bool      `json:"hub_connected"`
-	Reconnecting bool      `json:"reconnecting"`
-	Uptime       string    `json:"uptime"`
-	StartedAt    time.Time `json:"started_at"`
-	Sessions     int       `json:"sessions"`
-	MaxSessions  int       `json:"max_sessions"`
-	Agents       int       `json:"agents"`
-	Version      string    `json:"version"`
+	RuntimeID    string      `json:"runtime_id"`
+	HubURL       string      `json:"hub_url"`
+	HubConnected bool        `json:"hub_connected"`
+	Reconnecting bool        `json:"reconnecting"`
+	Uptime       string      `json:"uptime"`
+	StartedAt    time.Time   `json:"started_at"`
+	Sessions     int         `json:"sessions"`
+	MaxSessions  int         `json:"max_sessions"`
+	Agents       []AgentInfo `json:"agents"`
+	Version      string      `json:"version"`
+}
+
+// AgentInfo describes a registered agent.
+type AgentInfo struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Profile string `json:"profile"`
+	WorkDir string `json:"work_dir,omitempty"`
 }
 
 // SessionInfo describes a single active session.

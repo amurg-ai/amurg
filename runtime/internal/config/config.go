@@ -68,6 +68,28 @@ type AgentConfig struct {
 	External   *ExternalConfig   `json:"external,omitempty"`
 }
 
+// WorkDir returns the working directory configured for this agent, if any.
+func (a AgentConfig) WorkDir() string {
+	switch {
+	case a.ClaudeCode != nil && a.ClaudeCode.WorkDir != "":
+		return a.ClaudeCode.WorkDir
+	case a.CLI != nil && a.CLI.WorkDir != "":
+		return a.CLI.WorkDir
+	case a.Copilot != nil && a.Copilot.WorkDir != "":
+		return a.Copilot.WorkDir
+	case a.Codex != nil && a.Codex.WorkDir != "":
+		return a.Codex.WorkDir
+	case a.Kilo != nil && a.Kilo.WorkDir != "":
+		return a.Kilo.WorkDir
+	case a.Job != nil && a.Job.WorkDir != "":
+		return a.Job.WorkDir
+	case a.External != nil && a.External.WorkDir != "":
+		return a.External.WorkDir
+	default:
+		return ""
+	}
+}
+
 // AgentLimits are per-agent operational limits.
 type AgentLimits struct {
 	MaxSessions    int      `json:"max_sessions,omitempty"`

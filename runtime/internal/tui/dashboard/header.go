@@ -2,7 +2,6 @@ package dashboard
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -32,15 +31,24 @@ func (h headerModel) View(width int) string {
 
 	right := fmt.Sprintf("%s  %s %s", hubURL, dot, statusLabel)
 
-	// Second row: runtime details.
 	uptime := h.formatUptime()
-	agentNames := make([]string, len(h.status.Agents))
+	info := fmt.Sprintf("  Runtime: %s   Sessions: %d/%d   Uptime: %s",
+		h.status.RuntimeID, h.status.Sessions, h.status.MaxSessions, uptime)
+
+	nameStyle := lipgloss.NewStyle().Foreground(tui.ColorText).Bold(true)
+	metaStyle := lipgloss.NewStyle().Foreground(tui.ColorMuted)
+
 	for i, a := range h.status.Agents {
-		agentNames[i] = a.Name + " (" + a.Profile + ")"
+		label := "  Agents:  "
+		if i > 0 {
+			label = "           "
+		}
+		meta := metaStyle.Render(a.Profile)
+		if a.WorkDir != "" {
+			meta += metaStyle.Render("  " + a.WorkDir)
+		}
+		info += "\n" + metaStyle.Render(label) + nameStyle.Render(a.Name) + "  " + meta
 	}
-	details := fmt.Sprintf("  Runtime: %s   Sessions: %d/%d   Uptime: %s\n  Agents:  %s",
-		h.status.RuntimeID, h.status.Sessions, h.status.MaxSessions, uptime,
-		strings.Join(agentNames, ", "))
 
 	headerStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -54,7 +62,7 @@ func (h headerModel) View(width int) string {
 		right,
 	)
 
-	return headerStyle.Render(firstRow + "\n" + tui.Description.Render(details))
+	return headerStyle.Render(firstRow + "\n" + tui.Description.Render(info))
 }
 
 func (h headerModel) formatUptime() string {
