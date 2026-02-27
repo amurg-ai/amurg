@@ -69,8 +69,11 @@ interface SessionState {
 }
 
 export const useSessionStore = create<SessionState>((set, get) => {
-  // Set up WebSocket handlers
+  // Set up WebSocket handlers (idempotent — safe to call multiple times).
+  let handlersRegistered = false;
   function setupSocketHandlers() {
+    if (handlersRegistered) return;
+    handlersRegistered = true;
     socket.on("agent.output", (env: Envelope) => {
       const output = env.payload as AgentOutput;
       const { messages } = get();
@@ -270,8 +273,8 @@ export const useSessionStore = create<SessionState>((set, get) => {
             set({ responding: new Set() });
           }
         });
-        socket.connect();
         setupSocketHandlers();
+        await socket.connect();
         await Promise.all([get().loadAgents(), get().loadSessions()]);
       } catch {
         set({ isAuthenticated: false });
@@ -288,8 +291,8 @@ export const useSessionStore = create<SessionState>((set, get) => {
           set({ responding: new Set() });
         }
       });
-      socket.connect();
       setupSocketHandlers();
+      await socket.connect();
       // Load data in background — don't let failures block login.
       Promise.all([get().loadAgents(), get().loadSessions()]).catch(() => {});
     },

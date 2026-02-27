@@ -25,7 +25,6 @@ func newRunCmd() *cobra.Command {
 		Args:  cobra.MaximumNArgs(1),
 		RunE:  runRun,
 	}
-	cmd.Flags().Bool("no-tui", false, "disable TUI dashboard (headless JSON mode)")
 	return cmd
 }
 
@@ -104,11 +103,9 @@ func resolveConfigPath(cmd *cobra.Command, args []string, defaultPath string) st
 	if f := cmd.Flag("config"); f != nil && f.Changed {
 		return f.Value.String()
 	}
-	// Check parent (root) persistent flags too.
 	if f := cmd.Root().PersistentFlags().Lookup("config"); f != nil && f.Changed {
 		return f.Value.String()
 	}
-	// Check default config location (~/.amurg/config.json).
 	if p := wizard.DefaultConfigPath(); p != "" {
 		if _, err := os.Stat(p); err == nil {
 			return p

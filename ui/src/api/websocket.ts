@@ -32,77 +32,83 @@ export class AmurgSocket {
     this.onStateChange = cb;
   }
 
-  async connect(): Promise<void> {
-    const token = await tokenGetter();
-    if (!token) return;
+  connect(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      tokenGetter().then((token) => {
+        if (!token) { resolve(); return; }
 
-    this.ws = new WebSocket(`${this.url}?token=${token}`);
+        this.ws = new WebSocket(`${this.url}?token=${token}`);
 
-    this.ws.onopen = () => {
-      this.reconnectDelay = 1000;
-      this.onStateChange?.("connected");
+        this.ws.onopen = () => {
+          this.reconnectDelay = 1000;
+          this.onStateChange?.("connected");
 
-      // Re-subscribe to all tracked sessions
-      for (const [sessionId, afterSeq] of this.subscriptions) {
-        this.send(
-          "client.subscribe",
-          { session_id: sessionId, after_seq: afterSeq },
-          sessionId
-        );
-      }
-
-      // Drain pending message queue
-      const queue = [...this.pendingQueue];
-      this.pendingQueue = [];
-      for (const msg of queue) {
-        this.send(msg.type, msg.payload, msg.sessionId);
-      }
-    };
-
-    this.ws.onmessage = (event) => {
-      try {
-        const env: Envelope = JSON.parse(event.data);
-
-        // Update afterSeq for subscriptions when receiving messages
-        if (env.session_id && env.payload) {
-          const payload = env.payload as { seq?: number };
-          if (typeof payload.seq === "number" && this.subscriptions.has(env.session_id)) {
-            const current = this.subscriptions.get(env.session_id) || 0;
-            if (payload.seq > current) {
-              this.subscriptions.set(env.session_id, payload.seq);
-            }
+          // Re-subscribe to all tracked sessions
+          for (const [sessionId, afterSeq] of this.subscriptions) {
+            this.send(
+              "client.subscribe",
+              { session_id: sessionId, after_seq: afterSeq },
+              sessionId
+            );
           }
-        }
 
-        const handlers = this.handlers.get(env.type);
-        if (handlers) {
-          handlers.forEach((h) => h(env));
-        }
-        // Also fire catch-all handlers
-        const allHandlers = this.handlers.get("*");
-        if (allHandlers) {
-          allHandlers.forEach((h) => h(env));
-        }
-      } catch {
-        // Ignore malformed messages
-      }
-    };
+          // Drain pending message queue
+          const queue = [...this.pendingQueue];
+          this.pendingQueue = [];
+          for (const msg of queue) {
+            this.send(msg.type, msg.payload, msg.sessionId);
+          }
 
-    this.ws.onclose = () => {
-      this.onStateChange?.("disconnected");
-      if (this.shouldReconnect) {
-        this.onStateChange?.("reconnecting");
-        setTimeout(() => this.connect(), this.reconnectDelay);
-        this.reconnectDelay = Math.min(
-          this.reconnectDelay * 2,
-          this.maxReconnectDelay
-        );
-      }
-    };
+          resolve();
+        };
 
-    this.ws.onerror = () => {
-      this.ws?.close();
-    };
+        this.ws.onmessage = (event) => {
+          try {
+            const env: Envelope = JSON.parse(event.data);
+
+            // Update afterSeq for subscriptions when receiving messages
+            if (env.session_id && env.payload) {
+              const payload = env.payload as { seq?: number };
+              if (typeof payload.seq === "number" && this.subscriptions.has(env.session_id)) {
+                const current = this.subscriptions.get(env.session_id) || 0;
+                if (payload.seq > current) {
+                  this.subscriptions.set(env.session_id, payload.seq);
+                }
+              }
+            }
+
+            const handlers = this.handlers.get(env.type);
+            if (handlers) {
+              handlers.forEach((h) => h(env));
+            }
+            // Also fire catch-all handlers
+            const allHandlers = this.handlers.get("*");
+            if (allHandlers) {
+              allHandlers.forEach((h) => h(env));
+            }
+          } catch {
+            // Ignore malformed messages
+          }
+        };
+
+        this.ws.onclose = () => {
+          this.onStateChange?.("disconnected");
+          if (this.shouldReconnect) {
+            this.onStateChange?.("reconnecting");
+            setTimeout(() => this.connect(), this.reconnectDelay);
+            this.reconnectDelay = Math.min(
+              this.reconnectDelay * 2,
+              this.maxReconnectDelay
+            );
+          }
+        };
+
+        this.ws.onerror = () => {
+          resolve(); // Don't block callers on error; onclose handles reconnect.
+          this.ws?.close();
+        };
+      });
+    });
   }
 
   disconnect(): void {
