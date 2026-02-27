@@ -41,13 +41,21 @@ func newRuntimeForm(data *WizardData) runtimeFormModel {
 	}
 }
 
+// hasFixedID returns true when the runtime ID was assigned by device-code auth
+// and should not be editable.
+func (m runtimeFormModel) hasFixedID() bool {
+	return m.data.RuntimeID != ""
+}
+
 func (m runtimeFormModel) Init() tea.Cmd {
-	// If auth provided a runtime ID, pre-fill it.
-	if m.data.RuntimeID != "" {
-		m.idInput.SetValue(m.data.RuntimeID)
+	if m.hasFixedID() {
+		// Device-code auth assigned the ID — skip to log level.
+		m.focused = rtFieldLogLevel
+		m.logLevelInput.Focus()
+	} else {
+		m.focused = rtFieldID
+		m.idInput.Focus()
 	}
-	m.focused = rtFieldID
-	m.idInput.Focus()
 	return textinput.Blink
 }
 
@@ -72,7 +80,9 @@ func (m runtimeFormModel) Update(msg tea.Msg) (runtimeFormModel, tea.Cmd) {
 	var cmd tea.Cmd
 	switch m.focused {
 	case rtFieldID:
-		m.idInput, cmd = m.idInput.Update(msg)
+		if !m.hasFixedID() {
+			m.idInput, cmd = m.idInput.Update(msg)
+		}
 	case rtFieldLogLevel:
 		m.logLevelInput, cmd = m.logLevelInput.Update(msg)
 	}
@@ -85,6 +95,10 @@ func (m runtimeFormModel) nextField() (runtimeFormModel, tea.Cmd) {
 
 	if m.focused < rtFieldLogLevel {
 		m.focused++
+	}
+	// Skip ID field when it's fixed.
+	if m.focused == rtFieldID && m.hasFixedID() {
+		m.focused = rtFieldLogLevel
 	}
 
 	switch m.focused {
@@ -103,6 +117,10 @@ func (m runtimeFormModel) prevField() (runtimeFormModel, tea.Cmd) {
 	if m.focused > rtFieldID {
 		m.focused--
 	}
+	// Skip ID field when it's fixed.
+	if m.focused == rtFieldID && m.hasFixedID() {
+		m.focused = rtFieldLogLevel
+	}
 
 	switch m.focused {
 	case rtFieldID:
@@ -114,11 +132,14 @@ func (m runtimeFormModel) prevField() (runtimeFormModel, tea.Cmd) {
 }
 
 func (m runtimeFormModel) finish() (runtimeFormModel, tea.Cmd) {
-	rtID := m.idInput.Value()
-	if rtID == "" {
-		rtID = m.idInput.Placeholder
+	// Use device-code assigned ID, or user-entered/placeholder ID.
+	if !m.hasFixedID() {
+		rtID := m.idInput.Value()
+		if rtID == "" {
+			rtID = m.idInput.Placeholder
+		}
+		m.data.RuntimeID = rtID
 	}
-	m.data.RuntimeIDOverride = rtID
 
 	ll := m.logLevelInput.Value()
 	if ll == "" {
@@ -132,17 +153,18 @@ func (m runtimeFormModel) finish() (runtimeFormModel, tea.Cmd) {
 func (m runtimeFormModel) View() string {
 	s := tui.Subtitle.Render("Runtime Settings") + "\n\n"
 
-	if m.data.RuntimeID != "" {
-		s += "  " + tui.Description.Render("(Runtime ID from device registration)") + "\n\n"
+	if m.hasFixedID() {
+		s += "  " + tui.Description.Render("Runtime ID: "+m.data.RuntimeID) + "\n"
+		s += "  " + tui.Dimmed.Render("(assigned by device registration — not editable)") + "\n\n"
+	} else {
+		prefix := "  "
+		if m.focused == rtFieldID {
+			prefix = tui.Selected.Render("> ")
+		}
+		s += prefix + "Runtime ID:\n  " + m.idInput.View() + "\n"
 	}
 
 	prefix := "  "
-	if m.focused == rtFieldID {
-		prefix = tui.Selected.Render("> ")
-	}
-	s += prefix + "Runtime ID:\n  " + m.idInput.View() + "\n"
-
-	prefix = "  "
 	if m.focused == rtFieldLogLevel {
 		prefix = tui.Selected.Render("> ")
 	}

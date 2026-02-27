@@ -34,8 +34,7 @@ type WizardData struct {
 
 	Agents []config.AgentConfig
 
-	RuntimeIDOverride string // user override (empty = use auth-provided)
-	LogLevel          string
+	LogLevel string
 
 	OutputPath     string
 	GenerateSystemd bool

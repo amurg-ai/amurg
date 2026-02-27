@@ -92,11 +92,7 @@ func (m confirmModel) buildConfig() *config.Config {
 	cfg.Hub.URL = m.data.HubURL
 	cfg.Hub.Token = m.data.Token
 
-	rtID := m.data.RuntimeIDOverride
-	if rtID == "" {
-		rtID = m.data.RuntimeID
-	}
-	cfg.Runtime.ID = rtID
+	cfg.Runtime.ID = m.data.RuntimeID
 	cfg.Runtime.OrgID = m.data.OrgID
 	cfg.Runtime.LogLevel = m.data.LogLevel
 	cfg.Agents = m.data.Agents
@@ -135,11 +131,7 @@ func (m confirmModel) View() string {
 	s += renderRow("Hub", m.data.HubURL)
 	s += renderRow("Auth", m.authSummary())
 
-	rtID := m.data.RuntimeIDOverride
-	if rtID == "" {
-		rtID = m.data.RuntimeID
-	}
-	s += renderRow("Runtime ID", rtID)
+	s += renderRow("Runtime ID", m.data.RuntimeID)
 	s += renderRow("Log level", m.data.LogLevel)
 	s += renderRow("Agents", fmt.Sprintf("%d configured", len(m.data.Agents)))
 
