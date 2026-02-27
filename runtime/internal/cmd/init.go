@@ -21,7 +21,7 @@ func newInitCmd() *cobra.Command {
 			}
 
 			if startNow {
-				return runRun(cmd, []string{configPath})
+				return startAndAttach(configPath)
 			}
 
 			return nil

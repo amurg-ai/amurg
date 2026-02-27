@@ -20,15 +20,11 @@ func newAttachCmd() *cobra.Command {
 func runAttach(cmd *cobra.Command, args []string) error {
 	socketPath := daemon.SocketPath()
 
-	detached, err := dashboard.Attach(socketPath)
-	if err != nil {
+	if _, err := dashboard.Attach(socketPath); err != nil {
 		return fmt.Errorf("attach failed: %w", err)
 	}
 
-	if detached {
-		fmt.Println("Detached from runtime. Daemon continues running.")
-		fmt.Println("Re-attach with: amurg-runtime attach")
-	}
-
+	fmt.Println("Runtime continues in the background.")
+	fmt.Println("Re-attach: amurg-runtime  |  Stop: amurg-runtime stop")
 	return nil
 }

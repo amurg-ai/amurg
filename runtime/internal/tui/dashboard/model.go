@@ -27,7 +27,6 @@ type Model struct {
 	activePanel Panel
 	width       int
 	height      int
-	detached    bool
 	quitting    bool
 }
 
@@ -40,9 +39,6 @@ func NewModel(status ipc.StatusResult, sessions []ipc.SessionInfo) Model {
 		help:     newHelp(),
 	}
 }
-
-// DetachMsg signals the TUI should detach (leave daemon running).
-type DetachMsg struct{}
 
 // EventMsg wraps an event from IPC or event bus.
 type EventMsg struct {
@@ -76,9 +72,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+c", "q"))):
 			m.quitting = true
-			return m, tea.Quit
-		case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+d", "d"))):
-			m.detached = true
 			return m, tea.Quit
 		case key.Matches(msg, key.NewBinding(key.WithKeys("tab"))):
 			if m.activePanel == PanelSessions {
@@ -158,9 +151,6 @@ func (m Model) View() string {
 		helpBar,
 	)
 }
-
-// Detached returns true if the user pressed detach.
-func (m Model) Detached() bool { return m.detached }
 
 // Quitting returns true if the user quit.
 func (m Model) Quitting() bool { return m.quitting }

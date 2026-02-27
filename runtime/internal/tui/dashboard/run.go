@@ -12,8 +12,8 @@ import (
 )
 
 // Attach connects to a running daemon via IPC and displays the dashboard TUI.
-// Returns true if the user detached (daemon keeps running), false if they quit.
-func Attach(socketPath string) (detached bool, err error) {
+// Returns true when the user quits the dashboard (daemon keeps running).
+func Attach(socketPath string) (ok bool, err error) {
 	client, err := ipc.Dial(socketPath)
 	if err != nil {
 		return false, fmt.Errorf("connect to runtime: %w", err)
@@ -80,13 +80,11 @@ func Attach(socketPath string) (detached bool, err error) {
 		}
 	}()
 
-	finalModel, err := p.Run()
-	if err != nil {
+	if _, err := p.Run(); err != nil {
 		return false, fmt.Errorf("TUI error: %w", err)
 	}
 
-	result := finalModel.(Model)
-	return result.Detached(), nil
+	return true, nil
 }
 
 // NewInlineModel creates a dashboard model that subscribes directly to the

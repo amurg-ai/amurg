@@ -35,7 +35,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		_, _ = fmt.Fprintf(os.Stdout, "Hub:      %s (%s)\n", status.HubURL, connStatus)
 		_, _ = fmt.Fprintf(os.Stdout, "Uptime:   %s\n", status.Uptime)
 		_, _ = fmt.Fprintf(os.Stdout, "Sessions: %d/%d\n", status.Sessions, status.MaxSessions)
-		_, _ = fmt.Fprintf(os.Stdout, "Agents:   %d\n", status.Agents)
+		_, _ = fmt.Fprintf(os.Stdout, "Agents:   %d\n", len(status.Agents))
 		return nil
 	}
 

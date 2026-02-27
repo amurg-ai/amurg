@@ -190,18 +190,21 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	c.logger.Info("connected to hub", "url", c.cfg.URL)
 	c.notifyStateChange(true, false)
 
+	// Close the connection when the context is canceled so ReadMessage unblocks.
+	go func() {
+		<-ctx.Done()
+		_ = conn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "shutdown"))
+		_ = conn.Close()
+	}()
+
 	// Read messages until disconnected.
 	for {
-		select {
-		case <-ctx.Done():
-			_ = conn.WriteMessage(websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseNormalClosure, "shutdown"))
-			return ctx.Err()
-		default:
-		}
-
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			return fmt.Errorf("read message: %w", err)
 		}
 

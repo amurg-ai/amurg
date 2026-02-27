@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -33,8 +34,13 @@ func (h headerModel) View(width int) string {
 
 	// Second row: runtime details.
 	uptime := h.formatUptime()
-	details := fmt.Sprintf("  Runtime: %s   Uptime: %s   Sessions: %d/%d",
-		h.status.RuntimeID, uptime, h.status.Sessions, h.status.MaxSessions)
+	agentNames := make([]string, len(h.status.Agents))
+	for i, a := range h.status.Agents {
+		agentNames[i] = a.Name + " (" + a.Profile + ")"
+	}
+	details := fmt.Sprintf("  Runtime: %s   Sessions: %d/%d   Uptime: %s\n  Agents:  %s",
+		h.status.RuntimeID, h.status.Sessions, h.status.MaxSessions, uptime,
+		strings.Join(agentNames, ", "))
 
 	headerStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

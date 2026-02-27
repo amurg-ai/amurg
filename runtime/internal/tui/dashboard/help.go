@@ -19,7 +19,7 @@ func (h *helpModel) toggle() {
 }
 
 func (h helpModel) bar() string {
-	return tui.Help.Render("  q quit  d detach  Tab switch  j/k navigate  G bottom  ? help")
+	return tui.Help.Render("  q quit  Tab switch  j/k navigate  G bottom  ? help")
 }
 
 func (h helpModel) View() string {
@@ -29,8 +29,7 @@ func (h helpModel) View() string {
 		key  string
 		desc string
 	}{
-		{"q / Ctrl+C", "Quit (stops daemon if inline)"},
-		{"d / Ctrl+D", "Detach (leave daemon running)"},
+		{"q / Ctrl+C", "Quit dashboard (runtime keeps running)"},
 		{"Tab", "Switch between Sessions and Logs panels"},
 		{"j / Down", "Move down / scroll down"},
 		{"k / Up", "Move up / scroll up"},
