@@ -48,10 +48,36 @@ func Attach(socketPath string) (ok bool, err error) {
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
-	// Forward IPC events to the TUI.
+	// refreshState fetches current status and sessions and sends updates to the TUI.
+	refreshState := func() {
+		resp, err := client.Call("status", nil)
+		if err != nil {
+			return
+		}
+		var s ipc.StatusResult
+		if json.Unmarshal(resp.Data, &s) == nil {
+			p.Send(StatusUpdateMsg{Status: s})
+		}
+
+		sr, err := client.Call("sessions", nil)
+		if err != nil {
+			return
+		}
+		var ss ipc.SessionsResult
+		if json.Unmarshal(sr.Data, &ss) == nil {
+			p.Send(SessionsUpdateMsg{Sessions: ss.Sessions})
+		}
+	}
+
+	// Forward IPC events to the TUI, and trigger immediate refresh on session events.
 	go func() {
 		for evt := range client.Events() {
 			p.Send(EventMsg{Type: evt.Type, Data: evt.Data})
+			// Session lifecycle events should refresh the panels immediately.
+			switch evt.Type {
+			case "session.created", "session.closed", "session.state":
+				refreshState()
+			}
 		}
 	}()
 
@@ -60,23 +86,7 @@ func Attach(socketPath string) (ok bool, err error) {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
-			resp, err := client.Call("status", nil)
-			if err != nil {
-				return
-			}
-			var s ipc.StatusResult
-			if json.Unmarshal(resp.Data, &s) == nil {
-				p.Send(StatusUpdateMsg{Status: s})
-			}
-
-			sr, err := client.Call("sessions", nil)
-			if err != nil {
-				return
-			}
-			var ss ipc.SessionsResult
-			if json.Unmarshal(sr.Data, &ss) == nil {
-				p.Send(SessionsUpdateMsg{Sessions: ss.Sessions})
-			}
+			refreshState()
 		}
 	}()
 

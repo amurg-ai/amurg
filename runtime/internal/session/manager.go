@@ -187,6 +187,17 @@ func (m *Manager) Close(sessionID string) error {
 	return sess.Close()
 }
 
+// GetNativeHandle returns the native handle for a session, or "" if unknown.
+func (m *Manager) GetNativeHandle(sessionID string) string {
+	m.mu.RLock()
+	sess, ok := m.sessions[sessionID]
+	m.mu.RUnlock()
+	if !ok {
+		return ""
+	}
+	return sess.NativeHandle()
+}
+
 // Get returns a session by ID.
 func (m *Manager) Get(sessionID string) (*Session, bool) {
 	m.mu.RLock()

@@ -63,6 +63,7 @@ type AgentConfig struct {
 	Copilot    *CopilotConfig    `json:"copilot,omitempty"`
 	Codex      *CodexConfig      `json:"codex,omitempty"`
 	Kilo       *KiloConfig       `json:"kilo,omitempty"`
+	Gemini     *GeminiCLIConfig  `json:"gemini,omitempty"`
 	Job        *JobConfig        `json:"job,omitempty"`
 	HTTP       *HTTPConfig       `json:"http,omitempty"`
 	External   *ExternalConfig   `json:"external,omitempty"`
@@ -81,6 +82,8 @@ func (a AgentConfig) WorkDir() string {
 		return a.Codex.WorkDir
 	case a.Kilo != nil && a.Kilo.WorkDir != "":
 		return a.Kilo.WorkDir
+	case a.Gemini != nil && a.Gemini.WorkDir != "":
+		return a.Gemini.WorkDir
 	case a.Job != nil && a.Job.WorkDir != "":
 		return a.Job.WorkDir
 	case a.External != nil && a.External.WorkDir != "":
@@ -121,31 +124,50 @@ type ClaudeCodeConfig struct {
 
 // CopilotConfig is config for the github-copilot profile.
 type CopilotConfig struct {
-	Command      string            `json:"command,omitempty"`       // default: "copilot"
-	WorkDir      string            `json:"work_dir,omitempty"`
-	Env          map[string]string `json:"env,omitempty"`
-	Model        string            `json:"model,omitempty"`         // e.g. "claude-sonnet-4.5"
-	AllowedTools []string          `json:"allowed_tools,omitempty"` // --allow-tool flags
-	DeniedTools  []string          `json:"denied_tools,omitempty"`  // --deny-tool flags
+	Command                string            `json:"command,omitempty"`                  // default: "copilot"
+	WorkDir                string            `json:"work_dir,omitempty"`
+	Env                    map[string]string `json:"env,omitempty"`
+	Model                  string            `json:"model,omitempty"`                    // e.g. "claude-sonnet-4.5"
+	AllowedTools           []string          `json:"allowed_tools,omitempty"`            // --allow-tool glob patterns
+	DeniedTools            []string          `json:"denied_tools,omitempty"`             // --deny-tool glob patterns
+	MaxAutopilotContinues  int               `json:"max_autopilot_continues,omitempty"`  // --max-autopilot-continues N (implies --autopilot)
 }
 
 // CodexConfig is config for the codex profile.
 type CodexConfig struct {
-	Command      string            `json:"command,omitempty"`       // default: "codex"
-	WorkDir      string            `json:"work_dir,omitempty"`
-	Env          map[string]string `json:"env,omitempty"`
-	Model        string            `json:"model,omitempty"`         // e.g. "gpt-5"
-	ApprovalMode string            `json:"approval_mode,omitempty"` // "untrusted", "on-request", "never"
-	SandboxMode  string            `json:"sandbox_mode,omitempty"`  // "read-only", "workspace-write", "danger-full-access"
+	Command        string            `json:"command,omitempty"`         // default: "codex"
+	WorkDir        string            `json:"work_dir,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
+	Model          string            `json:"model,omitempty"`           // e.g. "gpt-5.3-codex"
+	ApprovalMode   string            `json:"approval_mode,omitempty"`   // "untrusted", "on-request", "never"
+	SandboxMode    string            `json:"sandbox_mode,omitempty"`    // "read-only", "workspace-write", "danger-full-access"
+	Profile        string            `json:"profile,omitempty"`         // named config profile (-p flag)
+	AdditionalDirs []string          `json:"additional_dirs,omitempty"` // --add-dir paths for extra write access
+	FullAuto       bool              `json:"full_auto,omitempty"`       // --full-auto convenience preset
 }
 
 // KiloConfig is config for the kilo-code profile.
 type KiloConfig struct {
-	Command  string            `json:"command,omitempty"`  // default: "kilo"
-	WorkDir  string            `json:"work_dir,omitempty"`
-	Env      map[string]string `json:"env,omitempty"`
-	Model    string            `json:"model,omitempty"`    // e.g. "anthropic/claude-sonnet-4"
-	Provider string            `json:"provider,omitempty"` // e.g. "anthropic", "openrouter"
+	Command      string            `json:"command,omitempty"`       // default: "kilo"
+	WorkDir      string            `json:"work_dir,omitempty"`
+	Env          map[string]string `json:"env,omitempty"`
+	Model        string            `json:"model,omitempty"`         // e.g. "anthropic/claude-sonnet-4"
+	Provider     string            `json:"provider,omitempty"`      // e.g. "anthropic", "openrouter"
+	Mode         string            `json:"mode,omitempty"`          // "code", "architect", "debugger", "ask", "orchestrator"
+	SystemPrompt string            `json:"system_prompt,omitempty"` // --append-system-prompt
+	Timeout      int               `json:"timeout,omitempty"`       // --timeout seconds (requires --auto)
+}
+
+// GeminiCLIConfig is config for the gemini-cli profile.
+type GeminiCLIConfig struct {
+	Command          string            `json:"command,omitempty"`            // default: "gemini"
+	WorkDir          string            `json:"work_dir,omitempty"`
+	Env              map[string]string `json:"env,omitempty"`
+	Model            string            `json:"model,omitempty"`              // e.g. "gemini-2.5-pro", "gemini-2.5-flash"
+	ApprovalMode     string            `json:"approval_mode,omitempty"`      // "default", "auto_edit", "yolo"
+	SystemPromptFile string            `json:"system_prompt_file,omitempty"` // path to GEMINI.md override
+	IncludeDirs      []string          `json:"include_directories,omitempty"`
+	Sandbox          bool              `json:"sandbox,omitempty"`
 }
 
 // JobConfig is config for generic-job and codex profiles.

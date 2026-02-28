@@ -60,6 +60,14 @@ func (s *Session) State() State {
 	return s.state.Load().(State)
 }
 
+// NativeHandle returns the agent's native session ID if the adapter supports it.
+func (s *Session) NativeHandle() string {
+	if nh, ok := s.agent.(adapter.NativeHandleProvider); ok {
+		return nh.NativeHandle()
+	}
+	return ""
+}
+
 // Send delivers a user message to the agent and starts reading output.
 func (s *Session) Send(ctx context.Context, input []byte, idleTimeout time.Duration) error {
 	s.state.Store(StateResponding)

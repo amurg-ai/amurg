@@ -97,9 +97,12 @@ type SessionClose struct {
 
 // UserMessage carries user input to the agent (hub → runtime).
 type UserMessage struct {
-	SessionID string `json:"session_id"`
-	MessageID string `json:"message_id"` // client-generated UUID for idempotency
-	Content   string `json:"content"`
+	SessionID    string `json:"session_id"`
+	MessageID    string `json:"message_id"` // client-generated UUID for idempotency
+	Content      string `json:"content"`
+	AgentID      string `json:"agent_id,omitempty"`      // for lazy session recreation
+	UserID       string `json:"user_id,omitempty"`       // for lazy session recreation
+	NativeHandle string `json:"native_handle,omitempty"` // for lazy session recreation
 }
 
 // AgentOutput carries agent output back (runtime → hub → UI).
@@ -124,7 +127,8 @@ type TurnStarted struct {
 type TurnCompleted struct {
 	SessionID    string `json:"session_id"`
 	InResponseTo string `json:"in_response_to"`
-	ExitCode     *int   `json:"exit_code,omitempty"` // for run-to-completion profiles
+	ExitCode     *int   `json:"exit_code,omitempty"`  // for run-to-completion profiles
+	NativeHandle string `json:"native_handle,omitempty"` // agent's native session ID
 }
 
 // --- Stop / Cancel ---

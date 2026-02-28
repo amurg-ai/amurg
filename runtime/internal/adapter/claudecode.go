@@ -405,6 +405,13 @@ func (s *claudeCodeSession) ExitCode() *int {
 	return nil
 }
 
+// NativeHandle returns the Claude Code native session ID.
+func (s *claudeCodeSession) NativeHandle() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sessionID
+}
+
 // SetResumeSessionID pre-seeds the native session ID so the first Send()
 // uses --resume to continue an existing Claude Code session.
 func (s *claudeCodeSession) SetResumeSessionID(id string) {
@@ -538,21 +545,10 @@ func (s *claudeCodeSession) LoadNativeHistory() []Output {
 	return history
 }
 
-// NativeSessionEntry matches the structure in Claude Code's sessions-index.json.
-type NativeSessionEntry struct {
-	SessionID    string `json:"sessionId"`
-	Summary      string `json:"summary,omitempty"`
-	FirstPrompt  string `json:"firstPrompt,omitempty"`
-	MessageCount int    `json:"messageCount"`
-	ProjectPath  string `json:"projectPath,omitempty"`
-	GitBranch    string `json:"gitBranch,omitempty"`
-	Created      string `json:"created,omitempty"`
-	Modified     string `json:"modified,omitempty"`
-}
-
 // ListNativeSessions scans ~/.claude/projects/*/sessions-index.json
 // and returns all discovered native Claude Code sessions.
-func ListNativeSessions() ([]NativeSessionEntry, error) {
+// Implements NativeSessionLister interface.
+func (a *ClaudeCodeAdapter) ListNativeSessions() ([]NativeSessionEntry, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("get home dir: %w", err)

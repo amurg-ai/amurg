@@ -61,5 +61,6 @@ func DefaultRegistry() *Registry {
 	r.Register("codex", &CodexAdapter{})
 	r.Register("external", &ExternalAdapter{})
 	r.Register("kilo-code", &KiloAdapter{})
+	r.Register("gemini-cli", &GeminiCLIAdapter{})
 	return r
 }

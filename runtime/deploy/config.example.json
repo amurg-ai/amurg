@@ -16,25 +16,16 @@
   },
   "agents": [
     {
-      "id": "echo-cli",
-      "name": "Echo CLI",
-      "profile": "generic-cli",
-      "tags": {"env": "dev", "purpose": "testing"},
-      "cli": {
-        "command": "cat",
-        "spawn_policy": "per-session"
-      }
-    },
-    {
       "id": "claude-code-1",
       "name": "Claude Code",
       "profile": "claude-code",
       "tags": {"env": "dev"},
-      "cli": {
-        "command": "claude",
-        "args": ["--chat"],
+      "claude_code": {
         "work_dir": "/workspace",
-        "spawn_policy": "per-session"
+        "model": "sonnet",
+        "permission_mode": "dangerously-skip-permissions",
+        "max_turns": 25,
+        "system_prompt": "You are a helpful coding assistant."
       }
     },
     {
@@ -42,20 +33,67 @@
       "name": "GitHub Copilot",
       "profile": "github-copilot",
       "tags": {"env": "dev"},
-      "cli": {
-        "command": "gh",
-        "args": ["copilot", "suggest"],
-        "spawn_policy": "per-session"
+      "copilot": {
+        "work_dir": "/workspace",
+        "model": "claude-sonnet-4.5",
+        "max_autopilot_continues": 10,
+        "allowed_tools": ["shell(git *)"],
+        "denied_tools": ["shell(rm -rf *)"]
+      },
+      "security": {
+        "permission_mode": "skip"
       }
     },
     {
       "id": "codex-1",
-      "name": "Codex",
+      "name": "OpenAI Codex",
       "profile": "codex",
       "tags": {"env": "dev"},
-      "job": {
-        "command": "codex",
-        "max_runtime": "5m"
+      "codex": {
+        "work_dir": "/workspace",
+        "model": "gpt-5.3-codex",
+        "approval_mode": "on-request",
+        "sandbox_mode": "workspace-write",
+        "full_auto": true,
+        "additional_dirs": ["/data"]
+      }
+    },
+    {
+      "id": "gemini-1",
+      "name": "Gemini CLI",
+      "profile": "gemini-cli",
+      "tags": {"env": "dev"},
+      "gemini": {
+        "work_dir": "/workspace",
+        "model": "gemini-2.5-pro",
+        "approval_mode": "auto_edit",
+        "include_directories": ["/data", "/config"]
+      }
+    },
+    {
+      "id": "kilo-1",
+      "name": "Kilo Code",
+      "profile": "kilo-code",
+      "tags": {"env": "dev"},
+      "kilo": {
+        "work_dir": "/workspace",
+        "model": "anthropic/claude-sonnet-4",
+        "provider": "anthropic",
+        "mode": "code",
+        "system_prompt": "Focus on clean, maintainable code."
+      },
+      "security": {
+        "permission_mode": "skip"
+      }
+    },
+    {
+      "id": "echo-cli",
+      "name": "Echo CLI",
+      "profile": "generic-cli",
+      "tags": {"env": "dev", "purpose": "testing"},
+      "cli": {
+        "command": "cat",
+        "spawn_policy": "per-session"
       }
     },
     {

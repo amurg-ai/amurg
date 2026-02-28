@@ -69,6 +69,14 @@ type ResumeSeeder interface {
 	SetResumeSessionID(id string)
 }
 
+// NativeHandleProvider is an optional interface for agent sessions that
+// expose their native session ID (e.g. Claude Code's session UUID,
+// Codex's thread ID). Used to report the handle back to the hub so
+// sessions can survive runtime restarts.
+type NativeHandleProvider interface {
+	NativeHandle() string
+}
+
 // HistoryLoader is an optional interface for agent sessions that can load
 // native conversation history. Returns history items to be emitted by the
 // caller (bypassing the output channel to avoid drain timing issues).
@@ -80,4 +88,22 @@ type HistoryLoader interface {
 // for output instead of using channels.
 type WriterAdapter interface {
 	SetOutput(stdout, stderr io.Writer)
+}
+
+// NativeSessionLister is an optional interface for adapters that can list
+// native sessions from their local storage.
+type NativeSessionLister interface {
+	ListNativeSessions() ([]NativeSessionEntry, error)
+}
+
+// NativeSessionEntry describes a native session discovered from an agent's local storage.
+type NativeSessionEntry struct {
+	SessionID    string `json:"sessionId"`
+	Summary      string `json:"summary,omitempty"`
+	FirstPrompt  string `json:"firstPrompt,omitempty"`
+	MessageCount int    `json:"messageCount"`
+	ProjectPath  string `json:"projectPath,omitempty"`
+	GitBranch    string `json:"gitBranch,omitempty"`
+	Created      string `json:"created,omitempty"`
+	Modified     string `json:"modified,omitempty"`
 }

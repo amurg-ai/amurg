@@ -608,6 +608,13 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 			r.logger.Warn("failed to update session state", "session_id", tc.SessionID, "error", err)
 		}
 
+		// Persist the native handle so sessions can survive runtime restarts.
+		if tc.NativeHandle != "" {
+			if err := r.store.SetSessionNativeHandle(ctx, tc.SessionID, tc.NativeHandle); err != nil {
+				r.logger.Warn("failed to set native handle", "session_id", tc.SessionID, "error", err)
+			}
+		}
+
 		r.mu.Lock()
 		startTime, hasTiming := r.turnStartTimes[tc.SessionID]
 		if hasTiming {
@@ -890,6 +897,12 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 		}); err != nil {
 			r.logger.Warn("failed to log audit event", "action", "message.sent", "error", err)
 		}
+
+		// Include session metadata so the runtime can lazily recreate the session
+		// if it was lost (e.g. after a runtime restart).
+		msg.AgentID = sess.AgentID
+		msg.UserID = sess.UserID
+		msg.NativeHandle = sess.NativeHandle
 
 		// Forward to runtime.
 		r.sendToRuntime(sess.RuntimeID, protocol.TypeUserMessage, msg.SessionID, msg)

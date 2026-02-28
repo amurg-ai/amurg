@@ -27,19 +27,19 @@ var KnownProfiles = map[string]ProfileCaps{
 		ExecModel:        ExecInteractive,
 	},
 	ProfileGitHubCopilot: {
-		NativeSessionIDs: false,
+		NativeSessionIDs: true,
 		TurnCompletion:   true,
 		ResumeAttach:     true,
 		ExecModel:        ExecInteractive,
 	},
 	ProfileCodex: {
-		NativeSessionIDs: false,
+		NativeSessionIDs: true,
 		TurnCompletion:   true,
 		ResumeAttach:     true,
 		ExecModel:        ExecRunToCompletion,
 	},
 	ProfileKilo: {
-		NativeSessionIDs: false,
+		NativeSessionIDs: true,
 		TurnCompletion:   true,
 		ResumeAttach:     true,
 		ExecModel:        ExecInteractive,
@@ -48,6 +48,12 @@ var KnownProfiles = map[string]ProfileCaps{
 		NativeSessionIDs: false,
 		TurnCompletion:   true,
 		ResumeAttach:     false,
+		ExecModel:        ExecInteractive,
+	},
+	ProfileGeminiCLI: {
+		NativeSessionIDs: true,
+		TurnCompletion:   true,
+		ResumeAttach:     true,
 		ExecModel:        ExecInteractive,
 	},
 }
@@ -61,5 +67,6 @@ const (
 	ProfileGitHubCopilot = "github-copilot"
 	ProfileCodex         = "codex"
 	ProfileKilo          = "kilo-code"
+	ProfileGeminiCLI     = "gemini-cli"
 	ProfileExternal      = "external"
 )

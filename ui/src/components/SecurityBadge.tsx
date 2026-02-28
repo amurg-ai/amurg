@@ -29,9 +29,9 @@ export function SecurityBadge({ security }: { security?: string | SecurityProfil
       label = "Strict permissions";
       break;
     case "skip":
-      icon = "\u26A0\uFE0F";
-      color = "text-red-400";
-      label = "Permissions skipped";
+      icon = "\u26A1";
+      color = "text-amber-400";
+      label = "Auto-approve enabled";
       break;
     default:
       icon = "\uD83D\uDEE1\uFE0F";

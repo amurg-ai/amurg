@@ -290,7 +290,22 @@ func (r *Runtime) handleUserMessage(env protocol.Envelope) error {
 	})
 
 	ctx := context.Background()
-	if err := r.sessions.Send(ctx, msg.SessionID, []byte(msg.Content)); err != nil {
+	err := r.sessions.Send(ctx, msg.SessionID, []byte(msg.Content))
+
+	// Lazy session recreation: if the session is gone (runtime restarted)
+	// but the hub forwarded enough metadata, recreate it with the native handle.
+	if err != nil && msg.AgentID != "" {
+		r.logger.Info("attempting lazy session recreation",
+			"session_id", msg.SessionID, "agent_id", msg.AgentID,
+			"native_handle", msg.NativeHandle)
+		if createErr := r.sessions.CreateWithResume(ctx, msg.SessionID, msg.AgentID, msg.UserID, msg.NativeHandle); createErr == nil {
+			err = r.sessions.Send(ctx, msg.SessionID, []byte(msg.Content))
+		} else {
+			r.logger.Warn("lazy session recreation failed", "session_id", msg.SessionID, "error", createErr)
+		}
+	}
+
+	if err != nil {
 		r.logger.Warn("send to agent failed", "session_id", msg.SessionID, "error", err)
 
 		// Send turn completed with error.
@@ -394,6 +409,8 @@ func (r *Runtime) handleAgentOutput(sessionID string, output adapter.Output, fin
 		if output.ExitCode != nil {
 			tc.ExitCode = output.ExitCode
 		}
+		// Report the native handle so the hub can persist it for session resilience.
+		tc.NativeHandle = r.sessions.GetNativeHandle(sessionID)
 		_ = r.hubClient.Send(protocol.TypeTurnCompleted, sessionID, tc)
 		return
 	}
@@ -468,9 +485,19 @@ func (r *Runtime) handleNativeSessionsList(env protocol.Envelope) error {
 		return fmt.Errorf("unmarshal native sessions list: %w", err)
 	}
 
-	// Only claude-code agents support native sessions.
+	// Look up the adapter for this agent's profile and check if it supports listing.
 	profile := r.sessions.GetAgentProfile(req.AgentID)
-	if profile != "claude-code" {
+	adp, err := r.registry.Get(profile)
+	if err != nil {
+		return r.hubClient.Send(protocol.TypeNativeSessionsResponse, "", protocol.NativeSessionsResponse{
+			AgentID:   req.AgentID,
+			RequestID: req.RequestID,
+			Error:     fmt.Sprintf("unknown profile: %s", profile),
+		})
+	}
+
+	lister, ok := adp.(adapter.NativeSessionLister)
+	if !ok {
 		return r.hubClient.Send(protocol.TypeNativeSessionsResponse, "", protocol.NativeSessionsResponse{
 			AgentID:   req.AgentID,
 			RequestID: req.RequestID,
@@ -478,7 +505,7 @@ func (r *Runtime) handleNativeSessionsList(env protocol.Envelope) error {
 		})
 	}
 
-	entries, err := adapter.ListNativeSessions()
+	entries, err := lister.ListNativeSessions()
 	resp := protocol.NativeSessionsResponse{
 		AgentID:   req.AgentID,
 		RequestID: req.RequestID,

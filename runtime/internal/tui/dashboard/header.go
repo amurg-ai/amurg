@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -38,16 +39,16 @@ func (h headerModel) View(width int) string {
 	nameStyle := lipgloss.NewStyle().Foreground(tui.ColorText).Bold(true)
 	metaStyle := lipgloss.NewStyle().Foreground(tui.ColorMuted)
 
-	for i, a := range h.status.Agents {
-		label := "  Agents:  "
-		if i > 0 {
-			label = "           "
+	// Show agents inline to keep the header compact.
+	if len(h.status.Agents) > 0 {
+		var sb strings.Builder
+		for i, a := range h.status.Agents {
+			if i > 0 {
+				sb.WriteString(metaStyle.Render(", "))
+			}
+			sb.WriteString(nameStyle.Render(a.Name) + " " + metaStyle.Render(a.Profile))
 		}
-		meta := metaStyle.Render(a.Profile)
-		if a.WorkDir != "" {
-			meta += metaStyle.Render("  " + a.WorkDir)
-		}
-		info += "\n" + metaStyle.Render(label) + nameStyle.Render(a.Name) + "  " + meta
+		info += "\n" + metaStyle.Render("  Agents:  ") + sb.String()
 	}
 
 	headerStyle := lipgloss.NewStyle().
