@@ -93,4 +93,18 @@ describe("detectContentType", () => {
     const ansiJson = '\x1b[32m{"key": "value"}\x1b[0m';
     expect(detectContentType(ansiJson, "agent", "stdout")).toBe("ansi");
   });
+
+  // --- Question channel ---
+  it("returns question for question channel", () => {
+    expect(detectContentType('{"type":"tool_use","name":"AskUserQuestion"}', "agent", "question")).toBe("question");
+  });
+
+  // --- Tool channel ---
+  it("returns tool for tool channel", () => {
+    expect(detectContentType('{"type":"tool_use","name":"Read"}', "agent", "tool")).toBe("tool");
+  });
+
+  it("returns tool for history_tool channel", () => {
+    expect(detectContentType('{"type":"tool_use","name":"Bash"}', "agent", "history_tool")).toBe("tool");
+  });
 });

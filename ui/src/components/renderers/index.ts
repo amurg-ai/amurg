@@ -7,3 +7,5 @@ export { JsonRenderer } from "./JsonRenderer";
 export { CopyButton } from "./CopyButton";
 export { CollapsibleOutput } from "./CollapsibleOutput";
 export { FileRenderer } from "./FileRenderer";
+export { ToolCallRenderer } from "./ToolCallRenderer";
+export { QuestionRenderer } from "./QuestionRenderer";

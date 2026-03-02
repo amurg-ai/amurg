@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"sync"
 	"time"
@@ -21,7 +22,19 @@ const (
 	pingInterval = 30 * time.Second
 	// pongWait is the maximum time to wait for a pong before considering the connection dead.
 	pongWait = 60 * time.Second
+	// defaultSendBufferSize is the default number of messages buffered during disconnect.
+	defaultSendBufferSize = 256
 )
+
+// bufferedMessage types that should be saved during disconnects.
+var bufferableTypes = map[string]bool{
+	protocol.TypeAgentOutput:       true,
+	protocol.TypeTurnStarted:       true,
+	protocol.TypeTurnCompleted:     true,
+	protocol.TypePermissionRequest: true,
+	protocol.TypeFileAvailable:     true,
+	protocol.TypeSessionCreated:    true,
+}
 
 // MessageHandler processes messages received from the hub.
 type MessageHandler func(env protocol.Envelope) error
@@ -43,10 +56,21 @@ type Client struct {
 	done          chan struct{}
 	currentToken  string // latest token (updated via refresh)
 	onStateChange StateChangeFunc
+
+	// Send buffer: ring buffer for messages generated while disconnected.
+	sendBuf     [][]byte
+	sendBufHead int // next write position
+	sendBufLen  int // number of valid entries
+	sendBufCap  int
 }
 
 // NewClient creates a hub client.
 func NewClient(cfg config.HubConfig, runtimeID, orgID string, agents []protocol.AgentRegistration, handler MessageHandler, logger *slog.Logger) *Client {
+	bufCap := cfg.SendBufferSize
+	if bufCap <= 0 {
+		bufCap = defaultSendBufferSize
+	}
+
 	return &Client{
 		cfg:          cfg,
 		rtID:         runtimeID,
@@ -56,6 +80,8 @@ func NewClient(cfg config.HubConfig, runtimeID, orgID string, agents []protocol.
 		logger:       logger.With("component", "hub-client"),
 		done:         make(chan struct{}),
 		currentToken: cfg.Token,
+		sendBuf:      make([][]byte, bufCap),
+		sendBufCap:   bufCap,
 	}
 }
 
@@ -91,17 +117,15 @@ func (c *Client) Connect(ctx context.Context) error {
 			c.logger.Warn("connection failed", "error", err)
 			c.notifyStateChange(false, true)
 
-			// Exponential backoff: double delay on each failure, cap at max.
-			c.logger.Info("reconnecting", "delay", delay)
+			// Exponential backoff with ±25% jitter, capped at max.
+			jitter := time.Duration(float64(delay) * (0.75 + rand.Float64()*0.5))
+			c.logger.Info("reconnecting", "delay", jitter)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(delay):
+			case <-time.After(jitter):
 			}
-			delay = delay * 2
-			if delay > c.cfg.MaxReconnectDelay.Duration {
-				delay = c.cfg.MaxReconnectDelay.Duration
-			}
+			delay = min(delay*2, c.cfg.MaxReconnectDelay.Duration)
 			continue
 		}
 
@@ -121,7 +145,10 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	}
 
 	header := http.Header{}
-	header.Set("Authorization", "Bearer "+c.cfg.Token)
+	c.mu.Lock()
+	dialToken := c.currentToken
+	c.mu.Unlock()
+	header.Set("Authorization", "Bearer "+dialToken)
 
 	conn, _, err := dialer.DialContext(ctx, c.cfg.URL, header)
 	if err != nil {
@@ -190,6 +217,9 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	c.logger.Info("connected to hub", "url", c.cfg.URL)
 	c.notifyStateChange(true, false)
 
+	// Drain buffered messages that accumulated while disconnected.
+	c.drainSendBuffer()
+
 	// Close the connection when the context is canceled so ReadMessage unblocks.
 	go func() {
 		<-ctx.Done()
@@ -236,9 +266,14 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	}
 }
 
-// Send sends a protocol envelope to the hub.
+// Send sends a protocol envelope to the hub. If disconnected and the message
+// type is bufferable, it is saved to the send buffer for delivery on reconnect.
 func (c *Client) Send(msgType, sessionID string, payload any) error {
-	return c.sendMessage(msgType, sessionID, payload)
+	err := c.sendMessage(msgType, sessionID, payload)
+	if err != nil && bufferableTypes[msgType] {
+		c.bufferMessage(msgType, sessionID, payload)
+	}
+	return err
 }
 
 func (c *Client) sendMessage(msgType, sessionID string, payload any) error {
@@ -262,6 +297,69 @@ func (c *Client) sendMessage(msgType, sessionID string, payload any) error {
 	}
 
 	return c.conn.WriteMessage(websocket.TextMessage, data)
+}
+
+// bufferMessage stores a pre-marshaled message in the ring buffer.
+// Called when Send fails for a bufferable message type.
+func (c *Client) bufferMessage(msgType, sessionID string, payload any) {
+	env := protocol.Envelope{
+		Type:      msgType,
+		SessionID: sessionID,
+		Timestamp: time.Now(),
+		Payload:   payload,
+	}
+	data, err := json.Marshal(env)
+	if err != nil {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.sendBuf[c.sendBufHead] = data
+	c.sendBufHead = (c.sendBufHead + 1) % c.sendBufCap
+	if c.sendBufLen < c.sendBufCap {
+		c.sendBufLen++
+	}
+	// When full, head overtakes tail — oldest messages are dropped.
+}
+
+// drainSendBuffer sends all buffered messages over the live connection.
+// Must be called after connection is established and hello is sent.
+func (c *Client) drainSendBuffer() {
+	c.mu.Lock()
+	if c.sendBufLen == 0 {
+		c.mu.Unlock()
+		return
+	}
+
+	// Compute start position (tail of ring buffer).
+	start := (c.sendBufHead - c.sendBufLen + c.sendBufCap) % c.sendBufCap
+	msgs := make([][]byte, c.sendBufLen)
+	for i := range c.sendBufLen {
+		idx := (start + i) % c.sendBufCap
+		msgs[i] = c.sendBuf[idx]
+		c.sendBuf[idx] = nil // free reference
+	}
+	c.sendBufLen = 0
+	c.sendBufHead = 0
+	conn := c.conn
+	c.mu.Unlock()
+
+	if conn == nil {
+		return
+	}
+
+	c.logger.Info("draining send buffer", "count", len(msgs))
+	for _, data := range msgs {
+		c.mu.Lock()
+		err := conn.WriteMessage(websocket.TextMessage, data)
+		c.mu.Unlock()
+		if err != nil {
+			c.logger.Warn("failed to drain buffered message", "error", err)
+			return
+		}
+	}
 }
 
 // Close gracefully closes the connection.

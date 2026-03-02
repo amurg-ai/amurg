@@ -22,6 +22,7 @@ type HubConfig struct {
 	TLSSkipVerify     bool          `json:"tls_skip_verify,omitempty"` // dev only
 	ReconnectInterval Duration      `json:"reconnect_interval,omitempty"`
 	MaxReconnectDelay Duration      `json:"max_reconnect_delay,omitempty"`
+	SendBufferSize    int           `json:"send_buffer_size,omitempty"` // messages buffered during disconnect; default 256
 }
 
 // RuntimeConfig defines global runtime limits.
@@ -301,7 +302,7 @@ func (c *Config) applyDefaults() {
 		c.Hub.ReconnectInterval.Duration = 2 * time.Second
 	}
 	if c.Hub.MaxReconnectDelay.Duration == 0 {
-		c.Hub.MaxReconnectDelay.Duration = 60 * time.Second
+		c.Hub.MaxReconnectDelay.Duration = 30 * time.Second
 	}
 	if c.Runtime.FileStoragePath == "" {
 		c.Runtime.FileStoragePath = "./amurg-files"

@@ -396,6 +396,10 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 			r.logger.Warn("failed to log audit event", "action", "runtime.disconnect", "error", err)
 		}
 		r.logger.Info("runtime disconnected", "runtime_id", hello.RuntimeID)
+
+		// Deny any pending permissions belonging to this runtime since
+		// it can no longer receive responses.
+		r.denyPermissionsForRuntime(hello.RuntimeID)
 	}()
 
 	for {
@@ -904,8 +908,13 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 		msg.UserID = sess.UserID
 		msg.NativeHandle = sess.NativeHandle
 
-		// Forward to runtime.
-		r.sendToRuntime(sess.RuntimeID, protocol.TypeUserMessage, msg.SessionID, msg)
+		// Forward to runtime. Notify the client if delivery fails so
+		// the UI can inform the user instead of silently dropping it.
+		if !r.sendToRuntime(sess.RuntimeID, protocol.TypeUserMessage, msg.SessionID, msg) {
+			r.sendToClient(cc, protocol.TypeErrorResponse, msg.SessionID, protocol.ErrorResponse{
+				Code: "runtime_unavailable", Message: "agent runtime is temporarily offline, message will be delivered when it reconnects",
+			})
+		}
 
 	case protocol.TypeClientSubscribe:
 		data, _ := json.Marshal(env.Payload)
@@ -1178,14 +1187,16 @@ func (r *Router) broadcastToSession(sessionID, msgType string, payload any) {
 	}
 }
 
-func (r *Router) sendToRuntime(runtimeID, msgType, sessionID string, payload any) {
+// sendToRuntime sends a message to the specified runtime. Returns false if the
+// runtime is not connected or the write fails.
+func (r *Router) sendToRuntime(runtimeID, msgType, sessionID string, payload any) bool {
 	r.mu.RLock()
 	rt, ok := r.runtimes[runtimeID]
 	r.mu.RUnlock()
 
 	if !ok {
 		r.logger.Warn("runtime not connected", "runtime_id", runtimeID)
-		return
+		return false
 	}
 
 	env := protocol.Envelope{
@@ -1198,14 +1209,16 @@ func (r *Router) sendToRuntime(runtimeID, msgType, sessionID string, payload any
 	data, err := json.Marshal(env)
 	if err != nil {
 		r.logger.Warn("marshal error", "error", err)
-		return
+		return false
 	}
 
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	if err := rt.conn.WriteMessage(websocket.TextMessage, data); err != nil {
 		r.logger.Warn("send to runtime failed", "runtime_id", runtimeID, "error", err)
+		return false
 	}
+	return true
 }
 
 func (r *Router) sendToClient(cc *clientConn, msgType, sessionID string, payload any) {
@@ -1316,6 +1329,36 @@ func (r *Router) scheduleTokenRefresh(ctx context.Context, runtimeID string, rt 
 			}
 			r.logger.Debug("token refresh sent", "runtime_id", runtimeID)
 		}
+	}
+}
+
+// denyPermissionsForRuntime cancels and denies all pending permissions that
+// belong to the given runtime. Called when a runtime disconnects.
+func (r *Router) denyPermissionsForRuntime(runtimeID string) {
+	r.mu.Lock()
+	var stale []*pendingPermission
+	for id, pp := range r.pendingPerms {
+		if pp.runtimeID == runtimeID {
+			pp.timer.Stop()
+			delete(r.pendingPerms, id)
+			stale = append(stale, pp)
+		}
+	}
+	r.mu.Unlock()
+
+	if len(stale) == 0 {
+		return
+	}
+	r.logger.Info("denying pending permissions for disconnected runtime",
+		"runtime_id", runtimeID, "count", len(stale))
+
+	for _, pp := range stale {
+		denied := protocol.PermissionResponse{
+			SessionID: pp.sessionID,
+			RequestID: pp.requestID,
+			Approved:  false,
+		}
+		r.broadcastToSession(pp.sessionID, protocol.TypePermissionResponse, denied)
 	}
 }
 

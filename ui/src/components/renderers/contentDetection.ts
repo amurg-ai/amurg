@@ -1,4 +1,4 @@
-export type ContentType = "ansi" | "diff" | "json" | "markdown" | "plain" | "file";
+export type ContentType = "ansi" | "diff" | "json" | "markdown" | "plain" | "file" | "tool" | "question";
 
 const ANSI_RE = /\x1b\[[\d;]*m/;
 
@@ -15,8 +15,17 @@ export function detectContentType(
   // File channel renders as file card.
   if (channel === "file") return "file";
 
+  // Question channel renders as interactive question card.
+  if (channel === "question") return "question";
+
+  // Tool channel renders as collapsible tool call card.
+  if (channel === "tool") return "tool";
+
   // System channel is always plain.
   if (channel === "system") return "plain";
+
+  // History channels: tool calls from loaded history.
+  if (channel === "history_tool") return "tool";
 
   // ANSI escape codes -> terminal renderer.
   if (ANSI_RE.test(content)) return "ansi";

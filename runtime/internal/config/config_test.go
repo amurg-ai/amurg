@@ -181,8 +181,8 @@ func TestLoad_AppliesDefaults(t *testing.T) {
 	if cfg.Hub.ReconnectInterval.Duration != 2*time.Second {
 		t.Errorf("expected default reconnect interval 2s, got %v", cfg.Hub.ReconnectInterval.Duration)
 	}
-	if cfg.Hub.MaxReconnectDelay.Duration != 60*time.Second {
-		t.Errorf("expected default max reconnect delay 60s, got %v", cfg.Hub.MaxReconnectDelay.Duration)
+	if cfg.Hub.MaxReconnectDelay.Duration != 30*time.Second {
+		t.Errorf("expected default max reconnect delay 30s, got %v", cfg.Hub.MaxReconnectDelay.Duration)
 	}
 }
 

@@ -106,6 +106,8 @@ func New(cfg *config.Config, logger *slog.Logger, bus *eventbus.Bus) *Runtime {
 		rt.mu.Unlock()
 
 		if connected {
+			// Deny all stale pending permissions — hub has already timed them out.
+			rt.denyStalePermissions()
 			rt.bus.PublishType(eventbus.HubConnected, nil)
 		} else if reconnecting {
 			rt.bus.PublishType(eventbus.HubReconnecting, nil)
@@ -284,7 +286,7 @@ func (r *Runtime) handleUserMessage(env protocol.Envelope) error {
 	}
 
 	// Signal turn started.
-	_ = r.hubClient.Send(protocol.TypeTurnStarted, msg.SessionID, protocol.TurnStarted{
+	r.sendToHub(protocol.TypeTurnStarted, msg.SessionID, protocol.TurnStarted{
 		SessionID:    msg.SessionID,
 		InResponseTo: msg.MessageID,
 	})
@@ -309,7 +311,7 @@ func (r *Runtime) handleUserMessage(env protocol.Envelope) error {
 		r.logger.Warn("send to agent failed", "session_id", msg.SessionID, "error", err)
 
 		// Send turn completed with error.
-		_ = r.hubClient.Send(protocol.TypeTurnCompleted, msg.SessionID, protocol.TurnCompleted{
+		r.sendToHub(protocol.TypeTurnCompleted, msg.SessionID, protocol.TurnCompleted{
 			SessionID:    msg.SessionID,
 			InResponseTo: msg.MessageID,
 		})
@@ -411,7 +413,7 @@ func (r *Runtime) handleAgentOutput(sessionID string, output adapter.Output, fin
 		}
 		// Report the native handle so the hub can persist it for session resilience.
 		tc.NativeHandle = r.sessions.GetNativeHandle(sessionID)
-		_ = r.hubClient.Send(protocol.TypeTurnCompleted, sessionID, tc)
+		r.sendToHub(protocol.TypeTurnCompleted, sessionID, tc)
 		return
 	}
 
@@ -424,7 +426,7 @@ func (r *Runtime) handleAgentOutput(sessionID string, output adapter.Output, fin
 			mimeType = "application/octet-stream"
 		}
 
-		_ = r.hubClient.Send(protocol.TypeFileAvailable, sessionID, protocol.FileAvailable{
+		r.sendToHub(protocol.TypeFileAvailable, sessionID, protocol.FileAvailable{
 			SessionID: sessionID,
 			Metadata: protocol.FileMetadata{
 				FileID:   fileID,
@@ -437,7 +439,7 @@ func (r *Runtime) handleAgentOutput(sessionID string, output adapter.Output, fin
 		return
 	}
 
-	_ = r.hubClient.Send(protocol.TypeAgentOutput, sessionID, protocol.AgentOutput{
+	r.sendToHub(protocol.TypeAgentOutput, sessionID, protocol.AgentOutput{
 		SessionID: sessionID,
 		Channel:   output.Channel,
 		Content:   string(output.Data),
@@ -460,7 +462,7 @@ func (r *Runtime) handlePermissionRequest(sessionID, tool, description, resource
 	}()
 
 	// Send permission request to hub.
-	_ = r.hubClient.Send(protocol.TypePermissionRequest, sessionID, protocol.PermissionRequest{
+	r.sendToHub(protocol.TypePermissionRequest, sessionID, protocol.PermissionRequest{
 		SessionID:   sessionID,
 		RequestID:   requestID,
 		Tool:        tool,
@@ -529,6 +531,36 @@ func (r *Runtime) handleNativeSessionsList(env protocol.Envelope) error {
 	}
 
 	return r.hubClient.Send(protocol.TypeNativeSessionsResponse, "", resp)
+}
+
+// sendToHub wraps hubClient.Send with warning-level logging on failure.
+func (r *Runtime) sendToHub(msgType, sessionID string, payload any) {
+	if err := r.hubClient.Send(msgType, sessionID, payload); err != nil {
+		r.logger.Warn("hub send failed", "type", msgType, "session_id", sessionID, "error", err)
+	}
+}
+
+// denyStalePermissions unblocks all pending permission requests by sending false.
+// Called on reconnect since the hub has already timed out these requests.
+func (r *Runtime) denyStalePermissions() {
+	r.mu.Lock()
+	stale := make(map[string]chan bool, len(r.pendingPermissions))
+	for id, ch := range r.pendingPermissions {
+		stale[id] = ch
+	}
+	r.mu.Unlock()
+
+	if len(stale) == 0 {
+		return
+	}
+
+	r.logger.Warn("denying stale permission requests after reconnect", "count", len(stale))
+	for _, ch := range stale {
+		select {
+		case ch <- false:
+		default:
+		}
+	}
 }
 
 func (r *Runtime) handlePermissionResponse(env protocol.Envelope) error {

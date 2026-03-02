@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,13 +13,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/amurg-ai/amurg/runtime/internal/config"
 )
 
 // ClaudeCodeAdapter implements the claude-code profile.
-// It uses Claude Code's `-p --output-format stream-json` mode,
-// spawning a new process per Send() call and using --resume for continuity.
+// It uses Claude Code's bidirectional stream-json mode for persistent,
+// interactive sessions via stdin/stdout.
 type ClaudeCodeAdapter struct{}
 
 func (a *ClaudeCodeAdapter) Start(ctx context.Context, cfg config.AgentConfig) (AgentSession, error) {
@@ -39,31 +41,56 @@ func (a *ClaudeCodeAdapter) Start(ctx context.Context, cfg config.AgentConfig) (
 	return sess, nil
 }
 
-// claudeCodeSession manages a Claude Code conversation across multiple Send() calls.
-// Each Send() spawns a new `claude -p` process; --resume maintains continuity.
+// claudeCodeSession manages a persistent Claude Code conversation.
+// The process is spawned lazily on the first Send() and maintained
+// across multiple messages via --input-format stream-json.
 type claudeCodeSession struct {
 	ctx         context.Context
 	cfg         config.ClaudeCodeConfig
 	security    *config.SecurityConfig
-	sessionID   string // Claude Code's native session ID for --resume
+	sessionID   string // Claude Code's native session ID
 	permHandler func(tool, description, resource string) bool
 
-	output chan Output
-	mu     sync.Mutex
 	cmd    *exec.Cmd
-	done   chan struct{} // closed when current process exits
-	closed bool
+	stdin  io.WriteCloser
+	output chan Output
+	done   chan struct{} // closed when process exits
+
+	mu           sync.Mutex
+	started      bool
+	closed       bool
+	turnComplete atomic.Bool // prevents double ExitCode on result + process exit
 }
 
-func (s *claudeCodeSession) Send(ctx context.Context, input []byte) error {
+// startProcess spawns the persistent Claude Code process.
+// Called lazily on first Send() after SetResumeSessionID has been applied.
+func (s *claudeCodeSession) startProcess() error {
 	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return fmt.Errorf("session closed")
+	if s.started {
+		// Check if process is still running.
+		if s.done != nil {
+			select {
+			case <-s.done:
+				// Process exited, need restart.
+				s.started = false
+			default:
+				// Process still running.
+				s.mu.Unlock()
+				return nil
+			}
+		}
 	}
+	sid := s.sessionID
 	s.mu.Unlock()
 
-	args := []string{"-p", "--output-format", "stream-json", "--verbose"}
+	s.turnComplete.Store(false)
+
+	args := []string{
+		"-p",
+		"--input-format", "stream-json",
+		"--output-format", "stream-json",
+		"--verbose",
+	}
 
 	// Permission mode - security config takes precedence.
 	permMode := s.cfg.PermissionMode
@@ -99,18 +126,17 @@ func (s *claudeCodeSession) Send(ctx context.Context, input []byte) error {
 	}
 
 	// Resume with native session ID.
-	if s.sessionID != "" {
-		args = append(args, "--resume", s.sessionID)
+	if sid != "" {
+		args = append(args, "--resume", sid)
 	}
 
-	// The prompt text is the final argument.
-	args = append(args, string(input))
+	cmd := exec.CommandContext(s.ctx, s.cfg.Command, args...)
 
-	cmd := exec.CommandContext(ctx, s.cfg.Command, args...)
 	// Working directory — validated with fallback.
 	if dir := resolveWorkDir(s.cfg.WorkDir, s.security); dir != "" {
 		cmd.Dir = dir
 	}
+
 	// Filter out CLAUDECODE env var to prevent nested-session detection.
 	for _, e := range os.Environ() {
 		if !strings.HasPrefix(e, "CLAUDECODE=") {
@@ -121,6 +147,10 @@ func (s *claudeCodeSession) Send(ctx context.Context, input []byte) error {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("stdin pipe: %w", err)
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("stdout pipe: %w", err)
@@ -134,18 +164,17 @@ func (s *claudeCodeSession) Send(ctx context.Context, input []byte) error {
 		return fmt.Errorf("start claude process: %w", err)
 	}
 
+	done := make(chan struct{})
+
 	s.mu.Lock()
 	s.cmd = cmd
-	s.done = make(chan struct{})
+	s.stdin = stdin
+	s.done = done
+	s.started = true
 	s.mu.Unlock()
 
-	done := s.done
-
-	// Read stderr in background (non-NDJSON, just raw lines).
-	var wg sync.WaitGroup
-	wg.Add(1)
+	// Read stderr in background.
 	go func() {
-		defer wg.Done()
 		scanner := bufio.NewScanner(stderr)
 		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 		for scanner.Scan() {
@@ -157,9 +186,7 @@ func (s *claudeCodeSession) Send(ctx context.Context, input []byte) error {
 	}()
 
 	// Read NDJSON from stdout.
-	wg.Add(1)
 	go func() {
-		defer wg.Done()
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 		for scanner.Scan() {
@@ -168,29 +195,75 @@ func (s *claudeCodeSession) Send(ctx context.Context, input []byte) error {
 		}
 	}()
 
-	// Wait for process to exit, then signal turn complete.
+	// Wait for process exit. Emit ExitCode only if no result event already did.
 	go func() {
-		wg.Wait()
-		waitErr := cmd.Wait()
+		_ = cmd.Wait()
 
-		// Compute exit code.
-		var exitCode *int
-		if cmd.ProcessState != nil {
-			code := cmd.ProcessState.ExitCode()
-			exitCode = &code
+		if !s.turnComplete.Load() {
+			var exitCode *int
+			if cmd.ProcessState != nil {
+				code := cmd.ProcessState.ExitCode()
+				exitCode = &code
+			}
+			if exitCode == nil {
+				code := 1
+				exitCode = &code
+			}
+			s.output <- Output{Channel: "system", Data: nil, ExitCode: exitCode}
 		}
-
-		// Emit final output to signal turn complete.
-		if waitErr != nil && exitCode == nil {
-			code := 1
-			exitCode = &code
-		}
-		s.output <- Output{Channel: "system", Data: nil, ExitCode: exitCode}
 
 		close(done)
 	}()
 
 	return nil
+}
+
+func (s *claudeCodeSession) Send(ctx context.Context, input []byte) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return fmt.Errorf("session closed")
+	}
+
+	needsStart := !s.started
+	if s.started && s.done != nil {
+		select {
+		case <-s.done:
+			needsStart = true
+		default:
+		}
+	}
+	s.mu.Unlock()
+
+	s.turnComplete.Store(false)
+
+	if needsStart {
+		if err := s.startProcess(); err != nil {
+			return err
+		}
+	}
+
+	// Build the stream-json input message.
+	msg := map[string]any{
+		"type": "user",
+		"message": map[string]any{
+			"role":    "user",
+			"content": string(input),
+		},
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal input: %w", err)
+	}
+	data = append(data, '\n')
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stdin == nil {
+		return fmt.Errorf("process not started")
+	}
+	_, err = s.stdin.Write(data)
+	return err
 }
 
 // truncateStr limits s to maxLen characters, appending "..." if truncated.
@@ -208,6 +281,7 @@ const maxToolResultLen = 50000
 func (s *claudeCodeSession) handleStreamEvent(line []byte) {
 	var event struct {
 		Type      string          `json:"type"`
+		Subtype   string          `json:"subtype"`
 		SessionID string          `json:"session_id"`
 		Result    string          `json:"result"`
 		Message   json.RawMessage `json:"message"`
@@ -221,14 +295,33 @@ func (s *claudeCodeSession) handleStreamEvent(line []byte) {
 	}
 
 	switch event.Type {
+	case "system":
+		// Init event carries session_id and subtype "init".
+		if event.Subtype == "init" {
+			if event.SessionID != "" {
+				s.mu.Lock()
+				s.sessionID = event.SessionID
+				s.mu.Unlock()
+			}
+			return // Don't emit init as output.
+		}
+		// Regular system message.
+		var msgStr string
+		if err := json.Unmarshal(event.Message, &msgStr); err == nil && msgStr != "" {
+			s.output <- Output{Channel: "system", Data: []byte(msgStr)}
+		}
+
 	case "result":
-		// Save session ID for --resume on next Send().
+		// Save session ID for future resume / restart.
 		if event.SessionID != "" {
 			s.mu.Lock()
 			s.sessionID = event.SessionID
 			s.mu.Unlock()
 		}
-		// Don't emit result text — it duplicates the assistant event content.
+		// Signal turn completion — process stays alive for next message.
+		s.turnComplete.Store(true)
+		code := 0
+		s.output <- Output{Channel: "system", Data: nil, ExitCode: &code}
 
 	case "assistant":
 		// Parse message.content[] blocks.
@@ -249,7 +342,12 @@ func (s *claudeCodeSession) handleStreamEvent(line []byte) {
 						s.output <- Output{Channel: "stdout", Data: []byte(c.Text)}
 					}
 				case "tool_use":
-					// Emit structured tool call on "tool" channel.
+					// Detect interactive tools and emit on "question" channel
+					// so the UI can render them as interactive elements.
+					channel := "tool"
+					if isInteractiveTool(c.Name) {
+						channel = "question"
+					}
 					toolData := map[string]any{
 						"type":  "tool_use",
 						"id":    c.ID,
@@ -257,7 +355,7 @@ func (s *claudeCodeSession) handleStreamEvent(line []byte) {
 						"input": json.RawMessage(c.Input),
 					}
 					if data, err := json.Marshal(toolData); err == nil {
-						s.output <- Output{Channel: "tool", Data: data}
+						s.output <- Output{Channel: channel, Data: data}
 					}
 				case "thinking":
 					if c.Text != "" {
@@ -306,13 +404,6 @@ func (s *claudeCodeSession) handleStreamEvent(line []byte) {
 			}
 		}
 
-	case "system":
-		// System events — emit as system channel.
-		var msgStr string
-		if err := json.Unmarshal(event.Message, &msgStr); err == nil && msgStr != "" {
-			s.output <- Output{Channel: "system", Data: []byte(msgStr)}
-		}
-
 	default:
 		// Unknown event types (content_block_start, content_block_delta, etc.)
 		// are intermediate streaming events. Skip silently.
@@ -345,6 +436,18 @@ func extractToolResultText(raw json.RawMessage) string {
 		return strings.Join(texts, "\n")
 	}
 	return string(raw)
+}
+
+// interactiveTools are Claude Code tools that require user interaction
+// and cannot function in pipe mode. These get routed to the UI.
+var interactiveTools = map[string]bool{
+	"AskUserQuestion": true,
+	"EnterPlanMode":   true,
+	"ExitPlanMode":    true,
+}
+
+func isInteractiveTool(name string) bool {
+	return interactiveTools[name]
 }
 
 func (s *claudeCodeSession) SetPermissionHandler(handler func(tool, description, resource string) bool) {
@@ -380,10 +483,15 @@ func (s *claudeCodeSession) Stop() error {
 func (s *claudeCodeSession) Close() error {
 	s.mu.Lock()
 	s.closed = true
+	stdin := s.stdin
 	cmd := s.cmd
 	done := s.done
 	s.mu.Unlock()
 
+	// Close stdin to signal EOF — process should exit gracefully.
+	if stdin != nil {
+		_ = stdin.Close()
+	}
 	if cmd != nil && cmd.Process != nil {
 		_ = cmd.Process.Kill()
 	}

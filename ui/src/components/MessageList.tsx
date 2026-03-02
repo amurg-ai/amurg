@@ -9,6 +9,8 @@ import {
   JsonRenderer,
   CollapsibleOutput,
   FileRenderer,
+  ToolCallRenderer,
+  QuestionRenderer,
 } from "./renderers";
 
 function formatElapsed(ms: number): string {
@@ -180,6 +182,12 @@ function MessageContent({
   switch (type) {
     case "file":
       return <FileRenderer content={content} sessionId={sessionId} direction={direction} />;
+
+    case "question":
+      return <QuestionRenderer content={content} sessionId={sessionId} />;
+
+    case "tool":
+      return <ToolCallRenderer content={content} />;
 
     case "ansi":
       return (

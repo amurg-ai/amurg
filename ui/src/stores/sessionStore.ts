@@ -180,6 +180,13 @@ export const useSessionStore = create<SessionState>((set, get) => {
       get().cleanupSession(payload.session_id);
     });
 
+    socket.on("error", (env: Envelope) => {
+      const payload = env.payload as { code?: string; message?: string };
+      if (payload?.message) {
+        get().addToast(payload.message, "error");
+      }
+    });
+
     socket.on("permission.request", (env: Envelope) => {
       const req = env.payload as PermissionRequest;
       const { pendingPermissions, sessionToolAllowlist } = get();
