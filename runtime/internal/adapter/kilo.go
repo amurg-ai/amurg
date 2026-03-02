@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -54,8 +53,7 @@ func (a *KiloAdapter) ListNativeSessions() ([]NativeSessionEntry, error) {
 
 // listKiloSessionsFromCLI tries to get session list from the kilo CLI.
 func listKiloSessionsFromCLI() ([]NativeSessionEntry, error) {
-	cmd := exec.Command("kilo", "session", "list", "--json")
-	cmd.Env = append(os.Environ(), "KILO_EPHEMERAL_MODE=true")
+	cmd := exec.Command("kilo", "session", "list", "--format", "json", "-n", "50")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -64,9 +62,9 @@ func listKiloSessionsFromCLI() ([]NativeSessionEntry, error) {
 	var sessions []struct {
 		ID        string `json:"id"`
 		Title     string `json:"title"`
-		CreatedAt string `json:"createdAt"`
-		UpdatedAt string `json:"updatedAt"`
-		Messages  int    `json:"messages"`
+		Created   int64  `json:"created"`   // unix millis
+		Updated   int64  `json:"updated"`   // unix millis
+		Directory string `json:"directory"`
 	}
 	if err := json.Unmarshal(out, &sessions); err != nil {
 		return nil, err
@@ -74,17 +72,18 @@ func listKiloSessionsFromCLI() ([]NativeSessionEntry, error) {
 
 	entries := make([]NativeSessionEntry, 0, len(sessions))
 	for _, s := range sessions {
-		entries = append(entries, NativeSessionEntry{
-			SessionID:    s.ID,
-			Summary:      s.Title,
-			MessageCount: s.Messages,
-			Created:      s.CreatedAt,
-			Modified:     s.UpdatedAt,
-		})
-	}
-
-	if len(entries) > 50 {
-		entries = entries[:50]
+		nse := NativeSessionEntry{
+			SessionID:   s.ID,
+			Summary:     s.Title,
+			ProjectPath: s.Directory,
+		}
+		if s.Created > 0 {
+			nse.Created = time.UnixMilli(s.Created).Format(time.RFC3339)
+		}
+		if s.Updated > 0 {
+			nse.Modified = time.UnixMilli(s.Updated).Format(time.RFC3339)
+		}
+		entries = append(entries, nse)
 	}
 
 	return entries, nil
@@ -184,43 +183,26 @@ func (s *kiloSession) Send(ctx context.Context, input []byte) error {
 	sid := s.sessionID
 	s.mu.Unlock()
 
-	args := []string{"run", "--auto", "--json"}
+	args := []string{"run", "--auto", "--format", "json"}
 
-	// Permission mode from security config.
-	permMode := ""
-	if s.security != nil && s.security.PermissionMode != "" {
-		permMode = s.security.PermissionMode
-	}
-	if permMode == "skip" {
-		args = append(args, "--yolo")
-	}
-
-	// Model and provider via CLI flags (preferred over env vars).
+	// Model in provider/model format (e.g. "anthropic/claude-sonnet-4").
 	if s.cfg.Model != "" {
-		args = append(args, "--model", s.cfg.Model)
-	}
-	if s.cfg.Provider != "" {
-		args = append(args, "--provider", s.cfg.Provider)
+		model := s.cfg.Model
+		// If provider is set separately, combine into provider/model format.
+		if s.cfg.Provider != "" && !strings.Contains(model, "/") {
+			model = s.cfg.Provider + "/" + model
+		}
+		args = append(args, "--model", model)
 	}
 
-	// Operating mode.
+	// Agent mode (maps to --agent flag: "code", "architect", "ask", etc.).
 	if s.cfg.Mode != "" {
-		args = append(args, "--mode", s.cfg.Mode)
-	}
-
-	// System prompt.
-	if s.cfg.SystemPrompt != "" {
-		args = append(args, "--append-system-prompt", s.cfg.SystemPrompt)
-	}
-
-	// Timeout.
-	if s.cfg.Timeout > 0 {
-		args = append(args, "--timeout", strconv.Itoa(s.cfg.Timeout))
+		args = append(args, "--agent", s.cfg.Mode)
 	}
 
 	// Working directory.
 	if dir := resolveWorkDir(s.cfg.WorkDir, s.security); dir != "" {
-		args = append(args, "--workspace", dir)
+		args = append(args, "--dir", dir)
 	}
 
 	// Session continuity: use --session with session ID, fallback to --continue.
@@ -308,19 +290,28 @@ func (s *kiloSession) Send(ctx context.Context, input []byte) error {
 	return nil
 }
 
-// handleKiloMessage parses a single JSON message from kilo run --auto --json.
+// handleKiloMessage parses a single NDJSON event from kilo run --format json.
+// The format emits events: step_start, tool_use, text, step_finish.
 func (s *kiloSession) handleKiloMessage(line []byte) {
-	var msg struct {
-		Timestamp int64  `json:"timestamp,omitempty"`
-		Source    string `json:"source,omitempty"`    // "cli" or "extension"
-		Type      string `json:"type,omitempty"`
-		Say       string `json:"say,omitempty"`       // "text", "reasoning", "tool", etc.
-		ID        string `json:"id,omitempty"`
-		Partial   bool   `json:"partial,omitempty"`
-		Content   string `json:"content,omitempty"`
-		Metadata  json.RawMessage `json:"metadata,omitempty"`
+	var event struct {
+		Type      string `json:"type"`
+		SessionID string `json:"sessionID,omitempty"`
+		Part      struct {
+			ID        string          `json:"id"`
+			SessionID string          `json:"sessionID"`
+			MessageID string          `json:"messageID"`
+			Type      string          `json:"type"` // "step-start", "step-finish", "tool", "text"
+			Text      string          `json:"text,omitempty"`
+			Reason    string          `json:"reason,omitempty"` // "stop", "tool-calls"
+			CallID    string          `json:"callID,omitempty"`
+			Tool      string          `json:"tool,omitempty"`
+			State     json.RawMessage `json:"state,omitempty"`
+			Metadata  json.RawMessage `json:"metadata,omitempty"`
+			Cost      float64         `json:"cost,omitempty"`
+			Tokens    json.RawMessage `json:"tokens,omitempty"`
+		} `json:"part"`
 	}
-	if err := json.Unmarshal(line, &msg); err != nil {
+	if err := json.Unmarshal(line, &event); err != nil {
 		// Not valid JSON — emit as raw stdout.
 		cp := make([]byte, len(line))
 		copy(cp, line)
@@ -328,149 +319,136 @@ func (s *kiloSession) handleKiloMessage(line []byte) {
 		return
 	}
 
-	// Extract session ID from welcome message metadata.
-	if msg.Type == "welcome" && len(msg.Metadata) > 0 {
-		var meta struct {
-			SessionID string `json:"sessionId"`
+	// Extract session ID from any event that carries it.
+	if event.SessionID != "" {
+		s.mu.Lock()
+		if s.sessionID == "" || s.sessionID != event.SessionID {
+			s.sessionID = event.SessionID
 		}
-		if err := json.Unmarshal(msg.Metadata, &meta); err == nil && meta.SessionID != "" {
-			s.mu.Lock()
-			if s.sessionID == "" {
-				s.sessionID = meta.SessionID
-			}
-			s.mu.Unlock()
+		s.mu.Unlock()
+	} else if event.Part.SessionID != "" {
+		s.mu.Lock()
+		if s.sessionID == "" {
+			s.sessionID = event.Part.SessionID
 		}
-		return // Don't emit welcome messages.
+		s.mu.Unlock()
 	}
 
-	// Skip partial streaming messages — wait for the complete version.
-	// This avoids duplicating content that arrives incrementally.
-	if msg.Partial {
-		return
-	}
-
-	// Route based on the "say" field (message subtype).
-	switch msg.Say {
+	switch event.Type {
 	case "text":
-		if msg.Content != "" {
-			s.output <- Output{Channel: "stdout", Data: []byte(msg.Content)}
+		// Agent text response.
+		if event.Part.Text != "" {
+			s.output <- Output{Channel: "stdout", Data: []byte(event.Part.Text)}
 		}
 
-	case "reasoning":
-		if msg.Content != "" {
-			s.output <- Output{Channel: "stdout", Data: []byte("*" + truncateStr(msg.Content, 500) + "*")}
-		}
+	case "tool_use":
+		// Tool call with state containing input/output/status.
+		s.handleKiloToolEvent(event.Part.CallID, event.Part.Tool, event.Part.State, event.Part.Metadata)
 
-	case "tool":
-		// Tool call/result — parse the content as structured tool data.
-		if msg.Content != "" {
-			s.handleKiloToolMessage(msg.ID, msg.Content)
-		}
+	case "step_start":
+		// Step beginning — skip silently.
 
-	case "command", "command_output":
-		// Command execution and output.
-		if msg.Content != "" {
-			// Try to parse as structured tool data.
-			toolData := map[string]any{
-				"type": "tool_use",
-				"id":   msg.ID,
-				"name": "execute_command",
-				"input": map[string]any{
-					"command": msg.Content,
-				},
+	case "step_finish":
+		// Step completion — emit token usage on system channel for observability.
+		if len(event.Part.Tokens) > 0 {
+			usageData := map[string]any{
+				"type":   "usage",
+				"tokens": json.RawMessage(event.Part.Tokens),
+				"cost":   event.Part.Cost,
 			}
-			if data, err := json.Marshal(toolData); err == nil {
-				s.output <- Output{Channel: "tool", Data: data}
+			if data, err := json.Marshal(usageData); err == nil {
+				s.output <- Output{Channel: "system", Data: data}
 			}
-		}
-
-	case "completion_result":
-		if msg.Content != "" {
-			s.output <- Output{Channel: "stdout", Data: []byte(msg.Content)}
 		}
 
 	case "error":
-		if msg.Content != "" {
-			s.output <- Output{Channel: "stderr", Data: []byte(msg.Content)}
-		}
+		cp := make([]byte, len(line))
+		copy(cp, line)
+		s.output <- Output{Channel: "stderr", Data: cp}
 
 	default:
-		// For unrecognized say types, emit content if present.
-		if msg.Content != "" {
-			s.output <- Output{Channel: "stdout", Data: []byte(msg.Content)}
-		} else if msg.Type != "" {
-			// Emit the raw JSON for event types without textual content.
-			cp := make([]byte, len(line))
-			copy(cp, line)
-			s.output <- Output{Channel: "stdout", Data: cp}
-		}
+		// Unknown event types — skip silently.
 	}
 }
 
-// handleKiloToolMessage parses tool call content and emits structured tool data.
-func (s *kiloSession) handleKiloToolMessage(id, content string) {
-	// Try to parse the content as JSON (tool calls are often JSON-encoded).
-	var toolInfo struct {
-		Tool      string          `json:"tool"`
-		Path      string          `json:"path,omitempty"`
-		Command   string          `json:"command,omitempty"`
-		Content   string          `json:"content,omitempty"`
-		Diff      string          `json:"diff,omitempty"`
-		Arguments json.RawMessage `json:"arguments,omitempty"`
-		Result    string          `json:"result,omitempty"`
-		Status    string          `json:"status,omitempty"`
+// handleKiloToolEvent processes a tool_use event from kilo --format json.
+// The state field contains status, input, output, title, and metadata.
+func (s *kiloSession) handleKiloToolEvent(callID, toolName string, state, metadata json.RawMessage) {
+	var toolState struct {
+		Status string          `json:"status"` // "running", "completed", "error"
+		Input  json.RawMessage `json:"input,omitempty"`
+		Output string          `json:"output,omitempty"`
+		Title  string          `json:"title,omitempty"`
+		Metadata struct {
+			Output      string `json:"output,omitempty"`
+			Exit        int    `json:"exit"`
+			Description string `json:"description,omitempty"`
+			Truncated   bool   `json:"truncated,omitempty"`
+		} `json:"metadata"`
+		Time struct {
+			Start int64 `json:"start,omitempty"`
+			End   int64 `json:"end,omitempty"`
+		} `json:"time"`
 	}
-	if err := json.Unmarshal([]byte(content), &toolInfo); err == nil && toolInfo.Tool != "" {
-		// Structured tool call.
-		input := map[string]any{}
-		if toolInfo.Path != "" {
-			input["path"] = toolInfo.Path
-		}
-		if toolInfo.Command != "" {
-			input["command"] = toolInfo.Command
-		}
-		if len(toolInfo.Arguments) > 0 {
-			input["arguments"] = json.RawMessage(toolInfo.Arguments)
-		}
-
-		toolData := map[string]any{
-			"type":  "tool_use",
-			"id":    id,
-			"name":  toolInfo.Tool,
-			"input": input,
-		}
-		if data, err := json.Marshal(toolData); err == nil {
-			s.output <- Output{Channel: "tool", Data: data}
-		}
-
-		// Emit result if present.
-		if toolInfo.Result != "" {
-			resultContent := toolInfo.Result
-			if len(resultContent) > maxToolResultLen {
-				resultContent = resultContent[:maxToolResultLen] + "\n... (truncated)"
-			}
-			resultData := map[string]any{
-				"type":        "tool_result",
-				"tool_use_id": id,
-				"content":     resultContent,
-				"is_error":    toolInfo.Status == "error",
-			}
-			if data, err := json.Marshal(resultData); err == nil {
-				s.output <- Output{Channel: "tool", Data: data}
-			}
-		}
-		return
+	if len(state) > 0 {
+		_ = json.Unmarshal(state, &toolState)
 	}
 
-	// Not structured — emit as plain tool output.
+	// Build input from the state.
+	input := toolState.Input
+	if len(input) == 0 {
+		// Fall back to empty object.
+		input = json.RawMessage(`{}`)
+	}
+
+	// Emit structured tool_use on the "tool" channel.
 	toolData := map[string]any{
-		"type":    "tool_use",
-		"id":      id,
-		"name":    "unknown",
-		"input":   map[string]any{"raw": content},
+		"type":  "tool_use",
+		"id":    callID,
+		"name":  toolName,
+		"input": json.RawMessage(input),
 	}
 	if data, err := json.Marshal(toolData); err == nil {
 		s.output <- Output{Channel: "tool", Data: data}
+	}
+
+	// Emit tool_result if the tool has completed with output.
+	if toolState.Status == "completed" || toolState.Output != "" || toolState.Metadata.Output != "" {
+		resultContent := toolState.Output
+		if resultContent == "" {
+			resultContent = toolState.Metadata.Output
+		}
+		if len(resultContent) > maxToolResultLen {
+			resultContent = resultContent[:maxToolResultLen] + "\n... (truncated)"
+		}
+		isError := toolState.Status == "error" || toolState.Metadata.Exit != 0
+		resultData := map[string]any{
+			"type":        "tool_result",
+			"tool_use_id": callID,
+			"content":     resultContent,
+			"is_error":    isError,
+		}
+		if data, err := json.Marshal(resultData); err == nil {
+			s.output <- Output{Channel: "tool", Data: data}
+		}
+	}
+
+	// Extract reasoning from event metadata (openrouter reasoning_details).
+	if len(metadata) > 0 {
+		var meta struct {
+			Openrouter struct {
+				ReasoningDetails []struct {
+					Text string `json:"text"`
+				} `json:"reasoning_details,omitempty"`
+			} `json:"openrouter"`
+		}
+		if err := json.Unmarshal(metadata, &meta); err == nil {
+			for _, r := range meta.Openrouter.ReasoningDetails {
+				if r.Text != "" {
+					s.output <- Output{Channel: "stdout", Data: []byte("*" + truncateStr(r.Text, 500) + "*")}
+				}
+			}
+		}
 	}
 }
 
@@ -568,52 +546,52 @@ func (s *kiloSession) LoadNativeHistory() []Output {
 }
 
 // parseKiloExportedHistory parses the JSON output from `kilo export`.
+// The format has an info object and a messages array with role + parts.
 func parseKiloExportedHistory(data []byte) []Output {
-	// The export format is a JSON object with a messages array.
 	var export struct {
 		Messages []struct {
-			Type    string `json:"type"`
-			Say     string `json:"say"`
-			Content string `json:"content"`
-			ID      string `json:"id"`
+			Info struct {
+				Role string `json:"role"`
+			} `json:"info"`
+			Parts []struct {
+				Type   string          `json:"type"` // "text", "tool", "reasoning", "step-start", "step-finish"
+				Text   string          `json:"text,omitempty"`
+				ID     string          `json:"id,omitempty"`
+				CallID string          `json:"callID,omitempty"`
+				Tool   string          `json:"tool,omitempty"`
+				State  json.RawMessage `json:"state,omitempty"`
+			} `json:"parts"`
 		} `json:"messages"`
 	}
 	if err := json.Unmarshal(data, &export); err != nil {
-		// Try as raw array of messages.
-		if err := json.Unmarshal(data, &export.Messages); err != nil {
-			return nil
-		}
+		return nil
 	}
 
 	var outputs []Output
 	for _, msg := range export.Messages {
-		switch {
-		case msg.Type == "say" && msg.Say == "text" && msg.Content != "":
-			// Determine if this is user or assistant based on message structure.
-			// Messages from the extension/agent are assistant messages.
-			outputs = append(outputs, Output{Channel: "history_assistant", Data: []byte(msg.Content)})
+		role := msg.Info.Role
+		for _, part := range msg.Parts {
+			switch {
+			case role == "user" && part.Type == "text" && part.Text != "":
+				outputs = append(outputs, Output{Channel: "history_user", Data: []byte(part.Text)})
 
-		case msg.Type == "say" && msg.Say == "tool" && msg.Content != "":
-			toolData := map[string]any{
-				"type":    "tool_use",
-				"id":      msg.ID,
-				"name":    "unknown",
-				"input":   map[string]any{"raw": msg.Content},
-			}
-			if data, err := json.Marshal(toolData); err == nil {
-				outputs = append(outputs, Output{Channel: "history_tool", Data: data})
-			}
+			case role == "assistant" && part.Type == "text" && part.Text != "":
+				outputs = append(outputs, Output{Channel: "history_assistant", Data: []byte(part.Text)})
 
-		case msg.Type == "say" && msg.Say == "command" && msg.Content != "":
-			toolData := map[string]any{
-				"type": "tool_use",
-				"name": "execute_command",
-				"input": map[string]any{
-					"command": msg.Content,
-				},
-			}
-			if data, err := json.Marshal(toolData); err == nil {
-				outputs = append(outputs, Output{Channel: "history_tool", Data: data})
+			case part.Type == "tool" && part.Tool != "":
+				input := part.State
+				if len(input) == 0 {
+					input = json.RawMessage(`{}`)
+				}
+				toolData := map[string]any{
+					"type":  "tool_use",
+					"id":    part.CallID,
+					"name":  part.Tool,
+					"input": json.RawMessage(input),
+				}
+				if data, err := json.Marshal(toolData); err == nil {
+					outputs = append(outputs, Output{Channel: "history_tool", Data: data})
+				}
 			}
 		}
 	}
