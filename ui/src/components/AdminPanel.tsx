@@ -24,6 +24,19 @@ function RefreshButton({ onClick }: { onClick: () => void }) {
   );
 }
 
+// Well-known tools per profile for the checkbox grid.
+const PROFILE_TOOLS: Record<string, string[]> = {
+  "claude-code": ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch", "NotebookEdit"],
+  "github-copilot": ["shell(*)", "shell(git *)", "shell(npm *)", "shell(node *)"],
+};
+
+const PERMISSION_MODES = [
+  { value: "", label: "Default" },
+  { value: "skip", label: "Skip" },
+  { value: "strict", label: "Strict" },
+  { value: "auto", label: "Auto" },
+] as const;
+
 function AgentConfigEditor({
   agent,
   onBack,
@@ -56,11 +69,18 @@ function AgentConfigEditor({
   const initSec = parseSecurity();
   const initLim = parseLimits();
 
+  const knownTools = PROFILE_TOOLS[agent.profile] || [];
+  const initAllowed = new Set(initSec.allowed_tools || []);
+  // Split initial tools into known (checkboxes) and custom (text input).
+  const initChecked = knownTools.filter(t => initAllowed.has(t));
+  const initCustom = [...initAllowed].filter(t => !knownTools.includes(t));
+
   const [cwd, setCwd] = useState(initSec.cwd || "");
   const [permissionMode, setPermissionMode] = useState(initSec.permission_mode || "");
   const [allowedPaths, setAllowedPaths] = useState((initSec.allowed_paths || []).join("\n"));
   const [deniedPaths, setDeniedPaths] = useState((initSec.denied_paths || []).join("\n"));
-  const [allowedTools, setAllowedTools] = useState((initSec.allowed_tools || []).join("\n"));
+  const [checkedTools, setCheckedTools] = useState<Set<string>>(new Set(initChecked));
+  const [customTools, setCustomTools] = useState(initCustom.join("\n"));
   const [envWhitelist, setEnvWhitelist] = useState((initSec.env_whitelist || []).join("\n"));
   const [maxSessions, setMaxSessions] = useState(initLim.max_sessions?.toString() || "");
   const [sessionTimeout, setSessionTimeout] = useState(initLim.session_timeout || "");
@@ -69,6 +89,15 @@ function AgentConfigEditor({
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
 
   const splitLines = (s: string) => s.split("\n").map(l => l.trim()).filter(Boolean);
+
+  const toggleTool = (tool: string) => {
+    setCheckedTools(prev => {
+      const next = new Set(prev);
+      if (next.has(tool)) next.delete(tool);
+      else next.add(tool);
+      return next;
+    });
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -81,7 +110,7 @@ function AgentConfigEditor({
       if (ap.length) security.allowed_paths = ap;
       const dp = splitLines(deniedPaths);
       if (dp.length) security.denied_paths = dp;
-      const at = splitLines(allowedTools);
+      const at = [...checkedTools, ...splitLines(customTools)];
       if (at.length) security.allowed_tools = at;
       const ew = splitLines(envWhitelist);
       if (ew.length) security.env_whitelist = ew;
@@ -133,16 +162,25 @@ function AgentConfigEditor({
               placeholder="/path/to/project"
               className="w-full bg-slate-700 text-slate-200 text-sm rounded px-3 py-2 border border-slate-600 focus:border-teal-500 focus:outline-none" />
           </label>
-          <label className="space-y-1">
+          <div className="space-y-1">
             <span className="text-xs text-slate-400">Permission Mode</span>
-            <select value={permissionMode} onChange={e => setPermissionMode(e.target.value)}
-              className="w-full bg-slate-700 text-slate-200 text-sm rounded px-3 py-2 border border-slate-600 focus:border-teal-500 focus:outline-none">
-              <option value="">Default</option>
-              <option value="skip">Skip</option>
-              <option value="strict">Strict</option>
-              <option value="auto">Auto</option>
-            </select>
-          </label>
+            <div className="flex rounded-lg border border-slate-600 overflow-hidden">
+              {PERMISSION_MODES.map(mode => (
+                <button
+                  key={mode.value}
+                  type="button"
+                  onClick={() => setPermissionMode(mode.value)}
+                  className={`flex-1 text-xs py-2 px-1 transition-colors ${
+                    permissionMode === mode.value
+                      ? "bg-teal-600 text-white"
+                      : "bg-slate-700 text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <label className="space-y-1">
@@ -157,11 +195,44 @@ function AgentConfigEditor({
           </label>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <label className="space-y-1">
-            <span className="text-xs text-slate-400">Allowed Tools (one per line)</span>
-            <textarea value={allowedTools} onChange={e => setAllowedTools(e.target.value)} rows={3}
+          <div className="space-y-2">
+            <span className="text-xs text-slate-400">Allowed Tools</span>
+            {knownTools.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {knownTools.map(tool => (
+                  <label key={tool}
+                    className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border cursor-pointer select-none transition-colors ${
+                      checkedTools.has(tool)
+                        ? "bg-teal-900/50 border-teal-600 text-teal-300"
+                        : "bg-slate-700 border-slate-600 text-slate-400 hover:text-slate-300"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checkedTools.has(tool)}
+                      onChange={() => toggleTool(tool)}
+                      className="sr-only"
+                    />
+                    <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${
+                      checkedTools.has(tool)
+                        ? "bg-teal-600 border-teal-500"
+                        : "border-slate-500"
+                    }`}>
+                      {checkedTools.has(tool) && (
+                        <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                        </svg>
+                      )}
+                    </span>
+                    {tool}
+                  </label>
+                ))}
+              </div>
+            )}
+            <textarea value={customTools} onChange={e => setCustomTools(e.target.value)} rows={2}
+              placeholder={knownTools.length > 0 ? "Additional tools (one per line)" : "Tool names (one per line)"}
               className="w-full bg-slate-700 text-slate-200 text-sm rounded px-3 py-2 border border-slate-600 focus:border-teal-500 focus:outline-none font-mono" />
-          </label>
+          </div>
           <label className="space-y-1">
             <span className="text-xs text-slate-400">Env Whitelist (one per line)</span>
             <textarea value={envWhitelist} onChange={e => setEnvWhitelist(e.target.value)} rows={3}
