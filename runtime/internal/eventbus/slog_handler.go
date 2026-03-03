@@ -2,6 +2,7 @@ package eventbus
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 )
 
@@ -36,11 +37,11 @@ func (h *SlogHandler) Handle(ctx context.Context, r slog.Record) error {
 		entry["group"] = h.group
 	}
 	r.Attrs(func(a slog.Attr) bool {
-		entry[a.Key] = a.Value.Any()
+		entry[a.Key] = slogAttrValue(a)
 		return true
 	})
 	for _, a := range h.attrs {
-		entry[a.Key] = a.Value.Any()
+		entry[a.Key] = slogAttrValue(a)
 	}
 	h.bus.PublishType(LogEntry, entry)
 
@@ -55,6 +56,21 @@ func (h *SlogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 		attrs: append(h.attrs, attrs...),
 		group: h.group,
 	}
+}
+
+// slogAttrValue extracts a JSON-safe value from a slog attribute.
+// error types are converted to strings since json.Marshal can't access
+// their unexported fields (producing {} instead of the error message).
+func slogAttrValue(a slog.Attr) any {
+	v := a.Value.Any()
+	if err, ok := v.(error); ok {
+		return err.Error()
+	}
+	// Also handle fmt.Stringer for good measure.
+	if s, ok := v.(fmt.Stringer); ok {
+		return s.String()
+	}
+	return v
 }
 
 // WithGroup returns a new handler with the given group.
