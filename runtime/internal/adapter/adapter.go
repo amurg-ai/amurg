@@ -90,6 +90,13 @@ type WriterAdapter interface {
 	SetOutput(stdout, stderr io.Writer)
 }
 
+// SecurityUpdater is an optional interface for agent sessions that support
+// dynamic security config updates. Returns true if the process needs to be
+// restarted for the new config to take effect (e.g. CLI flag changes).
+type SecurityUpdater interface {
+	UpdateSecurity(security *config.SecurityConfig) (restartRequired bool)
+}
+
 // NativeSessionLister is an optional interface for adapters that can list
 // native sessions from their local storage.
 type NativeSessionLister interface {

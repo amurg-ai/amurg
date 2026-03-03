@@ -66,6 +66,7 @@ type Router struct {
 	permissionTimeout     time.Duration
 	pendingPerms          map[string]*pendingPermission
 	pendingNativeSessions map[string]*clientConn // request_id -> requesting client
+	pendingConfigAcks     map[string]chan protocol.AgentConfigAck // agent_id -> ack channel
 	fileStoragePath       string
 	maxFileBytes          int64
 
@@ -159,6 +160,7 @@ func New(s store.Store, ap auth.Provider, ra auth.RuntimeAuthProvider, logger *s
 		permissionTimeout:     permTimeout,
 		pendingPerms:          make(map[string]*pendingPermission),
 		pendingNativeSessions: make(map[string]*clientConn),
+		pendingConfigAcks:     make(map[string]chan protocol.AgentConfigAck),
 		fileStoragePath:       opts.FileStoragePath,
 		maxFileBytes:          opts.MaxFileBytes,
 		runtimes:              make(map[string]*runtimeConn),
@@ -799,6 +801,16 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 		} else {
 			r.logger.Warn("agent config update rejected", "agent_id", ack.AgentID, "runtime", runtimeID, "error", ack.Error)
 		}
+		// Signal any waiting PushAgentConfigUpdate caller.
+		r.mu.RLock()
+		ch, ok := r.pendingConfigAcks[ack.AgentID]
+		r.mu.RUnlock()
+		if ok {
+			select {
+			case ch <- ack:
+			default:
+			}
+		}
 
 	case protocol.TypeNativeSessionsResponse:
 		// Forward native sessions response to the client that requested it.
@@ -1424,9 +1436,15 @@ func (r *Router) BroadcastSessionClosed(sessionID string) {
 	})
 }
 
+// ConfigUpdateResult contains the outcome of a config push to a runtime.
+type ConfigUpdateResult struct {
+	Pushed bool   // true if the message was sent to the runtime
+	Error  string // non-empty if the runtime rejected the update
+}
+
 // PushAgentConfigUpdate sends a config update to the runtime that owns the agent.
-// Returns true if the runtime was online and the message was sent.
-func (r *Router) PushAgentConfigUpdate(agentID string, security *protocol.SecurityProfile, limits *protocol.AgentLimits) bool {
+// It waits up to 5 seconds for the runtime to acknowledge the update.
+func (r *Router) PushAgentConfigUpdate(agentID string, security *protocol.SecurityProfile, limits *protocol.AgentLimits) ConfigUpdateResult {
 	r.mu.RLock()
 	var target *runtimeConn
 	for _, rt := range r.runtimes {
@@ -1438,8 +1456,19 @@ func (r *Router) PushAgentConfigUpdate(agentID string, security *protocol.Securi
 	r.mu.RUnlock()
 
 	if target == nil {
-		return false
+		return ConfigUpdateResult{Pushed: false}
 	}
+
+	// Register a channel for the ack before sending.
+	ackCh := make(chan protocol.AgentConfigAck, 1)
+	r.mu.Lock()
+	r.pendingConfigAcks[agentID] = ackCh
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		delete(r.pendingConfigAcks, agentID)
+		r.mu.Unlock()
+	}()
 
 	env := protocol.Envelope{
 		Type:      protocol.TypeAgentConfigUpdate,
@@ -1454,16 +1483,25 @@ func (r *Router) PushAgentConfigUpdate(agentID string, security *protocol.Securi
 	data, err := json.Marshal(env)
 	if err != nil {
 		r.logger.Warn("marshal config update failed", "error", err)
-		return false
+		return ConfigUpdateResult{Pushed: false}
 	}
 
 	target.mu.Lock()
-	defer target.mu.Unlock()
-	if err := target.conn.WriteMessage(websocket.TextMessage, data); err != nil {
-		r.logger.Warn("send config update failed", "agent_id", agentID, "error", err)
-		return false
+	sendErr := target.conn.WriteMessage(websocket.TextMessage, data)
+	target.mu.Unlock()
+	if sendErr != nil {
+		r.logger.Warn("send config update failed", "agent_id", agentID, "error", sendErr)
+		return ConfigUpdateResult{Pushed: false}
 	}
-	return true
+
+	// Wait for ack with timeout.
+	select {
+	case ack := <-ackCh:
+		return ConfigUpdateResult{Pushed: true, Error: ack.Error}
+	case <-time.After(5 * time.Second):
+		r.logger.Warn("config update ack timeout", "agent_id", agentID)
+		return ConfigUpdateResult{Pushed: true} // sent but no ack
+	}
 }
 
 func (r *Router) sendToConn(conn *websocket.Conn, msgType, sessionID string, payload any) {

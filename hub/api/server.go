@@ -796,10 +796,10 @@ func (s *Server) handleUpdateAgentConfig(w http.ResponseWriter, r *http.Request)
 	// Validate permission_mode if set.
 	if req.Security != nil && req.Security.PermissionMode != "" {
 		switch req.Security.PermissionMode {
-		case "skip", "strict", "auto":
+		case "skip", "strict", "auto", "acceptEdits", "bypassPermissions", "plan":
 			// valid
 		default:
-			writeError(w, http.StatusBadRequest, "permission_mode must be skip, strict, or auto")
+			writeError(w, http.StatusBadRequest, "permission_mode must be skip, strict, auto, acceptEdits, bypassPermissions, or plan")
 			return
 		}
 	}
@@ -838,22 +838,36 @@ func (s *Server) handleUpdateAgentConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Push to runtime.
-	pushed := s.router.PushAgentConfigUpdate(agentID, req.Security, req.Limits)
+	// Push to runtime and wait for ack.
+	result := s.router.PushAgentConfigUpdate(agentID, req.Security, req.Limits)
 
 	// Audit log.
+	detail := fmt.Sprintf(`{"pushed_to_runtime":%t}`, result.Pushed)
+	if result.Error != "" {
+		detail = fmt.Sprintf(`{"pushed_to_runtime":%t,"runtime_error":%q}`, result.Pushed, result.Error)
+	}
 	if err := s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
 		ID: uuid.New().String(), OrgID: identity.OrgID, Action: "agent.config_update",
 		UserID: identity.UserID, AgentID: agentID,
-		Detail:    json.RawMessage(fmt.Sprintf(`{"pushed_to_runtime":%t}`, pushed)),
+		Detail:    json.RawMessage(detail),
 		CreatedAt: time.Now(),
 	}); err != nil {
 		s.logger.Warn("failed to log audit event", "action", "agent.config_update", "error", err)
 	}
 
+	// If the runtime rejected the update, relay the error.
+	if result.Error != "" {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"status":            "rejected",
+			"pushed_to_runtime": result.Pushed,
+			"error":             result.Error,
+		})
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":            "saved",
-		"pushed_to_runtime": pushed,
+		"pushed_to_runtime": result.Pushed,
 	})
 }
 

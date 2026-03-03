@@ -263,7 +263,9 @@ func (m *Manager) DeliverFile(sessionID, filePath string, meta protocol.FileMeta
 }
 
 // UpdateAgentConfig applies config overrides from the hub to the in-memory agent config.
-// Only affects new sessions; existing sessions already hold a copy of the config.
+// Updates are propagated to running sessions via the SecurityUpdater interface.
+// For persistent-process adapters (e.g. Claude Code), the process is stopped so it
+// restarts with the new CLI flags on the next Send().
 func (m *Manager) UpdateAgentConfig(agentID string, security *protocol.SecurityProfile, limits *protocol.AgentLimits) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -274,11 +276,13 @@ func (m *Manager) UpdateAgentConfig(agentID string, security *protocol.SecurityP
 	}
 
 	if security != nil {
-		// Block remote override of permission_mode to "skip" unless explicitly allowed.
-		if security.PermissionMode == "skip" && !m.cfg.AllowRemotePermissionSkip {
-			m.logger.Warn("blocked remote permission_mode override to 'skip'",
-				"agent_id", agentID)
-			return fmt.Errorf("remote override of permission_mode to 'skip' is not allowed")
+		// Block remote override of permission_mode to "skip" or "bypassPermissions"
+		// unless explicitly allowed.
+		if (security.PermissionMode == "skip" || security.PermissionMode == "bypassPermissions") && !m.cfg.AllowRemotePermissionSkip {
+			m.logger.Warn("blocked remote permission_mode override to skip-equivalent",
+				"agent_id", agentID,
+				"permission_mode", security.PermissionMode)
+			return fmt.Errorf("remote override of permission_mode to %q is not allowed (set allow_remote_permission_skip: true to enable)", security.PermissionMode)
 		}
 
 		if agentCfg.Security == nil {
@@ -298,6 +302,9 @@ func (m *Manager) UpdateAgentConfig(agentID string, security *protocol.SecurityP
 		}
 		if security.AllowedTools != nil {
 			agentCfg.Security.AllowedTools = security.AllowedTools
+		}
+		if security.DisallowedTools != nil {
+			agentCfg.Security.DisallowedTools = security.DisallowedTools
 		}
 		if security.EnvWhitelist != nil {
 			agentCfg.Security.EnvWhitelist = security.EnvWhitelist
@@ -327,6 +334,25 @@ func (m *Manager) UpdateAgentConfig(agentID string, security *protocol.SecurityP
 	}
 
 	m.agentCfgs[agentID] = agentCfg
+
+	// Propagate security config to running sessions for this agent.
+	if security != nil && agentCfg.Security != nil {
+		for _, sess := range m.sessions {
+			if sess.AgentID != agentID {
+				continue
+			}
+			if su, ok := sess.agent.(adapter.SecurityUpdater); ok {
+				restart := su.UpdateSecurity(agentCfg.Security)
+				if restart {
+					// Stop the process — it auto-restarts with new flags on next Send().
+					m.logger.Info("stopping session for security config restart",
+						"session_id", sess.ID, "agent_id", agentID)
+					_ = sess.agent.Stop()
+				}
+			}
+		}
+	}
+
 	return nil
 }
 

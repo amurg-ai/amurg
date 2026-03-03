@@ -180,6 +180,15 @@ func (s *externalSession) Stop() error {
 	return nil
 }
 
+// UpdateSecurity updates the security config. Returns false because the
+// external adapter reads security at each interaction.
+func (s *externalSession) UpdateSecurity(security *config.SecurityConfig) (restartRequired bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.security = security
+	return false
+}
+
 func (s *externalSession) Close() error {
 	s.mu.Lock()
 	if s.closed {

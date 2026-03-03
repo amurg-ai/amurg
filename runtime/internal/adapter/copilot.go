@@ -331,6 +331,15 @@ func (s *copilotSession) Stop() error {
 	return nil
 }
 
+// UpdateSecurity updates the security config. Returns false because the next
+// Send() call spawns a new process that picks up the updated config.
+func (s *copilotSession) UpdateSecurity(security *config.SecurityConfig) (restartRequired bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.security = security
+	return false
+}
+
 func (s *copilotSession) Close() error {
 	s.mu.Lock()
 	s.closed = true

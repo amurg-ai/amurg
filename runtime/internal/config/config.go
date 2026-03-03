@@ -41,12 +41,13 @@ type RuntimeConfig struct {
 
 // SecurityConfig defines security constraints for an agent.
 type SecurityConfig struct {
-	AllowedPaths   []string `json:"allowed_paths,omitempty"`
-	DeniedPaths    []string `json:"denied_paths,omitempty"`
-	AllowedTools   []string `json:"allowed_tools,omitempty"`
-	PermissionMode string   `json:"permission_mode,omitempty"`
-	Cwd            string   `json:"cwd,omitempty"`
-	EnvWhitelist   []string `json:"env_whitelist,omitempty"`
+	AllowedPaths    []string `json:"allowed_paths,omitempty"`
+	DeniedPaths     []string `json:"denied_paths,omitempty"`
+	AllowedTools    []string `json:"allowed_tools,omitempty"`
+	DisallowedTools []string `json:"disallowed_tools,omitempty"`
+	PermissionMode  string   `json:"permission_mode,omitempty"`
+	Cwd             string   `json:"cwd,omitempty"`
+	EnvWhitelist    []string `json:"env_whitelist,omitempty"`
 }
 
 // AgentConfig defines a single agent configuration.
@@ -113,14 +114,15 @@ type CLIConfig struct {
 
 // ClaudeCodeConfig is config for the claude-code profile.
 type ClaudeCodeConfig struct {
-	Command        string            `json:"command,omitempty"`         // default: "claude"
-	WorkDir        string            `json:"work_dir,omitempty"`
-	Env            map[string]string `json:"env,omitempty"`
-	Model          string            `json:"model,omitempty"`           // e.g. "sonnet"
-	PermissionMode string            `json:"permission_mode,omitempty"` // e.g. "dangerously-skip-permissions"
-	MaxTurns       int               `json:"max_turns,omitempty"`
-	AllowedTools   []string          `json:"allowed_tools,omitempty"`
-	SystemPrompt   string            `json:"system_prompt,omitempty"`
+	Command         string            `json:"command,omitempty"`          // default: "claude"
+	WorkDir         string            `json:"work_dir,omitempty"`
+	Env             map[string]string `json:"env,omitempty"`
+	Model           string            `json:"model,omitempty"`            // e.g. "sonnet"
+	PermissionMode  string            `json:"permission_mode,omitempty"`  // e.g. "dangerously-skip-permissions"
+	MaxTurns        int               `json:"max_turns,omitempty"`
+	AllowedTools    []string          `json:"allowed_tools,omitempty"`
+	DisallowedTools []string          `json:"disallowed_tools,omitempty"` // --disallowedTools flags
+	SystemPrompt    string            `json:"system_prompt,omitempty"`
 }
 
 // CopilotConfig is config for the github-copilot profile.
@@ -272,10 +274,10 @@ func (c *Config) validate() error {
 		}
 		if agent.Security != nil && agent.Security.PermissionMode != "" {
 			switch agent.Security.PermissionMode {
-			case "skip", "strict", "auto":
+			case "skip", "strict", "auto", "acceptEdits", "bypassPermissions", "plan":
 				// valid
 			default:
-				return fmt.Errorf("agents[%d].security.permission_mode must be skip, strict, or auto", i)
+				return fmt.Errorf("agents[%d].security.permission_mode must be skip, strict, auto, acceptEdits, bypassPermissions, or plan", i)
 			}
 		}
 	}

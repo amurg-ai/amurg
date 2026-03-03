@@ -28,12 +28,13 @@ type RuntimeHello struct {
 
 // SecurityProfile defines security constraints for an agent.
 type SecurityProfile struct {
-	AllowedPaths   []string `json:"allowed_paths,omitempty"`
-	DeniedPaths    []string `json:"denied_paths,omitempty"`
-	AllowedTools   []string `json:"allowed_tools,omitempty"`
-	PermissionMode string   `json:"permission_mode,omitempty"`
-	Cwd            string   `json:"cwd,omitempty"`
-	EnvWhitelist   []string `json:"env_whitelist,omitempty"`
+	AllowedPaths    []string `json:"allowed_paths,omitempty"`
+	DeniedPaths     []string `json:"denied_paths,omitempty"`
+	AllowedTools    []string `json:"allowed_tools,omitempty"`
+	DisallowedTools []string `json:"disallowed_tools,omitempty"`
+	PermissionMode  string   `json:"permission_mode,omitempty"`
+	Cwd             string   `json:"cwd,omitempty"`
+	EnvWhitelist    []string `json:"env_whitelist,omitempty"`
 }
 
 // AgentRegistration describes an agent the runtime offers.

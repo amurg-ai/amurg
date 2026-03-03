@@ -97,8 +97,17 @@ func (s *claudeCodeSession) startProcess() error {
 	if s.security != nil && s.security.PermissionMode != "" {
 		permMode = s.security.PermissionMode
 	}
-	if permMode == "dangerously-skip-permissions" || permMode == "skip" {
+	switch permMode {
+	case "dangerously-skip-permissions", "skip", "bypassPermissions":
 		args = append(args, "--dangerously-skip-permissions")
+	case "acceptEdits":
+		args = append(args, "--permission-mode", "acceptEdits")
+	case "plan":
+		args = append(args, "--permission-mode", "plan")
+	case "default", "auto", "":
+		// No flag — Claude Code uses its default behavior in -p mode.
+	case "strict":
+		// No flag — strict is the most restrictive, Claude Code default in -p mode.
 	}
 
 	// Model.
@@ -118,6 +127,15 @@ func (s *claudeCodeSession) startProcess() error {
 	}
 	for _, tool := range allowedTools {
 		args = append(args, "--allowedTools", tool)
+	}
+
+	// Disallowed tools - security config takes precedence.
+	disallowedTools := s.cfg.DisallowedTools
+	if s.security != nil && len(s.security.DisallowedTools) > 0 {
+		disallowedTools = s.security.DisallowedTools
+	}
+	for _, tool := range disallowedTools {
+		args = append(args, "--disallowedTools", tool)
 	}
 
 	// System prompt.
@@ -511,6 +529,15 @@ func (s *claudeCodeSession) ExitCode() *int {
 		return &code
 	}
 	return nil
+}
+
+// UpdateSecurity updates the security config. Returns true because Claude Code
+// needs a process restart for new CLI flags to take effect.
+func (s *claudeCodeSession) UpdateSecurity(security *config.SecurityConfig) (restartRequired bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.security = security
+	return true
 }
 
 // NativeHandle returns the Claude Code native session ID.
