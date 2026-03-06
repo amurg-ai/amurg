@@ -188,6 +188,10 @@ export class AmurgSocket {
     );
   }
 
+  requestNativeSessions(agentId: string, requestId: string): void {
+    this.send("native.sessions.list", { agent_id: agentId, request_id: requestId });
+  }
+
   get connected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN;
   }

@@ -10,6 +10,7 @@ import type {
   Turn,
   ConnectionState,
   PermissionRequest,
+  NativeSessionsResponse,
 } from "@/types";
 import { api } from "@/api/client";
 import { socket } from "@/api/websocket";
@@ -45,6 +46,10 @@ interface SessionState {
   unreadCounts: Map<string, number>;
   pendingPermissions: Map<string, PermissionRequest[]>;
   sessionToolAllowlist: Map<string, Set<string>>;
+  nativeSessionsByAgent: Map<string, NativeSessionsResponse>;
+  nativeSessionsLoading: boolean;
+  _nativePendingCount: number;
+  previewSessionIds: Set<string>;
 
   // Toasts
   toasts: { id: string; message: string; type: "info" | "error" | "success" }[];
@@ -66,6 +71,9 @@ interface SessionState {
   cleanupSession: (sessionId: string) => void;
   respondToPermission: (sessionId: string, requestId: string, approved: boolean, alwaysAllow?: boolean) => void;
   uploadFile: (sessionId: string, file: File) => Promise<void>;
+  loadNativeSessions: (agentId: string) => void;
+  loadAllNativeSessions: () => void;
+  createSessionWithResume: (agentId: string, resumeSessionId: string) => Promise<SessionInfo>;
 }
 
 export const useSessionStore = create<SessionState>((set, get) => {
@@ -180,6 +188,21 @@ export const useSessionStore = create<SessionState>((set, get) => {
       get().cleanupSession(payload.session_id);
     });
 
+    socket.on("native.sessions.response", (env: Envelope) => {
+      const resp = env.payload as NativeSessionsResponse;
+      const { nativeSessionsByAgent, _nativePendingCount } = get();
+      const updated = new Map(nativeSessionsByAgent);
+      if (!resp.error) {
+        updated.set(resp.agent_id, resp);
+      }
+      const remaining = Math.max(0, _nativePendingCount - 1);
+      set({
+        nativeSessionsByAgent: updated,
+        nativeSessionsLoading: remaining > 0,
+        _nativePendingCount: remaining,
+      });
+    });
+
     socket.on("error", (env: Envelope) => {
       const payload = env.payload as { code?: string; message?: string };
       if (payload?.message) {
@@ -237,6 +260,10 @@ export const useSessionStore = create<SessionState>((set, get) => {
     unreadCounts: new Map(),
     pendingPermissions: new Map(),
     sessionToolAllowlist: new Map(),
+    nativeSessionsByAgent: new Map(),
+    nativeSessionsLoading: false,
+    _nativePendingCount: 0,
+    previewSessionIds: new Set(),
     toasts: [],
 
     addToast: (message, type) => {
@@ -296,7 +323,6 @@ export const useSessionStore = create<SessionState>((set, get) => {
           set({ responding: new Set() });
         }
       });
-      setupSocketHandlers();
       await socket.connect();
       // Load data in background — don't let failures block login.
       Promise.all([get().loadAgents(), get().loadSessions()]).catch(() => {});
@@ -377,16 +403,36 @@ export const useSessionStore = create<SessionState>((set, get) => {
     },
 
     deselectSession: () => {
-      const { activeSessionId } = get();
+      const { activeSessionId, previewSessionIds, sessions } = get();
       if (activeSessionId) {
         socket.unsubscribe(activeSessionId);
+        // Clean up preview sessions (resumed native sessions where no message was sent)
+        if (previewSessionIds.has(activeSessionId)) {
+          const updatedPreview = new Set(previewSessionIds);
+          updatedPreview.delete(activeSessionId);
+          api.closeSession(activeSessionId).catch(() => {});
+          set({
+            activeSessionId: null,
+            previewSessionIds: updatedPreview,
+            sessions: sessions.filter(s => s.id !== activeSessionId),
+          });
+          get().cleanupSession(activeSessionId);
+          return;
+        }
       }
       set({ activeSessionId: null });
     },
 
     sendMessage: (content: string) => {
-      const { activeSessionId, messages } = get();
+      const { activeSessionId, messages, previewSessionIds } = get();
       if (!activeSessionId) return;
+
+      // Promote preview session to permanent on first message
+      if (previewSessionIds.has(activeSessionId)) {
+        const updated = new Set(previewSessionIds);
+        updated.delete(activeSessionId);
+        set({ previewSessionIds: updated });
+      }
 
       const messageId = crypto.randomUUID();
       const userMessage: StoredMessage = {
@@ -502,6 +548,41 @@ export const useSessionStore = create<SessionState>((set, get) => {
         approved,
         always_allow: alwaysAllow || false,
       }, sessionId);
+    },
+
+    loadNativeSessions: (agentId: string) => {
+      set({ nativeSessionsLoading: true, _nativePendingCount: 1 });
+      const requestId = crypto.randomUUID();
+      socket.requestNativeSessions(agentId, requestId);
+    },
+
+    loadAllNativeSessions: () => {
+      const { agents } = get();
+      const capable = agents.filter((a) => {
+        if (!a.online) return false;
+        try {
+          const caps = JSON.parse(a.caps || "{}");
+          return caps.native_session_ids === true;
+        } catch {
+          return false;
+        }
+      });
+      if (capable.length === 0) return;
+      set({ nativeSessionsLoading: true, _nativePendingCount: capable.length });
+      for (const agent of capable) {
+        const requestId = crypto.randomUUID();
+        socket.requestNativeSessions(agent.id, requestId);
+      }
+    },
+
+    createSessionWithResume: async (agentId: string, resumeSessionId: string) => {
+      const session = await api.createSession(agentId, resumeSessionId);
+      const { sessions, previewSessionIds } = get();
+      const updatedPreview = new Set(previewSessionIds);
+      updatedPreview.add(session.id);
+      set({ sessions: assignSequenceNumbers([session, ...sessions]), previewSessionIds: updatedPreview });
+      await get().selectSession(session.id);
+      return session;
     },
   };
 });

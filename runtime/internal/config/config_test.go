@@ -295,6 +295,56 @@ func TestLoad_FileNotFound(t *testing.T) {
 	}
 }
 
+func TestLoad_ValidClaudeCodePermissionModes(t *testing.T) {
+	for _, mode := range []string{"skip", "acceptEdits", "plan", "strict", "auto", "default", "bypassPermissions", "dangerously-skip-permissions"} {
+		cfgJSON := `{
+			"hub": {"url": "ws://localhost", "token": "t"},
+			"runtime": {"id": "r1"},
+			"agents": [{
+				"id": "cc1", "name": "CC", "profile": "claude-code",
+				"claude_code": {"permission_mode": "` + mode + `"}
+			}]
+		}`
+		path := writeTemp(t, cfgJSON)
+		_, err := Load(path)
+		if err != nil {
+			t.Errorf("permission_mode %q should be valid, got error: %v", mode, err)
+		}
+	}
+}
+
+func TestLoad_InvalidClaudeCodePermissionMode(t *testing.T) {
+	cfgJSON := `{
+		"hub": {"url": "ws://localhost", "token": "t"},
+		"runtime": {"id": "r1"},
+		"agents": [{
+			"id": "cc1", "name": "CC", "profile": "claude-code",
+			"claude_code": {"permission_mode": "yolo"}
+		}]
+	}`
+	path := writeTemp(t, cfgJSON)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for invalid claude_code.permission_mode")
+	}
+}
+
+func TestLoad_EmptyClaudeCodePermissionMode_OK(t *testing.T) {
+	cfgJSON := `{
+		"hub": {"url": "ws://localhost", "token": "t"},
+		"runtime": {"id": "r1"},
+		"agents": [{
+			"id": "cc1", "name": "CC", "profile": "claude-code",
+			"claude_code": {}
+		}]
+	}`
+	path := writeTemp(t, cfgJSON)
+	_, err := Load(path)
+	if err != nil {
+		t.Fatalf("empty permission_mode should be valid, got: %v", err)
+	}
+}
+
 // writeTemp creates a temporary file with the given content and returns its path.
 func writeTemp(t *testing.T, content string) string {
 	t.Helper()

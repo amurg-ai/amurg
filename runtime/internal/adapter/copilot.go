@@ -114,6 +114,7 @@ type copilotSession struct {
 	cfg       config.CopilotConfig
 	security  *config.SecurityConfig
 	sessionID string // Copilot native session ID for --resume
+	resumeExplicit bool // true only when SetResumeSessionID was called
 
 	output chan Output
 	mu     sync.Mutex
@@ -173,17 +174,20 @@ func (s *copilotSession) Send(ctx context.Context, input []byte) error {
 		args = append(args, "--deny-tool", tool)
 	}
 
-	// Session continuity: use --resume with session ID, fallback to --continue.
-	if sid != "" {
+	// Session continuity: use --resume only for explicitly resumed sessions.
+	// Auto-discovered session IDs are NOT used for --resume because it may
+	// override the working directory with the original session's project path.
+	s.mu.Lock()
+	useResume := s.resumeExplicit && sid != ""
+	s.mu.Unlock()
+	if useResume {
 		args = append(args, "--resume", sid)
 	}
 
 	cmd := exec.CommandContext(ctx, s.cfg.Command, args...)
 
-	// Working directory — validated with fallback.
-	if dir := resolveWorkDir(s.cfg.WorkDir, s.security); dir != "" {
-		cmd.Dir = dir
-	}
+	// Working directory — always resolved to a valid dir (home as fallback).
+	cmd.Dir = resolveWorkDir(s.cfg.WorkDir, s.security)
 
 	cmd.Env = os.Environ()
 	for k, v := range s.cfg.Env {
@@ -387,6 +391,7 @@ func (s *copilotSession) SetResumeSessionID(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sessionID = id
+	s.resumeExplicit = true
 }
 
 // LoadNativeHistory reads the Copilot session state and returns conversation

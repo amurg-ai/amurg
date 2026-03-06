@@ -280,6 +280,16 @@ func (c *Config) validate() error {
 				return fmt.Errorf("agents[%d].security.permission_mode must be skip, strict, auto, acceptEdits, bypassPermissions, or plan", i)
 			}
 		}
+		// Validate profile-specific permission modes.
+		if agent.ClaudeCode != nil && agent.ClaudeCode.PermissionMode != "" {
+			switch agent.ClaudeCode.PermissionMode {
+			case "dangerously-skip-permissions", "skip", "bypassPermissions",
+				"acceptEdits", "plan", "default", "auto", "strict":
+				// valid
+			default:
+				return fmt.Errorf("agents[%d].claude_code.permission_mode %q is not recognized; use skip, acceptEdits, plan, or strict", i, agent.ClaudeCode.PermissionMode)
+			}
+		}
 	}
 	return nil
 }

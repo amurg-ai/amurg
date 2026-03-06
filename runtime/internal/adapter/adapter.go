@@ -106,6 +106,7 @@ type NativeSessionLister interface {
 // NativeSessionEntry describes a native session discovered from an agent's local storage.
 type NativeSessionEntry struct {
 	SessionID    string `json:"sessionId"`
+	FullPath     string `json:"fullPath,omitempty"`
 	Summary      string `json:"summary,omitempty"`
 	FirstPrompt  string `json:"firstPrompt,omitempty"`
 	MessageCount int    `json:"messageCount"`

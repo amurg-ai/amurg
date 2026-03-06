@@ -160,6 +160,42 @@ export interface AgentLimitsWire {
   idle_timeout?: string;
 }
 
+// Native session from an agent's local storage
+export interface NativeSession {
+  session_id: string;
+  summary?: string;
+  first_prompt?: string;
+  message_count: number;
+  project_path?: string;
+  git_branch?: string;
+  created?: string;
+  modified?: string;
+}
+
+export interface NativeSessionsResponse {
+  agent_id: string;
+  request_id: string;
+  sessions: NativeSession[];
+  error?: string;
+}
+
+// Unified session: hub or native, for the home screen "All Sessions" view
+export interface UnifiedSession {
+  id: string;
+  source: "hub" | "native";
+  profile: string;
+  agentName: string;
+  agentId?: string;
+  label: string;
+  state?: string;
+  projectPath?: string;
+  gitBranch?: string;
+  messageCount?: number;
+  createdAt: string;
+  updatedAt: string;
+  seq?: number;
+}
+
 // Profile display metadata
 export const PROFILE_DISPLAY: Record<
   string,

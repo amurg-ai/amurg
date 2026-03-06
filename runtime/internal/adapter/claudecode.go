@@ -49,6 +49,7 @@ type claudeCodeSession struct {
 	cfg         config.ClaudeCodeConfig
 	security    *config.SecurityConfig
 	sessionID   string // Claude Code's native session ID
+	resumeExplicit bool // true only when SetResumeSessionID was called (explicit resume)
 	permHandler func(tool, description, resource string) bool
 
 	cmd    *exec.Cmd
@@ -80,7 +81,14 @@ func (s *claudeCodeSession) startProcess() error {
 			}
 		}
 	}
-	sid := s.sessionID
+	// Only use --resume for explicitly resumed sessions (SetResumeSessionID).
+	// Auto-captured session IDs from result events must NOT be used for
+	// resume because --resume overrides the working directory with the
+	// original session's project context, breaking cd-to-folder behavior.
+	sid := ""
+	if s.resumeExplicit {
+		sid = s.sessionID
+	}
 	s.mu.Unlock()
 
 	s.turnComplete.Store(false)
@@ -93,6 +101,7 @@ func (s *claudeCodeSession) startProcess() error {
 	}
 
 	// Permission mode - security config takes precedence.
+	skipPerms := false
 	permMode := s.cfg.PermissionMode
 	if s.security != nil && s.security.PermissionMode != "" {
 		permMode = s.security.PermissionMode
@@ -100,6 +109,7 @@ func (s *claudeCodeSession) startProcess() error {
 	switch permMode {
 	case "dangerously-skip-permissions", "skip", "bypassPermissions":
 		args = append(args, "--dangerously-skip-permissions")
+		skipPerms = true
 	case "acceptEdits":
 		args = append(args, "--permission-mode", "acceptEdits")
 	case "plan":
@@ -143,27 +153,34 @@ func (s *claudeCodeSession) startProcess() error {
 		args = append(args, "--system-prompt", s.cfg.SystemPrompt)
 	}
 
-	// Resume with native session ID.
+	// Resume with native session ID — only for explicit resumes.
 	if sid != "" {
 		args = append(args, "--resume", sid)
 	}
 
 	cmd := exec.CommandContext(s.ctx, s.cfg.Command, args...)
 
-	// Working directory — validated with fallback.
-	if dir := resolveWorkDir(s.cfg.WorkDir, s.security); dir != "" {
-		cmd.Dir = dir
-	}
+	// Working directory — always resolved to a valid dir (home as fallback).
+	cmd.Dir = resolveWorkDir(s.cfg.WorkDir, s.security)
 
-	// Filter out CLAUDECODE env var to prevent nested-session detection.
+	// Filter out env vars that trigger nested-session detection in Claude Code.
 	for _, e := range os.Environ() {
-		if !strings.HasPrefix(e, "CLAUDECODE=") {
-			cmd.Env = append(cmd.Env, e)
+		if strings.HasPrefix(e, "CLAUDECODE=") ||
+			strings.HasPrefix(e, "CLAUDE_CODE_ENTRYPOINT=") {
+			continue
 		}
+		cmd.Env = append(cmd.Env, e)
+	}
+	// Reinforce skip-permissions via env var in case the CLI flag alone isn't enough.
+	if skipPerms {
+		cmd.Env = append(cmd.Env, "CLAUDE_DANGEROUS_SKIP_PERMISSIONS=true")
 	}
 	for k, v := range s.cfg.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
+
+	fmt.Fprintf(os.Stderr, "claude-code: spawning %s %s (dir=%s, resume=%v)\n",
+		s.cfg.Command, strings.Join(args, " "), cmd.Dir, sid != "")
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -553,6 +570,7 @@ func (s *claudeCodeSession) SetResumeSessionID(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sessionID = id
+	s.resumeExplicit = true
 }
 
 // LoadNativeHistory reads the native Claude Code session JSONL and emits
@@ -681,7 +699,8 @@ func (s *claudeCodeSession) LoadNativeHistory() []Output {
 }
 
 // ListNativeSessions scans ~/.claude/projects/*/sessions-index.json
-// and returns all discovered native Claude Code sessions.
+// and also discovers JSONL files not in the index.
+// Only returns sessions whose JSONL files actually exist.
 // Implements NativeSessionLister interface.
 func (a *ClaudeCodeAdapter) ListNativeSessions() ([]NativeSessionEntry, error) {
 	home, err := os.UserHomeDir()
@@ -698,24 +717,63 @@ func (a *ClaudeCodeAdapter) ListNativeSessions() ([]NativeSessionEntry, error) {
 		return nil, fmt.Errorf("read projects dir: %w", err)
 	}
 
+	seen := make(map[string]bool)
 	var allSessions []NativeSessionEntry
+
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		indexPath := filepath.Join(projectsDir, entry.Name(), "sessions-index.json")
-		data, err := os.ReadFile(indexPath)
-		if err != nil {
-			continue // skip dirs without index
+		projDir := filepath.Join(projectsDir, entry.Name())
+
+		// Read the index if it exists.
+		indexPath := filepath.Join(projDir, "sessions-index.json")
+		if data, err := os.ReadFile(indexPath); err == nil {
+			var index struct {
+				Entries []NativeSessionEntry `json:"entries"`
+			}
+			if json.Unmarshal(data, &index) == nil {
+				for _, e := range index.Entries {
+					// Verify the JSONL file actually exists.
+					jsonlPath := e.FullPath
+					if jsonlPath == "" {
+						jsonlPath = filepath.Join(projDir, e.SessionID+".jsonl")
+					}
+					if _, err := os.Stat(jsonlPath); err != nil {
+						continue // skip stale entries
+					}
+					seen[e.SessionID] = true
+					allSessions = append(allSessions, e)
+				}
+			}
 		}
 
-		var index struct {
-			Entries []NativeSessionEntry `json:"entries"`
+		// Discover JSONL files not in the index.
+		files, _ := filepath.Glob(filepath.Join(projDir, "*.jsonl"))
+		for _, f := range files {
+			base := filepath.Base(f)
+			sid := strings.TrimSuffix(base, ".jsonl")
+			if seen[sid] {
+				continue
+			}
+			seen[sid] = true
+
+			info, err := os.Stat(f)
+			if err != nil {
+				continue
+			}
+
+			nse := NativeSessionEntry{
+				SessionID:   sid,
+				FullPath:    f,
+				ProjectPath: decodeProjectPath(entry.Name()),
+				Modified:    info.ModTime().UTC().Format("2006-01-02T15:04:05.000Z"),
+			}
+
+			// Try to extract first user prompt and message count.
+			nse.FirstPrompt, nse.MessageCount = scanJSONLMetadata(f)
+			allSessions = append(allSessions, nse)
 		}
-		if err := json.Unmarshal(data, &index); err != nil {
-			continue
-		}
-		allSessions = append(allSessions, index.Entries...)
 	}
 
 	// Sort by modified time, most recent first.
@@ -729,4 +787,65 @@ func (a *ClaudeCodeAdapter) ListNativeSessions() ([]NativeSessionEntry, error) {
 	}
 
 	return allSessions, nil
+}
+
+// decodeProjectPath converts a Claude project dir name back to a path.
+// e.g. "-home-ciprian-source-amurg" -> "/home/ciprian/source/amurg"
+func decodeProjectPath(dirName string) string {
+	if dirName == "" {
+		return ""
+	}
+	return "/" + strings.ReplaceAll(dirName[1:], "-", "/")
+}
+
+// scanJSONLMetadata reads a JSONL file to extract the first user prompt and message count.
+func scanJSONLMetadata(path string) (firstPrompt string, messageCount int) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", 0
+	}
+	defer func() { _ = f.Close() }()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 512*1024)
+	for scanner.Scan() {
+		var entry struct {
+			Type    string `json:"type"`
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &entry) != nil {
+			continue
+		}
+		if entry.Type == "user" || entry.Type == "assistant" {
+			messageCount++
+		}
+		if entry.Type == "user" && firstPrompt == "" {
+			var text string
+			if json.Unmarshal(entry.Message.Content, &text) == nil && text != "" {
+				firstPrompt = text
+				if len(firstPrompt) > 120 {
+					firstPrompt = firstPrompt[:120]
+				}
+				continue
+			}
+			var blocks []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(entry.Message.Content, &blocks) == nil {
+				for _, b := range blocks {
+					if b.Type == "text" && b.Text != "" {
+						firstPrompt = b.Text
+						if len(firstPrompt) > 120 {
+							firstPrompt = firstPrompt[:120]
+						}
+						break
+					}
+				}
+			}
+		}
+	}
+	return firstPrompt, messageCount
 }

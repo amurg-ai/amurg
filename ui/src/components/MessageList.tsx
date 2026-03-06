@@ -1,4 +1,4 @@
-import { useEffect, useRef, memo, useMemo } from "react";
+import { useEffect, useRef, memo, useMemo, useState } from "react";
 import { useSessionStore } from "@/stores/sessionStore";
 import type { StoredMessage, Turn } from "@/types";
 import {
@@ -31,6 +31,10 @@ function formatTimestamp(iso: string): string {
   }
 }
 
+function isHistoryChannel(channel: string): boolean {
+  return channel === "history_user" || channel === "history_assistant" || channel === "history_tool";
+}
+
 export function MessageList() {
   const { activeSessionId, messages, responding, turns } = useSessionStore();
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -51,12 +55,26 @@ export function MessageList() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [sessionMessages.length]);
 
+  // Split messages into history and live
+  const { historyMessages, liveMessages } = useMemo(() => {
+    const history: StoredMessage[] = [];
+    const live: StoredMessage[] = [];
+    for (const msg of sessionMessages) {
+      if (isHistoryChannel(msg.channel)) {
+        history.push(msg);
+      } else {
+        live.push(msg);
+      }
+    }
+    return { historyMessages: history, liveMessages: live };
+  }, [sessionMessages]);
+
   // Group messages with turn separators
   const elements = useMemo(() => {
     const result: React.ReactNode[] = [];
     let lastTurnNumber = 0;
 
-    for (const msg of sessionMessages) {
+    for (const msg of liveMessages) {
       // Check if this message starts a new turn
       for (const turn of sessionTurns) {
         if (turn.turnNumber > lastTurnNumber && msg.seq > turn.startSeq) {
@@ -80,7 +98,7 @@ export function MessageList() {
     }
 
     return result;
-  }, [sessionMessages, sessionTurns, activeSessionId]);
+  }, [liveMessages, sessionTurns, activeSessionId]);
 
   if (sessionMessages.length === 0 && !isResponding) {
     return (
@@ -98,6 +116,11 @@ export function MessageList() {
 
   return (
     <div className="px-4 py-4 space-y-0.5 font-mono text-sm">
+      {/* History section (from resumed native sessions) */}
+      {historyMessages.length > 0 && (
+        <HistorySection messages={historyMessages} />
+      )}
+
       {elements}
 
       {isResponding && (
@@ -108,6 +131,90 @@ export function MessageList() {
       )}
 
       <div ref={bottomRef} />
+    </div>
+  );
+}
+
+// Renders pre-loaded history from a resumed native session
+function HistorySection({ messages }: { messages: StoredMessage[] }) {
+  const [expanded, setExpanded] = useState(false);
+
+  // Group into conversation turns: user msg + assistant response + tools
+  const turns = useMemo(() => {
+    const result: { user?: StoredMessage; assistant: StoredMessage[]; tools: StoredMessage[] }[] = [];
+    let current: { user?: StoredMessage; assistant: StoredMessage[]; tools: StoredMessage[] } = {
+      assistant: [],
+      tools: [],
+    };
+
+    for (const msg of messages) {
+      if (msg.channel === "history_user") {
+        if (current.user || current.assistant.length > 0 || current.tools.length > 0) {
+          result.push(current);
+        }
+        current = { user: msg, assistant: [], tools: [] };
+      } else if (msg.channel === "history_assistant") {
+        current.assistant.push(msg);
+      } else if (msg.channel === "history_tool") {
+        current.tools.push(msg);
+      }
+    }
+    if (current.user || current.assistant.length > 0 || current.tools.length > 0) {
+      result.push(current);
+    }
+    return result;
+  }, [messages]);
+
+  if (turns.length === 0) return null;
+
+  return (
+    <div className="mb-4">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 w-full text-left px-3 py-2 rounded-lg
+                   bg-purple-500/5 border border-purple-500/10 hover:border-purple-500/20
+                   transition-colors mb-1"
+      >
+        <span className={`text-xs text-purple-400/60 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`}>
+          &#9654;
+        </span>
+        <span className="text-xs font-sans text-purple-400/80 font-medium">
+          Previous session history
+        </span>
+        <span className="text-[11px] font-sans text-slate-600">
+          {turns.length} turn{turns.length !== 1 ? "s" : ""}
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="pl-2 border-l border-purple-500/10 ml-3 space-y-2 opacity-70">
+          {turns.map((turn, i) => (
+            <div key={i} className="space-y-0.5">
+              {turn.user && (
+                <div className="flex items-start gap-2 px-3 py-0.5">
+                  <span className="text-teal-400 flex-shrink-0 w-5 select-none">$</span>
+                  <span className="text-teal-300 text-xs">{turn.user.content}</span>
+                </div>
+              )}
+              {turn.assistant.map((msg) => (
+                <div key={msg.id} className="flex items-start gap-2 px-3 py-0.5">
+                  <span className="text-slate-600 flex-shrink-0 w-5 select-none">&nbsp;</span>
+                  <div className="text-slate-400 text-xs">
+                    <MarkdownRenderer content={msg.content} />
+                  </div>
+                </div>
+              ))}
+              {turn.tools.length > 0 && (
+                <div className="px-3 py-0.5">
+                  <span className="text-[11px] text-slate-600">
+                    {turn.tools.length} tool call{turn.tools.length !== 1 ? "s" : ""}
+                  </span>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

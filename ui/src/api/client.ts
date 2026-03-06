@@ -81,10 +81,10 @@ export const api = {
 
   listSessions: () => request<SessionInfo[]>("/api/sessions"),
 
-  createSession: (agentId: string) =>
+  createSession: (agentId: string, resumeSessionId?: string) =>
     request<SessionInfo>("/api/sessions", {
       method: "POST",
-      body: JSON.stringify({ agent_id: agentId }),
+      body: JSON.stringify({ agent_id: agentId, ...(resumeSessionId ? { resume_session_id: resumeSessionId } : {}) }),
     }),
 
   getMessages: (sessionId: string) =>

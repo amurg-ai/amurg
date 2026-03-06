@@ -6,9 +6,11 @@ interface SessionListProps {
 }
 
 export function SessionList({ onSelect }: SessionListProps) {
-  const { sessions, activeSessionId, selectSession, unreadCounts } = useSessionStore();
+  const { sessions, activeSessionId, selectSession, unreadCounts, previewSessionIds } = useSessionStore();
 
-  if (sessions.length === 0) {
+  const visibleSessions = sessions.filter(s => !previewSessionIds.has(s.id));
+
+  if (visibleSessions.length === 0) {
     return (
       <div className="p-4 text-sm text-slate-500 text-center">
         No sessions yet. Create a new session to get started.
@@ -18,7 +20,7 @@ export function SessionList({ onSelect }: SessionListProps) {
 
   return (
     <div className="space-y-0.5 p-2">
-      {sessions.map((session) => {
+      {visibleSessions.map((session) => {
         const isActive = session.id === activeSessionId;
         const profile = PROFILE_DISPLAY[session.profile] || {
           label: session.profile,
