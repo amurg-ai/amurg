@@ -29,6 +29,11 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     throw new Error("Unauthorized");
   }
 
+  if (res.status === 403) {
+    const body = await res.json().catch(() => ({ error: "Forbidden" }));
+    throw new Error(body.error || "You don't have permission to perform this action");
+  }
+
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(body.error || res.statusText);
