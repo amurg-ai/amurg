@@ -60,6 +60,7 @@ type Server struct {
 	loginRL               *rateLimiter
 	rl                    *rateLimiter
 	deviceCodeRL          *rateLimiter
+	deviceCodePollRL      *rateLimiter
 }
 
 // NewServer creates a new API server.
@@ -109,8 +110,9 @@ func NewServer(s store.Store, ap auth.Provider, lp auth.LoginProvider, ra auth.R
 
 	// Device-code registration (unauthenticated, rate-limited by IP)
 	srv.deviceCodeRL = newRateLimiter(3, 5)
+	srv.deviceCodePollRL = newRateLimiter(6, 10)
 	mux.With(loginIPRateLimitMiddleware(srv.deviceCodeRL)).Post("/api/runtime/register", srv.handleRuntimeRegister)
-	mux.With(loginIPRateLimitMiddleware(srv.deviceCodeRL)).Post("/api/runtime/register/poll", srv.handleRuntimeRegisterPoll)
+	mux.With(loginIPRateLimitMiddleware(srv.deviceCodePollRL)).Post("/api/runtime/register/poll", srv.handleRuntimeRegisterPoll)
 
 	// WebSocket routes (auth handled inside)
 	mux.Get("/ws/runtime", rt.HandleRuntimeWS)
@@ -124,7 +126,7 @@ func NewServer(s store.Store, ap auth.Provider, lp auth.LoginProvider, ra auth.R
 		mux.Get("/asr", srv.handleASRProxy)
 	}
 
-	// Authenticated API routes
+	// Authenticated API routes (all users)
 	srv.rl = newRateLimiter(cfg.RateLimit.RequestsPerSecond, cfg.RateLimit.Burst)
 	mux.Group(func(r chi.Router) {
 		r.Use(srv.authMiddleware)
@@ -142,6 +144,16 @@ func NewServer(s store.Store, ap auth.Provider, lp auth.LoginProvider, ra auth.R
 		r.Get("/api/files/{fileID}", srv.handleDownloadFile)
 		r.Post("/api/sessions/{sessionID}/close", srv.handleCloseSession)
 		r.Get("/api/me", srv.handleGetMe)
+	})
+
+	// Admin-only routes — require admin role
+	mux.Group(func(r chi.Router) {
+		r.Use(srv.authMiddleware)
+		if srv.authProviderName == "clerk" {
+			r.Use(srv.ensureUserMiddleware)
+		}
+		r.Use(rateLimitMiddleware(srv.rl))
+		r.Use(adminOnlyMiddleware)
 
 		r.Get("/api/runtimes", srv.handleListRuntimes)
 		r.Get("/api/users", srv.handleListUsers)
@@ -178,6 +190,16 @@ func NewServer(s store.Store, ap auth.Provider, lp auth.LoginProvider, ra auth.R
 	if uiDir != "" {
 		fileServer := http.FileServer(http.Dir(uiDir))
 		mux.Handle("/*", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Only serve static files for GET requests.
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			// Don't serve SPA for API paths — let them 404 properly.
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				writeError(w, http.StatusNotFound, "not found")
+				return
+			}
 			// Try serving the file, fall back to index.html for SPA routing.
 			path := r.URL.Path
 			if path != "/" && !strings.Contains(path, ".") {
@@ -206,6 +228,9 @@ func (s *Server) StartBackgroundTasks(ctx context.Context) {
 	}
 	if s.deviceCodeRL != nil {
 		s.deviceCodeRL.StartCleanup(ctx, 5*time.Minute, 10*time.Minute)
+	}
+	if s.deviceCodePollRL != nil {
+		s.deviceCodePollRL.StartCleanup(ctx, 5*time.Minute, 10*time.Minute)
 	}
 }
 
@@ -367,6 +392,30 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Validate agent_id refers to an existing agent.
+	if req.AgentID == "" {
+		writeError(w, http.StatusBadRequest, "agent_id is required")
+		return
+	}
+	agent, err := s.store.GetAgent(r.Context(), req.AgentID)
+	if err != nil || agent == nil {
+		writeError(w, http.StatusBadRequest, "invalid agent_id")
+		return
+	}
+
+	// Validate resume_session_id ownership if provided.
+	if req.ResumeSessionID != "" {
+		resumeSess, err := s.store.GetSession(r.Context(), req.ResumeSessionID)
+		if err != nil || resumeSess == nil {
+			writeError(w, http.StatusNotFound, "resume session not found")
+			return
+		}
+		if resumeSess.UserID != identity.UserID {
+			writeError(w, http.StatusForbidden, "cannot resume another user's session")
+			return
+		}
+	}
+
 	// Check trial expiry and plan limits.
 	if s.enforcer != nil {
 		if err := s.enforcer.CheckTrialExpiry(r.Context(), identity.OrgID); err != nil {
@@ -407,13 +456,13 @@ func (s *Server) handleGetMessages(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "sessionID")
 	identity := getIdentityFromContext(r.Context())
 
-	// Verify session ownership.
+	// Verify session ownership (admins may read any session).
 	sess, err := s.store.GetSession(r.Context(), sessionID)
 	if err != nil || sess == nil {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
-	if sess.UserID != identity.UserID {
+	if sess.UserID != identity.UserID && identity.Role != "admin" {
 		writeError(w, http.StatusForbidden, "access denied")
 		return
 	}
@@ -456,8 +505,8 @@ func (s *Server) handleCloseSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
-	// Verify ownership.
-	if sess.UserID != identity.UserID {
+	// Verify ownership (admins may close any session).
+	if sess.UserID != identity.UserID && identity.Role != "admin" {
 		writeError(w, http.StatusForbidden, "not your session")
 		return
 	}
@@ -792,6 +841,10 @@ func (s *Server) handleUpdateAgentConfig(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if req.Security == nil && req.Limits == nil {
+		writeError(w, http.StatusBadRequest, "at least one of security or limits must be provided")
+		return
+	}
 
 	// Validate permission_mode if set.
 	if req.Security != nil && req.Security.PermissionMode != "" {
@@ -1028,10 +1081,16 @@ func (s *Server) handleRuntimeRegister(w http.ResponseWriter, r *http.Request) {
 	if r.TLS == nil {
 		scheme = "http"
 	}
-	if fwd := r.Header.Get("X-Forwarded-Proto"); fwd != "" {
+	if fwd := r.Header.Get("X-Forwarded-Proto"); fwd == "https" || fwd == "http" {
 		scheme = fwd
 	}
-	verificationURL := fmt.Sprintf("%s://%s/connect?code=%s", scheme, r.Host, userCode)
+	// Validate host header to prevent header injection / phishing.
+	host := r.Host
+	if strings.ContainsAny(host, " \r\n\t/<>\"'") || host == "" {
+		writeError(w, http.StatusBadRequest, "invalid host header")
+		return
+	}
+	verificationURL := fmt.Sprintf("%s://%s/connect?code=%s", scheme, host, userCode)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"user_code":        userCode,
@@ -1054,7 +1113,7 @@ func (s *Server) handleRuntimeRegisterPoll(w http.ResponseWriter, r *http.Reques
 
 	dc, err := s.store.GetDeviceCodeByPollingToken(r.Context(), req.PollingToken)
 	if err != nil || dc == nil {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "expired"})
+		writeError(w, http.StatusNotFound, "device code not found")
 		return
 	}
 

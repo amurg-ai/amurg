@@ -91,6 +91,19 @@ func (s *Server) ensureUserMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// adminOnlyMiddleware rejects requests from non-admin users with 403 Forbidden.
+// Must be placed after authMiddleware so the identity is available in context.
+func adminOnlyMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		identity := getIdentityFromContext(r.Context())
+		if identity == nil || identity.Role != "admin" {
+			writeError(w, http.StatusForbidden, "admin access required")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func securityHeadersMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")

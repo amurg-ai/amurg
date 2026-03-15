@@ -69,6 +69,20 @@ func createTestUserAndGetToken(t *testing.T, authSvc *auth.Service, s store.Stor
 	return token
 }
 
+func createTestAdminAndGetToken(t *testing.T, authSvc *auth.Service, s store.Store) string {
+	t.Helper()
+	ctx := context.Background()
+	_, err := authSvc.Register(ctx, "testadmin", "testpassword123", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := authSvc.Login(ctx, "testadmin", "testpassword123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
 // seedAgentAndRuntime inserts a runtime and agent into the store so that
 // session creation and agent listing work properly.
 func seedAgentAndRuntime(t *testing.T, s store.Store) (runtimeID, agentID string) {
@@ -349,16 +363,16 @@ func TestAuthMiddleware_ExpiredToken(t *testing.T) {
 
 func TestAuthenticatedRoutes_RequireAuth(t *testing.T) {
 	srv, authSvc, s := setupTestServer(t)
-	token := createTestUserAndGetToken(t, authSvc, s)
+	adminToken := createTestAdminAndGetToken(t, authSvc, s)
 
-	// Authenticated user should be able to access /api/users.
+	// Admin should be able to access /api/users.
 	req := httptest.NewRequest(http.MethodGet, "/api/users", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
 	w := httptest.NewRecorder()
 	srv.mux.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected status 200 for authenticated user, got %d; body: %s", w.Code, w.Body.String())
+		t.Fatalf("expected status 200 for admin user, got %d; body: %s", w.Code, w.Body.String())
 	}
 
 	// Unauthenticated request should be rejected.
@@ -368,6 +382,17 @@ func TestAuthenticatedRoutes_RequireAuth(t *testing.T) {
 
 	if w2.Code != http.StatusUnauthorized {
 		t.Fatalf("expected status 401 for unauthenticated, got %d; body: %s", w2.Code, w2.Body.String())
+	}
+
+	// Non-admin should be rejected with 403.
+	userToken := createTestUserAndGetToken(t, authSvc, s)
+	req3 := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	req3.Header.Set("Authorization", "Bearer "+userToken)
+	w3 := httptest.NewRecorder()
+	srv.mux.ServeHTTP(w3, req3)
+
+	if w3.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403 for non-admin, got %d; body: %s", w3.Code, w3.Body.String())
 	}
 }
 
@@ -682,7 +707,7 @@ func TestCORS_Preflight(t *testing.T) {
 
 func TestCreateUser(t *testing.T) {
 	srv, authSvc, s := setupTestServer(t)
-	token := createTestUserAndGetToken(t, authSvc, s)
+	adminToken := createTestAdminAndGetToken(t, authSvc, s)
 
 	body, _ := json.Marshal(map[string]string{
 		"username": "newuser",
@@ -690,7 +715,7 @@ func TestCreateUser(t *testing.T) {
 		"role":     "user",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/users", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	srv.mux.ServeHTTP(w, req)
@@ -707,6 +732,23 @@ func TestCreateUser(t *testing.T) {
 	}
 	if user.PasswordHash != "" {
 		t.Error("password hash should be stripped from response")
+	}
+
+	// Non-admin should be rejected.
+	userToken := createTestUserAndGetToken(t, authSvc, s)
+	body2, _ := json.Marshal(map[string]string{
+		"username": "anotheruser",
+		"password": "anotherpassword123",
+		"role":     "admin",
+	})
+	req2 := httptest.NewRequest(http.MethodPost, "/api/users", bytes.NewReader(body2))
+	req2.Header.Set("Authorization", "Bearer "+userToken)
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	srv.mux.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403 for non-admin creating user, got %d; body: %s", w2.Code, w2.Body.String())
 	}
 }
 
