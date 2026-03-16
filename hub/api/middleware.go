@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -28,6 +29,14 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "invalid token")
 			return
+		}
+
+		// Check if the token has been revoked (logout).
+		if s.tokenBlocklist != nil {
+			if jti := auth.ExtractJTI(tokenStr); jti != "" && s.tokenBlocklist.isBlocked(jti) {
+				writeError(w, http.StatusUnauthorized, "token has been revoked")
+				return
+			}
 		}
 
 		ctx := context.WithValue(r.Context(), identityKey, identity)
@@ -112,6 +121,60 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// makeTrustedProxyMiddleware returns middleware that sets r.RemoteAddr to the
+// client IP from X-Forwarded-For only when the direct connection comes from a
+// trusted proxy CIDR. If no trusted proxies are configured, X-Forwarded-For is
+// never trusted and the direct connection IP is always used.
+func makeTrustedProxyMiddleware(trustedCIDRs []string) func(http.Handler) http.Handler {
+	var nets []*net.IPNet
+	for _, cidr := range trustedCIDRs {
+		// Allow bare IPs by appending /32 or /128.
+		if !strings.Contains(cidr, "/") {
+			if strings.Contains(cidr, ":") {
+				cidr += "/128"
+			} else {
+				cidr += "/32"
+			}
+		}
+		if _, ipNet, err := net.ParseCIDR(cidr); err == nil {
+			nets = append(nets, ipNet)
+		}
+	}
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if len(nets) == 0 {
+				// No trusted proxies — strip any X-Forwarded-For and use direct IP.
+				r.Header.Del("X-Forwarded-For")
+				r.Header.Del("X-Real-Ip")
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			directIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+			ip := net.ParseIP(directIP)
+
+			trusted := false
+			if ip != nil {
+				for _, n := range nets {
+					if n.Contains(ip) {
+						trusted = true
+						break
+					}
+				}
+			}
+
+			if !trusted {
+				// Direct connection is not from a trusted proxy — ignore forwarded headers.
+				r.Header.Del("X-Forwarded-For")
+				r.Header.Del("X-Real-Ip")
+			}
+			// When trusted, chi's RealIP middleware will parse X-Forwarded-For normally.
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func makeCORSMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {

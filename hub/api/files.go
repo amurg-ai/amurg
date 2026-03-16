@@ -47,6 +47,10 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "access denied")
 		return
 	}
+	if sess.State == "closed" {
+		writeError(w, http.StatusConflict, "session is closed")
+		return
+	}
 
 	// Limit request body size.
 	r.Body = http.MaxBytesReader(w, r.Body, s.maxFileBytes+1024) // small overhead for multipart headers
@@ -84,8 +88,13 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	fileID := uuid.New().String()
 	fileName := filepath.Base(header.Filename)
+	if len(fileName) > 255 {
+		writeError(w, http.StatusBadRequest, "filename exceeds maximum length of 255 characters")
+		return
+	}
+
+	fileID := uuid.New().String()
 
 	// Save to hub disk: {storage_path}/{session_id}/{file_id}/{filename}
 	dir := filepath.Join(s.fileStoragePath, sessionID, fileID)
@@ -160,6 +169,70 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleListSessionFiles handles GET /api/sessions/{sessionID}/files
+// Returns a list of files uploaded to the session by scanning file messages.
+func (s *Server) handleListSessionFiles(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	identity := getIdentityFromContext(r.Context())
+
+	sess, err := s.store.GetSession(r.Context(), sessionID)
+	if err != nil || sess == nil {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	if sess.UserID != identity.UserID && identity.Role != "admin" {
+		writeError(w, http.StatusForbidden, "access denied")
+		return
+	}
+
+	// Retrieve file messages from the session (channel="file").
+	messages, err := s.store.GetMessages(r.Context(), sessionID, 0, 500)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list files")
+		return
+	}
+
+	type fileEntry struct {
+		FileID   string `json:"file_id"`
+		Name     string `json:"name"`
+		MimeType string `json:"mime_type"`
+		Size     int64  `json:"size"`
+		Seq      int64  `json:"seq"`
+	}
+
+	var files []fileEntry
+	for _, msg := range messages {
+		if msg.Channel != "file" {
+			continue
+		}
+		var meta map[string]any
+		if err := json.Unmarshal([]byte(msg.Content), &meta); err != nil {
+			continue
+		}
+		fid, _ := meta["file_id"].(string)
+		name, _ := meta["name"].(string)
+		mtype, _ := meta["mime_type"].(string)
+		var size int64
+		if s, ok := meta["size"].(float64); ok {
+			size = int64(s)
+		}
+		if fid != "" {
+			files = append(files, fileEntry{
+				FileID:   fid,
+				Name:     name,
+				MimeType: mtype,
+				Size:     size,
+				Seq:      msg.Seq,
+			})
+		}
+	}
+
+	if files == nil {
+		files = []fileEntry{}
+	}
+	writeJSON(w, http.StatusOK, files)
+}
+
 // handleDownloadFile handles GET /api/files/{fileID}?session_id={sessionID}
 // Serves a file with Content-Disposition for download.
 func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
@@ -195,12 +268,6 @@ func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 	fileName := entries[0].Name()
 	filePath := filepath.Join(dir, fileName)
 
-	// Determine MIME type.
-	mimeType := mime.TypeByExtension(filepath.Ext(fileName))
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
-	}
-
 	// Reject symlinks to prevent path traversal.
 	fi, err := os.Lstat(filePath)
 	if err != nil {
@@ -212,8 +279,9 @@ func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Force safe content type on all downloads to prevent stored XSS.
 	safeName := sanitizeFilename(fileName)
-	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'")
 	w.Header().Set("Content-Disposition",

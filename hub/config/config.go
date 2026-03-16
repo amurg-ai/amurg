@@ -51,10 +51,12 @@ type BillingConfig struct {
 // ServerConfig defines the hub's listener settings.
 type ServerConfig struct {
 	Addr            string   `json:"addr"`                       // e.g. ":8080"
+	BaseURL         string   `json:"base_url,omitempty"`         // public base URL (e.g. "https://hub.example.com"); used for device code URLs
 	TLSCert         string   `json:"tls_cert,omitempty"`
 	TLSKey          string   `json:"tls_key,omitempty"`
 	UIStaticDir     string   `json:"ui_static_dir,omitempty"`    // path to built UI files
 	AllowedOrigins  []string `json:"allowed_origins,omitempty"`  // CORS origins; default ["*"]
+	TrustedProxies  []string `json:"trusted_proxies,omitempty"`  // CIDRs to trust for X-Forwarded-For; empty = use direct IP only
 	MaxBodyBytes    int64    `json:"max_body_bytes,omitempty"`   // max request body size; default 1MB
 	FileStoragePath string   `json:"file_storage_path,omitempty"` // path for uploaded files; default "./amurg-files"
 	MaxFileBytes    int64    `json:"max_file_bytes,omitempty"`    // max file size; default 10MB

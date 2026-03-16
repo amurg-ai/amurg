@@ -8,6 +8,109 @@ import (
 	"time"
 )
 
+// tokenBlocklist tracks revoked JWT IDs (jti) for logout support.
+type tokenBlocklist struct {
+	mu      sync.RWMutex
+	entries map[string]time.Time // jti -> expiry
+}
+
+func newTokenBlocklist() *tokenBlocklist {
+	return &tokenBlocklist{entries: make(map[string]time.Time)}
+}
+
+func (b *tokenBlocklist) add(jti string, expiry time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.entries[jti] = expiry
+}
+
+func (b *tokenBlocklist) isBlocked(jti string) bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	_, ok := b.entries[jti]
+	return ok
+}
+
+func (b *tokenBlocklist) cleanup() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := time.Now()
+	for jti, expiry := range b.entries {
+		if now.After(expiry) {
+			delete(b.entries, jti)
+		}
+	}
+}
+
+// loginLockout tracks failed login attempts per account.
+type loginLockout struct {
+	mu       sync.Mutex
+	attempts map[string]*lockoutEntry // username -> entry
+	maxFails int
+	lockDur  time.Duration
+}
+
+type lockoutEntry struct {
+	failures int
+	lockedAt time.Time
+}
+
+func newLoginLockout(maxFails int, lockDuration time.Duration) *loginLockout {
+	return &loginLockout{
+		attempts: make(map[string]*lockoutEntry),
+		maxFails: maxFails,
+		lockDur:  lockDuration,
+	}
+}
+
+func (l *loginLockout) isLocked(username string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.attempts[username]
+	if !ok {
+		return false
+	}
+	if !e.lockedAt.IsZero() && time.Since(e.lockedAt) < l.lockDur {
+		return true
+	}
+	if !e.lockedAt.IsZero() && time.Since(e.lockedAt) >= l.lockDur {
+		// Lockout expired — reset.
+		delete(l.attempts, username)
+	}
+	return false
+}
+
+func (l *loginLockout) recordFailure(username string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.attempts[username]
+	if !ok {
+		e = &lockoutEntry{}
+		l.attempts[username] = e
+	}
+	e.failures++
+	if e.failures >= l.maxFails {
+		e.lockedAt = time.Now()
+	}
+}
+
+func (l *loginLockout) recordSuccess(username string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.attempts, username)
+}
+
+func (l *loginLockout) cleanup() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	cutoff := time.Now().Add(-l.lockDur)
+	for user, e := range l.attempts {
+		if !e.lockedAt.IsZero() && e.lockedAt.Before(cutoff) {
+			delete(l.attempts, user)
+		}
+	}
+}
+
 // rateLimiter implements a per-user token bucket rate limiter.
 type rateLimiter struct {
 	mu      sync.Mutex

@@ -158,6 +158,10 @@ func (s *Service) BootstrapAdmin(ctx context.Context, admin *config.InitialAdmin
 // Name returns the provider name.
 func (s *Service) Name() string { return "builtin" }
 
+// dummyHash is a pre-computed bcrypt hash used to normalize timing for
+// login attempts against non-existent users, preventing username enumeration.
+var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("dummy-password-for-timing"), bcrypt.DefaultCost)
+
 // Login authenticates a user and returns a JWT token.
 func (s *Service) Login(ctx context.Context, username, password string) (string, error) {
 	user, err := s.store.GetUser(ctx, "default", username)
@@ -165,6 +169,8 @@ func (s *Service) Login(ctx context.Context, username, password string) (string,
 		return "", fmt.Errorf("get user: %w", err)
 	}
 	if user == nil {
+		// Compare against dummy hash to normalize timing.
+		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
 		return "", ErrInvalidCredentials
 	}
 
@@ -193,6 +199,9 @@ func (s *Service) Register(ctx context.Context, username, password, role string)
 	if role == "" {
 		role = "user"
 	}
+	if role != "user" && role != "admin" {
+		return nil, fmt.Errorf("invalid role %q: must be 'user' or 'admin'", role)
+	}
 
 	user := &store.User{
 		ID:           uuid.New().String(),
@@ -217,10 +226,25 @@ func (s *Service) ValidateToken(ctx context.Context, tokenStr string) (*Identity
 	if err != nil {
 		return nil, err
 	}
+
+	// Reject tokens with empty required claims.
+	if claims.UserID == "" || claims.Role == "" {
+		return nil, ErrUnauthorized
+	}
+
+	// Validate that the claimed user still exists and the role matches.
+	user, err := s.store.GetUserByID(ctx, claims.UserID)
+	if err != nil || user == nil {
+		return nil, ErrUnauthorized
+	}
+	if user.Role != claims.Role {
+		return nil, ErrUnauthorized
+	}
+
 	return &Identity{
-		UserID:   claims.UserID,
-		Username: claims.Username,
-		Role:     claims.Role,
+		UserID:   user.ID,
+		Username: user.Username,
+		Role:     user.Role,
 		OrgID:    "default",
 	}, nil
 }
@@ -243,6 +267,33 @@ func (s *Service) validateJWT(tokenStr string) (*Claims, error) {
 	}
 
 	return claims, nil
+}
+
+// ExtractJTI extracts the JWT ID (jti) from a token string without full validation.
+// Used by the token blocklist to identify revoked tokens.
+func ExtractJTI(tokenStr string) string {
+	parser := jwt.NewParser()
+	token, _, err := parser.ParseUnverified(tokenStr, &Claims{})
+	if err != nil {
+		return ""
+	}
+	if claims, ok := token.Claims.(*Claims); ok {
+		return claims.ID
+	}
+	return ""
+}
+
+// ExtractExpiry extracts the expiry time from a token string without full validation.
+func ExtractExpiry(tokenStr string) time.Time {
+	parser := jwt.NewParser()
+	token, _, err := parser.ParseUnverified(tokenStr, &Claims{})
+	if err != nil {
+		return time.Time{}
+	}
+	if claims, ok := token.Claims.(*Claims); ok && claims.ExpiresAt != nil {
+		return claims.ExpiresAt.Time
+	}
+	return time.Time{}
 }
 
 // ValidateRuntimeToken checks if a runtime token is valid and returns the runtime ID.

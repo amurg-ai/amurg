@@ -39,6 +39,12 @@ func NewSQLite(dsn string) (*SQLiteStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("enable foreign keys: %w", err)
 	}
+	// Set busy timeout so concurrent writers retry for up to 5 seconds
+	// instead of immediately returning SQLITE_BUSY.
+	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("set busy timeout: %w", err)
+	}
 
 	s := &SQLiteStore{db: db}
 	if err := s.migrate(); err != nil {
@@ -47,6 +53,23 @@ func NewSQLite(dsn string) (*SQLiteStore, error) {
 	}
 
 	return s, nil
+}
+
+// sqliteRetry retries a function on SQLITE_BUSY errors with exponential backoff.
+func sqliteRetry(fn func() error) error {
+	var err error
+	for attempt := 0; attempt < 5; attempt++ {
+		err = fn()
+		if err == nil {
+			return nil
+		}
+		if !strings.Contains(err.Error(), "SQLITE_BUSY") &&
+			!strings.Contains(err.Error(), "database is locked") {
+			return err
+		}
+		time.Sleep(time.Duration(10*(1<<attempt)) * time.Millisecond) // 10ms, 20ms, 40ms, 80ms, 160ms
+	}
+	return err
 }
 
 func tableExists(db *sql.DB, name string) bool {
@@ -159,6 +182,7 @@ func (s *SQLiteStore) migrate() error {
 		{"audit_events", "org_id", "TEXT NOT NULL DEFAULT 'default'"},
 		{"audit_events", "agent_id", "TEXT NOT NULL DEFAULT ''"},
 		{"agents", "security", "TEXT NOT NULL DEFAULT '{}'"},
+		{"sessions", "resumed_from", "TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, cm := range columnMigrations {
 		if err := s.addColumnIfNotExists(cm.table, cm.column, cm.definition); err != nil {
@@ -498,22 +522,24 @@ func (s *SQLiteStore) DeleteAgentsByRuntime(ctx context.Context, runtimeID strin
 // --- Sessions ---
 
 func (s *SQLiteStore) CreateSession(ctx context.Context, sess *Session) error {
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO sessions (id, org_id, user_id, agent_id, runtime_id, profile, state, native_handle, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		sess.ID, sess.OrgID, sess.UserID, sess.AgentID, sess.RuntimeID, sess.Profile,
-		sess.State, sess.NativeHandle, sess.CreatedAt, sess.UpdatedAt,
-	)
-	return err
+	return sqliteRetry(func() error {
+		_, err := s.db.ExecContext(ctx,
+			`INSERT INTO sessions (id, org_id, user_id, agent_id, runtime_id, profile, state, native_handle, resumed_from, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			sess.ID, sess.OrgID, sess.UserID, sess.AgentID, sess.RuntimeID, sess.Profile,
+			sess.State, sess.NativeHandle, sess.ResumedFrom, sess.CreatedAt, sess.UpdatedAt,
+		)
+		return err
+	})
 }
 
 func (s *SQLiteStore) GetSession(ctx context.Context, id string) (*Session, error) {
 	var sess Session
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, org_id, user_id, agent_id, runtime_id, profile, state, native_handle, created_at, updated_at
+		`SELECT id, org_id, user_id, agent_id, runtime_id, profile, state, native_handle, resumed_from, created_at, updated_at
 		 FROM sessions WHERE id = ?`, id,
 	).Scan(&sess.ID, &sess.OrgID, &sess.UserID, &sess.AgentID, &sess.RuntimeID, &sess.Profile,
-		&sess.State, &sess.NativeHandle, &sess.CreatedAt, &sess.UpdatedAt)
+		&sess.State, &sess.NativeHandle, &sess.ResumedFrom, &sess.CreatedAt, &sess.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -522,7 +548,7 @@ func (s *SQLiteStore) GetSession(ctx context.Context, id string) (*Session, erro
 
 func (s *SQLiteStore) ListSessionsByUser(ctx context.Context, userID string) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT s.id, s.org_id, s.user_id, s.agent_id, s.runtime_id, s.profile, s.state, s.native_handle,
+		`SELECT s.id, s.org_id, s.user_id, s.agent_id, s.runtime_id, s.profile, s.state, s.native_handle, s.resumed_from,
 		        s.created_at, s.updated_at, COALESCE(a.name, '') as agent_name
 		 FROM sessions s LEFT JOIN agents a ON s.agent_id = a.id
 		 WHERE s.user_id = ? ORDER BY s.updated_at DESC`, userID,
@@ -536,7 +562,7 @@ func (s *SQLiteStore) ListSessionsByUser(ctx context.Context, userID string) ([]
 	for rows.Next() {
 		var sess Session
 		if err := rows.Scan(&sess.ID, &sess.OrgID, &sess.UserID, &sess.AgentID, &sess.RuntimeID, &sess.Profile,
-			&sess.State, &sess.NativeHandle, &sess.CreatedAt, &sess.UpdatedAt, &sess.AgentName); err != nil {
+			&sess.State, &sess.NativeHandle, &sess.ResumedFrom, &sess.CreatedAt, &sess.UpdatedAt, &sess.AgentName); err != nil {
 			return nil, err
 		}
 		sessions = append(sessions, sess)
@@ -545,11 +571,13 @@ func (s *SQLiteStore) ListSessionsByUser(ctx context.Context, userID string) ([]
 }
 
 func (s *SQLiteStore) UpdateSessionState(ctx context.Context, id string, state string) error {
-	_, err := s.db.ExecContext(ctx,
-		"UPDATE sessions SET state = ?, updated_at = ? WHERE id = ?",
-		state, time.Now(), id,
-	)
-	return err
+	return sqliteRetry(func() error {
+		_, err := s.db.ExecContext(ctx,
+			"UPDATE sessions SET state = ?, updated_at = ? WHERE id = ?",
+			state, time.Now(), id,
+		)
+		return err
+	})
 }
 
 func (s *SQLiteStore) SetSessionNativeHandle(ctx context.Context, id, handle string) error {
@@ -610,11 +638,11 @@ func (s *SQLiteStore) ListActiveSessions(ctx context.Context, orgID string) ([]S
 	var err error
 	if orgID == "" {
 		rows, err = s.db.QueryContext(ctx,
-			`SELECT id, org_id, user_id, agent_id, runtime_id, profile, state, native_handle, created_at, updated_at
+			`SELECT id, org_id, user_id, agent_id, runtime_id, profile, state, native_handle, resumed_from, created_at, updated_at
 			 FROM sessions WHERE state NOT IN ('closed') ORDER BY updated_at DESC`)
 	} else {
 		rows, err = s.db.QueryContext(ctx,
-			`SELECT id, org_id, user_id, agent_id, runtime_id, profile, state, native_handle, created_at, updated_at
+			`SELECT id, org_id, user_id, agent_id, runtime_id, profile, state, native_handle, resumed_from, created_at, updated_at
 			 FROM sessions WHERE org_id = ? AND state NOT IN ('closed') ORDER BY updated_at DESC`,
 			orgID)
 	}
@@ -627,7 +655,7 @@ func (s *SQLiteStore) ListActiveSessions(ctx context.Context, orgID string) ([]S
 	for rows.Next() {
 		var sess Session
 		if err := rows.Scan(&sess.ID, &sess.OrgID, &sess.UserID, &sess.AgentID, &sess.RuntimeID, &sess.Profile,
-			&sess.State, &sess.NativeHandle, &sess.CreatedAt, &sess.UpdatedAt); err != nil {
+			&sess.State, &sess.NativeHandle, &sess.ResumedFrom, &sess.CreatedAt, &sess.UpdatedAt); err != nil {
 			return nil, err
 		}
 		sessions = append(sessions, sess)
@@ -698,12 +726,14 @@ func (s *SQLiteStore) LogAuditEvent(ctx context.Context, event *AuditEvent) erro
 	if event.Detail != nil {
 		detail = string(event.Detail)
 	}
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO audit_events (id, org_id, action, user_id, runtime_id, session_id, agent_id, detail, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		event.ID, event.OrgID, event.Action, event.UserID, event.RuntimeID, event.SessionID, event.AgentID, detail, event.CreatedAt,
-	)
-	return err
+	return sqliteRetry(func() error {
+		_, err := s.db.ExecContext(ctx,
+			`INSERT INTO audit_events (id, org_id, action, user_id, runtime_id, session_id, agent_id, detail, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			event.ID, event.OrgID, event.Action, event.UserID, event.RuntimeID, event.SessionID, event.AgentID, detail, event.CreatedAt,
+		)
+		return err
+	})
 }
 
 func (s *SQLiteStore) ListAuditEvents(ctx context.Context, orgID string, limit, offset int) ([]AuditEvent, error) {
@@ -738,8 +768,10 @@ func (s *SQLiteStore) ListAuditEventsFiltered(ctx context.Context, orgID string,
 	args := []any{orgID}
 
 	if filter.Action != "" {
-		query += " AND action LIKE ?"
-		args = append(args, filter.Action+"%")
+		// Escape LIKE wildcards to prevent injection of % and _ characters.
+		escaped := strings.NewReplacer("%", "\\%", "_", "\\_").Replace(filter.Action)
+		query += " AND action LIKE ? ESCAPE '\\'"
+		args = append(args, escaped+"%")
 	}
 	if filter.UserID != "" {
 		query += " AND user_id = ?"
@@ -793,7 +825,7 @@ func (s *SQLiteStore) ListAuditEventsFiltered(ctx context.Context, orgID string,
 
 func (s *SQLiteStore) ListAllSessions(ctx context.Context, orgID string) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT s.id, s.org_id, s.user_id, s.agent_id, s.runtime_id, s.profile, s.state, s.native_handle,
+		`SELECT s.id, s.org_id, s.user_id, s.agent_id, s.runtime_id, s.profile, s.state, s.native_handle, s.resumed_from,
 		        s.created_at, s.updated_at, COALESCE(a.name, '') as agent_name
 		 FROM sessions s LEFT JOIN agents a ON s.agent_id = a.id
 		 WHERE s.org_id = ?
@@ -809,7 +841,7 @@ func (s *SQLiteStore) ListAllSessions(ctx context.Context, orgID string) ([]Sess
 	for rows.Next() {
 		var sess Session
 		if err := rows.Scan(&sess.ID, &sess.OrgID, &sess.UserID, &sess.AgentID, &sess.RuntimeID, &sess.Profile,
-			&sess.State, &sess.NativeHandle, &sess.CreatedAt, &sess.UpdatedAt, &sess.AgentName); err != nil {
+			&sess.State, &sess.NativeHandle, &sess.ResumedFrom, &sess.CreatedAt, &sess.UpdatedAt, &sess.AgentName); err != nil {
 			return nil, err
 		}
 		sessions = append(sessions, sess)

@@ -52,6 +52,7 @@ type Server struct {
 	startTime             time.Time
 	maxBodyBytes          int64
 	authProviderName      string // "builtin" or "clerk"
+	baseURL               string // configured public base URL for generated links
 	fileStoragePath       string // path for uploaded files
 	maxFileBytes          int64  // max file upload size
 	whisperURL            string // upstream Whisper WebSocket URL for /asr proxy
@@ -61,6 +62,8 @@ type Server struct {
 	rl                    *rateLimiter
 	deviceCodeRL          *rateLimiter
 	deviceCodePollRL      *rateLimiter
+	tokenBlocklist        *tokenBlocklist   // revoked JWT IDs
+	loginLockout          *loginLockout     // per-account failed login tracking
 }
 
 // NewServer creates a new API server.
@@ -82,6 +85,7 @@ func NewServer(s store.Store, ap auth.Provider, lp auth.LoginProvider, ra auth.R
 		startTime:             time.Now(),
 		maxBodyBytes:          cfg.Server.MaxBodyBytes,
 		authProviderName:      authName,
+		baseURL:               cfg.Server.BaseURL,
 		fileStoragePath:       cfg.Server.FileStoragePath,
 		maxFileBytes:          cfg.Server.MaxFileBytes,
 		whisperURL:            cfg.Server.WhisperURL,
@@ -89,8 +93,12 @@ func NewServer(s store.Store, ap auth.Provider, lp auth.LoginProvider, ra auth.R
 		stripePriceTeam:       opts.StripePriceTeam,
 	}
 
+	srv.tokenBlocklist = newTokenBlocklist()
+	srv.loginLockout = newLoginLockout(10, 15*time.Minute) // lock for 15 min after 10 failures
+
 	mux := chi.NewRouter()
 	mux.Use(chimw.Recoverer)
+	mux.Use(makeTrustedProxyMiddleware(cfg.Server.TrustedProxies))
 	mux.Use(chimw.RealIP)
 	mux.Use(securityHeadersMiddleware)
 	mux.Use(makeCORSMiddleware(cfg.Server.AllowedOrigins))
@@ -106,6 +114,7 @@ func NewServer(s store.Store, ap auth.Provider, lp auth.LoginProvider, ra auth.R
 	if lp != nil {
 		srv.loginRL = newRateLimiter(5, 10)
 		mux.With(loginIPRateLimitMiddleware(srv.loginRL)).Post("/api/auth/login", srv.handleLogin)
+		mux.Post("/api/auth/logout", srv.handleLogout)
 	}
 
 	// Device-code registration (unauthenticated, rate-limited by IP)
@@ -139,7 +148,9 @@ func NewServer(s store.Store, ap auth.Provider, lp auth.LoginProvider, ra auth.R
 		r.Get("/api/agents", srv.handleListAgents)
 		r.Get("/api/sessions", srv.handleListSessions)
 		r.Post("/api/sessions", srv.handleCreateSession)
+		r.Get("/api/sessions/{sessionID}", srv.handleGetSession)
 		r.Get("/api/sessions/{sessionID}/messages", srv.handleGetMessages)
+		r.Get("/api/sessions/{sessionID}/files", srv.handleListSessionFiles)
 		r.Post("/api/sessions/{sessionID}/files", srv.handleUploadFile)
 		r.Get("/api/files/{fileID}", srv.handleDownloadFile)
 		r.Post("/api/sessions/{sessionID}/close", srv.handleCloseSession)
@@ -190,8 +201,8 @@ func NewServer(s store.Store, ap auth.Provider, lp auth.LoginProvider, ra auth.R
 	if uiDir != "" {
 		fileServer := http.FileServer(http.Dir(uiDir))
 		mux.Handle("/*", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Only serve static files for GET requests.
-			if r.Method != http.MethodGet {
+			// Only serve static files for GET and HEAD requests (HEAD is required by HTTP spec).
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
 				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 				return
 			}
@@ -232,6 +243,20 @@ func (s *Server) StartBackgroundTasks(ctx context.Context) {
 	if s.deviceCodePollRL != nil {
 		s.deviceCodePollRL.StartCleanup(ctx, 5*time.Minute, 10*time.Minute)
 	}
+	// Periodically clean up expired token blocklist entries and lockout entries.
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.tokenBlocklist.cleanup()
+				s.loginLockout.cleanup()
+			}
+		}
+	}()
 }
 
 // --- Auth handlers ---
@@ -255,8 +280,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check account lockout before attempting login.
+	if s.loginLockout.isLocked(req.Username) {
+		writeError(w, http.StatusTooManyRequests, "account temporarily locked due to too many failed attempts")
+		return
+	}
+
 	token, err := s.loginProvider.Login(r.Context(), req.Username, req.Password)
 	if err != nil {
+		s.loginLockout.recordFailure(req.Username)
 		if err := s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
 			ID: uuid.New().String(), OrgID: "default", Action: "login.failed",
 			Detail: json.RawMessage(fmt.Sprintf(`{"username":%q}`, req.Username)), CreatedAt: time.Now(),
@@ -266,6 +298,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
+	s.loginLockout.recordSuccess(req.Username)
 
 	// Look up user for audit event.
 	user, _ := s.store.GetUser(r.Context(), "default", req.Username)
@@ -282,13 +315,44 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})
 }
 
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	authHeader := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		writeError(w, http.StatusUnauthorized, "missing authorization header")
+		return
+	}
+	tokenStr := authHeader[7:]
+
+	// Validate the token first to ensure it's legitimate.
+	_, err := s.authProvider.ValidateToken(r.Context(), tokenStr)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "invalid token")
+		return
+	}
+
+	// Add the token's JTI to the blocklist until its natural expiry.
+	jti := auth.ExtractJTI(tokenStr)
+	expiry := auth.ExtractExpiry(tokenStr)
+	if jti != "" && !expiry.IsZero() {
+		s.tokenBlocklist.add(jti, expiry)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
+}
+
 func (s *Server) handleGetMe(w http.ResponseWriter, r *http.Request) {
 	identity := getIdentityFromContext(r.Context())
-	writeJSON(w, http.StatusOK, map[string]string{
+	resp := map[string]any{
 		"id":       identity.UserID,
 		"username": identity.Username,
 		"role":     identity.Role,
-	})
+		"org_id":   identity.OrgID,
+	}
+	// Enrich with DB fields when available.
+	if user, err := s.store.GetUserByID(r.Context(), identity.UserID); err == nil && user != nil {
+		resp["created_at"] = user.CreatedAt
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // --- Agent handlers ---
@@ -333,18 +397,51 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type agentResponse struct {
-		store.Agent
-		Online bool `json:"online"`
+		ID        string          `json:"id"`
+		OrgID     string          `json:"org_id"`
+		RuntimeID string          `json:"runtime_id"`
+		Profile   string          `json:"profile"`
+		Name      string          `json:"name"`
+		Tags      json.RawMessage `json:"tags"`
+		Caps      json.RawMessage `json:"caps"`
+		Security  json.RawMessage `json:"security"`
+		Online    bool            `json:"online"`
 	}
 	result := make([]agentResponse, len(agents))
 	for i, agent := range agents {
-		result[i] = agentResponse{Agent: agent, Online: onlineSet[agent.RuntimeID]}
+		result[i] = agentResponse{
+			ID:        agent.ID,
+			OrgID:     agent.OrgID,
+			RuntimeID: agent.RuntimeID,
+			Profile:   agent.Profile,
+			Name:      agent.Name,
+			Tags:      json.RawMessage(agent.Tags),
+			Caps:      json.RawMessage(agent.Caps),
+			Security:  json.RawMessage(agent.Security),
+			Online:    onlineSet[agent.RuntimeID],
+		}
 	}
 
 	writeJSON(w, http.StatusOK, result)
 }
 
 // --- Session handlers ---
+
+func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
+	sessionID := chi.URLParam(r, "sessionID")
+	identity := getIdentityFromContext(r.Context())
+
+	sess, err := s.store.GetSession(r.Context(), sessionID)
+	if err != nil || sess == nil {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	if sess.UserID != identity.UserID && identity.Role != "admin" {
+		writeError(w, http.StatusForbidden, "access denied")
+		return
+	}
+	writeJSON(w, http.StatusOK, sess)
+}
 
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	identity := getIdentityFromContext(r.Context())
@@ -392,9 +489,13 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Validate agent_id refers to an existing agent.
+	// Validate agent_id format and length.
 	if req.AgentID == "" {
 		writeError(w, http.StatusBadRequest, "agent_id is required")
+		return
+	}
+	if len(req.AgentID) > 128 {
+		writeError(w, http.StatusBadRequest, "agent_id exceeds maximum length of 128 characters")
 		return
 	}
 	agent, err := s.store.GetAgent(r.Context(), req.AgentID)
@@ -579,6 +680,17 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Audit log user creation.
+	identity := getIdentityFromContext(r.Context())
+	if err := s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
+		ID: uuid.New().String(), OrgID: identity.OrgID, Action: "user.create",
+		UserID: identity.UserID,
+		Detail:    json.RawMessage(fmt.Sprintf(`{"created_user_id":%q,"username":%q,"role":%q}`, user.ID, user.Username, user.Role)),
+		CreatedAt: time.Now(),
+	}); err != nil {
+		s.logger.Warn("failed to log audit event", "action", "user.create", "error", err)
+	}
+
 	user.PasswordHash = ""
 	writeJSON(w, http.StatusCreated, user)
 }
@@ -593,6 +705,19 @@ func (s *Server) handleGrantPermission(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.UserID == "" || req.AgentID == "" {
+		writeError(w, http.StatusBadRequest, "user_id and agent_id are required")
+		return
+	}
+	// Verify referenced entities exist.
+	if user, err := s.store.GetUserByID(r.Context(), req.UserID); err != nil || user == nil {
+		writeError(w, http.StatusBadRequest, "user not found")
+		return
+	}
+	if agent, err := s.store.GetAgent(r.Context(), req.AgentID); err != nil || agent == nil {
+		writeError(w, http.StatusBadRequest, "agent not found")
 		return
 	}
 	if err := s.store.GrantAgentAccess(r.Context(), req.UserID, req.AgentID); err != nil {
@@ -610,6 +735,10 @@ func (s *Server) handleRevokePermission(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.UserID == "" || req.AgentID == "" {
+		writeError(w, http.StatusBadRequest, "user_id and agent_id are required")
 		return
 	}
 	if err := s.store.RevokeAgentAccess(r.Context(), req.UserID, req.AgentID); err != nil {
@@ -694,15 +823,17 @@ func (s *Server) handleAdminListAuditEvents(w http.ResponseWriter, r *http.Reque
 
 	// Check for filter parameters.
 	action := r.URL.Query().Get("action")
+	userID := r.URL.Query().Get("user_id")
 	sessionID := r.URL.Query().Get("session_id")
 	agentID := r.URL.Query().Get("agent_id")
 
 	var events []store.AuditEvent
 	var err error
 
-	if action != "" || sessionID != "" || agentID != "" {
+	if action != "" || userID != "" || sessionID != "" || agentID != "" {
 		events, err = s.store.ListAuditEventsFiltered(r.Context(), identity.OrgID, store.AuditFilter{
 			Action:    action,
+			UserID:    userID,
 			SessionID: sessionID,
 			AgentID:   agentID,
 			Limit:      limit,
@@ -825,7 +956,15 @@ func (s *Server) handleGetAgentConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"agent_id": agentID, "override": nil})
 		return
 	}
-	writeJSON(w, http.StatusOK, override)
+	// Return security/limits as parsed JSON objects, not double-serialized strings.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"agent_id":   override.AgentID,
+		"org_id":     override.OrgID,
+		"security":   json.RawMessage(override.Security),
+		"limits":     json.RawMessage(override.Limits),
+		"updated_by": override.UpdatedBy,
+		"updated_at": override.UpdatedAt,
+	})
 }
 
 func (s *Server) handleUpdateAgentConfig(w http.ResponseWriter, r *http.Request) {
@@ -864,34 +1003,27 @@ func (s *Server) handleUpdateAgentConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Merge with existing config so a partial PUT does not wipe unspecified fields.
+	existing, _ := s.store.GetAgentConfigOverride(r.Context(), agentID)
 	secJSON := "{}"
+	limJSON := "{}"
+	if existing != nil {
+		secJSON = existing.Security
+		limJSON = existing.Limits
+	}
 	if req.Security != nil {
 		if b, err := json.Marshal(req.Security); err == nil {
 			secJSON = string(b)
 		}
 	}
-	limJSON := "{}"
 	if req.Limits != nil {
 		if b, err := json.Marshal(req.Limits); err == nil {
 			limJSON = string(b)
 		}
 	}
 
-	override := &store.AgentConfigOverride{
-		AgentID:   agentID,
-		OrgID:     agent.OrgID,
-		Security:  secJSON,
-		Limits:    limJSON,
-		UpdatedBy: identity.UserID,
-		UpdatedAt: time.Now(),
-	}
-
-	if err := s.store.UpsertAgentConfigOverride(r.Context(), override); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to save config override")
-		return
-	}
-
-	// Push to runtime and wait for ack.
+	// Push to runtime first and wait for ack. Only persist to DB on success
+	// to prevent rejected configs from being loaded on restart.
 	result := s.router.PushAgentConfigUpdate(agentID, req.Security, req.Limits)
 
 	// Audit log.
@@ -908,13 +1040,27 @@ func (s *Server) handleUpdateAgentConfig(w http.ResponseWriter, r *http.Request)
 		s.logger.Warn("failed to log audit event", "action", "agent.config_update", "error", err)
 	}
 
-	// If the runtime rejected the update, relay the error.
+	// If the runtime rejected the update, do not persist.
 	if result.Error != "" {
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"status":            "rejected",
 			"pushed_to_runtime": result.Pushed,
 			"error":             result.Error,
 		})
+		return
+	}
+
+	override := &store.AgentConfigOverride{
+		AgentID:   agentID,
+		OrgID:     agent.OrgID,
+		Security:  secJSON,
+		Limits:    limJSON,
+		UpdatedBy: identity.UserID,
+		UpdatedAt: time.Now(),
+	}
+
+	if err := s.store.UpsertAgentConfigOverride(r.Context(), override); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save config override")
 		return
 	}
 
@@ -1077,20 +1223,26 @@ func (s *Server) handleRuntimeRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	go func() { _, _ = s.store.PurgeExpiredDeviceCodes(context.Background()) }()
 
-	scheme := "https"
-	if r.TLS == nil {
-		scheme = "http"
+	var verificationURL string
+	if s.baseURL != "" {
+		// Use the configured base URL to prevent host header injection.
+		verificationURL = fmt.Sprintf("%s/connect?code=%s", strings.TrimRight(s.baseURL, "/"), userCode)
+	} else {
+		scheme := "https"
+		if r.TLS == nil {
+			scheme = "http"
+		}
+		if fwd := r.Header.Get("X-Forwarded-Proto"); fwd == "https" || fwd == "http" {
+			scheme = fwd
+		}
+		// Validate host header to prevent header injection / phishing.
+		host := r.Host
+		if strings.ContainsAny(host, " \r\n\t/<>\"'") || host == "" {
+			writeError(w, http.StatusBadRequest, "invalid host header")
+			return
+		}
+		verificationURL = fmt.Sprintf("%s://%s/connect?code=%s", scheme, host, userCode)
 	}
-	if fwd := r.Header.Get("X-Forwarded-Proto"); fwd == "https" || fwd == "http" {
-		scheme = fwd
-	}
-	// Validate host header to prevent header injection / phishing.
-	host := r.Host
-	if strings.ContainsAny(host, " \r\n\t/<>\"'") || host == "" {
-		writeError(w, http.StatusBadRequest, "invalid host header")
-		return
-	}
-	verificationURL := fmt.Sprintf("%s://%s/connect?code=%s", scheme, host, userCode)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"user_code":        userCode,

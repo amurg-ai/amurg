@@ -534,6 +534,10 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 
 		if resp.OK {
 			ctx := context.Background()
+			// Transition session from "creating" to "active" now that the runtime accepted it.
+			if err := r.store.UpdateSessionState(ctx, resp.SessionID, "active"); err != nil {
+				r.logger.Warn("failed to update session state to active", "session_id", resp.SessionID, "error", err)
+			}
 			if resp.NativeHandle != "" {
 				if err := r.store.SetSessionNativeHandle(ctx, resp.SessionID, resp.NativeHandle); err != nil {
 					r.logger.Warn("failed to set session native handle", "session_id", resp.SessionID, "error", err)
@@ -1151,15 +1155,16 @@ func (r *Router) CreateSession(ctx context.Context, userID, agentID string, opts
 	}
 
 	sess := &store.Session{
-		ID:        uuid.New().String(),
-		OrgID:     agent.OrgID,
-		UserID:    userID,
-		AgentID:   agentID,
-		RuntimeID: agent.RuntimeID,
-		Profile:   agent.Profile,
-		State:     "creating",
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		ID:          uuid.New().String(),
+		OrgID:       agent.OrgID,
+		UserID:      userID,
+		AgentID:     agentID,
+		RuntimeID:   agent.RuntimeID,
+		Profile:     agent.Profile,
+		State:       "creating",
+		ResumedFrom: opt.ResumeSessionID,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
 	}
 
 	if err := r.store.CreateSession(ctx, sess); err != nil {

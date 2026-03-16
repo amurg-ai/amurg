@@ -119,6 +119,14 @@ func New(cfg *config.Config, opts Options, logger *slog.Logger) (*Hub, error) {
 		}
 	}
 
+	// Pre-create file storage directory to avoid runtime permission errors.
+	if cfg.Server.FileStoragePath != "" {
+		if err := os.MkdirAll(cfg.Server.FileStoragePath, 0o755); err != nil {
+			logger.Warn("failed to create file storage directory — file uploads may fail",
+				"path", cfg.Server.FileStoragePath, "error", err)
+		}
+	}
+
 	if cfg.Server.UIStaticDir != "" {
 		if _, err := os.Stat(cfg.Server.UIStaticDir); os.IsNotExist(err) {
 			logger.Warn("UI static directory does not exist", "path", cfg.Server.UIStaticDir)

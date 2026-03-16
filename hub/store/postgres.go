@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -192,6 +193,11 @@ func (s *PostgresStore) migrate() error {
 		// Add plan column to organizations (idempotent)
 		`DO $$ BEGIN
 			ALTER TABLE organizations ADD COLUMN plan TEXT NOT NULL DEFAULT 'free';
+		EXCEPTION WHEN duplicate_column THEN NULL;
+		END $$`,
+		// Add resumed_from column to sessions (idempotent)
+		`DO $$ BEGIN
+			ALTER TABLE sessions ADD COLUMN resumed_from TEXT NOT NULL DEFAULT '';
 		EXCEPTION WHEN duplicate_column THEN NULL;
 		END $$`,
 	}
@@ -463,10 +469,10 @@ func (s *PostgresStore) DeleteAgentsByRuntime(ctx context.Context, runtimeID str
 
 func (s *PostgresStore) CreateSession(ctx context.Context, sess *Session) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO sessions (id, org_id, user_id, agent_id, runtime_id, profile, state, native_handle, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		`INSERT INTO sessions (id, org_id, user_id, agent_id, runtime_id, profile, state, native_handle, resumed_from, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		sess.ID, sess.OrgID, sess.UserID, sess.AgentID, sess.RuntimeID, sess.Profile,
-		sess.State, sess.NativeHandle, sess.CreatedAt, sess.UpdatedAt,
+		sess.State, sess.NativeHandle, sess.ResumedFrom, sess.CreatedAt, sess.UpdatedAt,
 	)
 	return err
 }
@@ -474,10 +480,10 @@ func (s *PostgresStore) CreateSession(ctx context.Context, sess *Session) error 
 func (s *PostgresStore) GetSession(ctx context.Context, id string) (*Session, error) {
 	var sess Session
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, org_id, user_id, agent_id, runtime_id, profile, state, native_handle, created_at, updated_at
+		`SELECT id, org_id, user_id, agent_id, runtime_id, profile, state, native_handle, resumed_from, created_at, updated_at
 		 FROM sessions WHERE id = $1`, id,
 	).Scan(&sess.ID, &sess.OrgID, &sess.UserID, &sess.AgentID, &sess.RuntimeID, &sess.Profile,
-		&sess.State, &sess.NativeHandle, &sess.CreatedAt, &sess.UpdatedAt)
+		&sess.State, &sess.NativeHandle, &sess.ResumedFrom, &sess.CreatedAt, &sess.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -486,7 +492,7 @@ func (s *PostgresStore) GetSession(ctx context.Context, id string) (*Session, er
 
 func (s *PostgresStore) ListSessionsByUser(ctx context.Context, userID string) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT s.id, s.org_id, s.user_id, s.agent_id, s.runtime_id, s.profile, s.state, s.native_handle,
+		`SELECT s.id, s.org_id, s.user_id, s.agent_id, s.runtime_id, s.profile, s.state, s.native_handle, s.resumed_from,
 		        s.created_at, s.updated_at, COALESCE(a.name, '') as agent_name
 		 FROM sessions s LEFT JOIN agents a ON s.agent_id = a.id
 		 WHERE s.user_id = $1 ORDER BY s.updated_at DESC`, userID,
@@ -500,7 +506,7 @@ func (s *PostgresStore) ListSessionsByUser(ctx context.Context, userID string) (
 	for rows.Next() {
 		var sess Session
 		if err := rows.Scan(&sess.ID, &sess.OrgID, &sess.UserID, &sess.AgentID, &sess.RuntimeID, &sess.Profile,
-			&sess.State, &sess.NativeHandle, &sess.CreatedAt, &sess.UpdatedAt, &sess.AgentName); err != nil {
+			&sess.State, &sess.NativeHandle, &sess.ResumedFrom, &sess.CreatedAt, &sess.UpdatedAt, &sess.AgentName); err != nil {
 			return nil, err
 		}
 		sessions = append(sessions, sess)
@@ -574,11 +580,11 @@ func (s *PostgresStore) ListActiveSessions(ctx context.Context, orgID string) ([
 	var err error
 	if orgID == "" {
 		rows, err = s.db.QueryContext(ctx,
-			`SELECT id, org_id, user_id, agent_id, runtime_id, profile, state, native_handle, created_at, updated_at
+			`SELECT id, org_id, user_id, agent_id, runtime_id, profile, state, native_handle, resumed_from, created_at, updated_at
 			 FROM sessions WHERE state NOT IN ('closed') ORDER BY updated_at DESC`)
 	} else {
 		rows, err = s.db.QueryContext(ctx,
-			`SELECT id, org_id, user_id, agent_id, runtime_id, profile, state, native_handle, created_at, updated_at
+			`SELECT id, org_id, user_id, agent_id, runtime_id, profile, state, native_handle, resumed_from, created_at, updated_at
 			 FROM sessions WHERE org_id = $1 AND state NOT IN ('closed') ORDER BY updated_at DESC`,
 			orgID)
 	}
@@ -591,7 +597,7 @@ func (s *PostgresStore) ListActiveSessions(ctx context.Context, orgID string) ([
 	for rows.Next() {
 		var sess Session
 		if err := rows.Scan(&sess.ID, &sess.OrgID, &sess.UserID, &sess.AgentID, &sess.RuntimeID, &sess.Profile,
-			&sess.State, &sess.NativeHandle, &sess.CreatedAt, &sess.UpdatedAt); err != nil {
+			&sess.State, &sess.NativeHandle, &sess.ResumedFrom, &sess.CreatedAt, &sess.UpdatedAt); err != nil {
 			return nil, err
 		}
 		sessions = append(sessions, sess)
@@ -703,8 +709,10 @@ func (s *PostgresStore) ListAuditEventsFiltered(ctx context.Context, orgID strin
 	argN := 2
 
 	if filter.Action != "" {
-		query += fmt.Sprintf(" AND action LIKE $%d", argN)
-		args = append(args, filter.Action+"%")
+		// Escape LIKE wildcards to prevent injection of % and _ characters.
+		escaped := strings.NewReplacer("%", "\\%", "_", "\\_").Replace(filter.Action)
+		query += fmt.Sprintf(" AND action LIKE $%d ESCAPE '\\'", argN)
+		args = append(args, escaped+"%")
 		argN++
 	}
 	if filter.UserID != "" {
@@ -763,7 +771,7 @@ func (s *PostgresStore) ListAuditEventsFiltered(ctx context.Context, orgID strin
 
 func (s *PostgresStore) ListAllSessions(ctx context.Context, orgID string) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT s.id, s.org_id, s.user_id, s.agent_id, s.runtime_id, s.profile, s.state, s.native_handle,
+		`SELECT s.id, s.org_id, s.user_id, s.agent_id, s.runtime_id, s.profile, s.state, s.native_handle, s.resumed_from,
 		        s.created_at, s.updated_at, COALESCE(a.name, '') as agent_name
 		 FROM sessions s LEFT JOIN agents a ON s.agent_id = a.id
 		 WHERE s.org_id = $1
@@ -779,7 +787,7 @@ func (s *PostgresStore) ListAllSessions(ctx context.Context, orgID string) ([]Se
 	for rows.Next() {
 		var sess Session
 		if err := rows.Scan(&sess.ID, &sess.OrgID, &sess.UserID, &sess.AgentID, &sess.RuntimeID, &sess.Profile,
-			&sess.State, &sess.NativeHandle, &sess.CreatedAt, &sess.UpdatedAt, &sess.AgentName); err != nil {
+			&sess.State, &sess.NativeHandle, &sess.ResumedFrom, &sess.CreatedAt, &sess.UpdatedAt, &sess.AgentName); err != nil {
 			return nil, err
 		}
 		sessions = append(sessions, sess)

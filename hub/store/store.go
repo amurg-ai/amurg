@@ -165,6 +165,7 @@ type Session struct {
 	Profile      string    `json:"profile"`
 	State        string    `json:"state"` // "active", "idle", "closed"
 	NativeHandle string    `json:"native_handle,omitempty"`
+	ResumedFrom  string    `json:"resumed_from,omitempty"` // ID of the session this was resumed from
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	AgentName    string    `json:"agent_name,omitempty"`
