@@ -116,10 +116,12 @@ func (m *Manager) CreateWithResume(ctx context.Context, sessionID, agentID, user
 				for _, out := range history {
 					onOut(sessionID, out, false)
 				}
+				// History preload is informational; it must not terminate the
+				// next real user turn before the resumed agent responds.
 				onOut(sessionID, adapter.Output{
 					Channel: "system",
 					Data:    []byte("Session history loaded. Send a message to continue."),
-				}, true)
+				}, false)
 			}()
 		}
 	}

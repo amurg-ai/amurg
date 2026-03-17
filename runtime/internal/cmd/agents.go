@@ -9,7 +9,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/amurg-ai/amurg/pkg/cli"
-	"github.com/amurg-ai/amurg/runtime/internal/config"
 	"github.com/amurg-ai/amurg/runtime/internal/wizard"
 )
 
@@ -52,9 +51,9 @@ func newAgentsRemoveCmd() *cobra.Command {
 
 func runAgentsList(cmd *cobra.Command, args []string) error {
 	configPath := resolveConfigPath(cmd, nil, "runtime-config.json")
-	cfg, err := config.Load(configPath)
+	cfg, err := loadConfigWithGuidance(configPath)
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return err
 	}
 
 	if len(cfg.Agents) == 0 {
@@ -72,9 +71,9 @@ func runAgentsList(cmd *cobra.Command, args []string) error {
 
 func runAgentsAdd(cmd *cobra.Command, args []string) error {
 	configPath := resolveConfigPath(cmd, nil, "runtime-config.json")
-	cfg, err := config.Load(configPath)
+	cfg, err := loadConfigWithGuidance(configPath)
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return err
 	}
 
 	w := wizard.New(cli.DefaultPrompter())
@@ -97,9 +96,9 @@ func runAgentsAdd(cmd *cobra.Command, args []string) error {
 func runAgentsRemove(cmd *cobra.Command, args []string) error {
 	targetID := args[0]
 	configPath := resolveConfigPath(cmd, nil, "runtime-config.json")
-	cfg, err := config.Load(configPath)
+	cfg, err := loadConfigWithGuidance(configPath)
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return err
 	}
 
 	found := false

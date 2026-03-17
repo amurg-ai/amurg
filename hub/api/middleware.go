@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/amurg-ai/amurg/hub/auth"
 	"github.com/amurg-ai/amurg/hub/store"
 )
@@ -87,7 +86,9 @@ func (s *Server) ensureUserMiddleware(next http.Handler) http.Handler {
 
 			// Create the user.
 			_ = s.store.CreateUser(ctx, &store.User{
-				ID:         uuid.New().String(),
+				// Keep Clerk-backed identities stable across HTTP and WebSocket
+				// code paths by using the provider subject as the local user ID.
+				ID:         identity.UserID,
 				OrgID:      orgID,
 				ExternalID: identity.UserID,
 				Username:   identity.Username,

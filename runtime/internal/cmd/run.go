@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -10,7 +9,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/amurg-ai/amurg/runtime/internal/config"
 	"github.com/amurg-ai/amurg/runtime/internal/daemon"
 	"github.com/amurg-ai/amurg/runtime/internal/eventbus"
 	"github.com/amurg-ai/amurg/runtime/internal/ipc"
@@ -31,9 +29,9 @@ func newRunCmd() *cobra.Command {
 func runRun(cmd *cobra.Command, args []string) error {
 	configPath := resolveConfigPath(cmd, args, "runtime-config.json")
 
-	cfg, err := config.Load(configPath)
+	cfg, err := loadConfigWithGuidance(configPath)
 	if err != nil {
-		return fmt.Errorf("error: %w", err)
+		return err
 	}
 
 	// Set up structured logging with event bus tee.

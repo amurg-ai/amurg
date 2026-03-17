@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/amurg-ai/amurg/hub/auth"
 	"github.com/amurg-ai/amurg/hub/config"
 	"github.com/amurg-ai/amurg/hub/router"
 	"github.com/amurg-ai/amurg/hub/store"
+	"github.com/google/uuid"
 )
 
 // securityTestEnv holds everything needed for security tests.
@@ -245,8 +245,8 @@ func TestSessionResumeIDOR(t *testing.T) {
 
 	// Create user B via the same store's auth service.
 	authCfg := config.AuthConfig{
-		JWTSecret: "test-secret-at-least-32-chars-long",
-		JWTExpiry: config.Duration{Duration: 1 * time.Hour},
+		JWTSecret:          "test-secret-at-least-32-chars-long",
+		JWTExpiry:          config.Duration{Duration: 1 * time.Hour},
 		DefaultAgentAccess: "all", RuntimeTokenLifetime: config.Duration{Duration: 1 * time.Hour},
 	}
 	authSvcB := auth.NewService(env.store, authCfg)
@@ -277,7 +277,7 @@ func TestRBAC_NonAdminCannotApproveRegistration(t *testing.T) {
 	_ = env.store.CreateDeviceCode(ctx, &store.DeviceCode{
 		ID: uuid.New().String(), UserCode: "TEST-" + uuid.New().String()[:4],
 		PollingToken: "poll-tok-" + uuid.New().String()[:6],
-		OrgID: "default", Status: "pending",
+		OrgID:        "default", Status: "pending",
 		CreatedAt: time.Now(), ExpiresAt: time.Now().Add(5 * time.Minute),
 	})
 
@@ -363,7 +363,7 @@ func TestXForwardedProtoInjection(t *testing.T) {
 
 	// javascript: scheme must not appear in verification_url.
 	req := httptest.NewRequest(http.MethodPost, "/api/runtime/register", nil)
-	req.Host = "legit.example.com"
+	req.Host = "localhost:8090"
 	req.Header.Set("X-Forwarded-Proto", "javascript")
 	w := httptest.NewRecorder()
 	env.srv.mux.ServeHTTP(w, req)
@@ -382,7 +382,7 @@ func TestXForwardedProtoInjection(t *testing.T) {
 	// Valid schemes should work.
 	for _, scheme := range []string{"http", "https"} {
 		req := httptest.NewRequest(http.MethodPost, "/api/runtime/register", nil)
-		req.Host = "legit.example.com"
+		req.Host = "localhost:8090"
 		req.Header.Set("X-Forwarded-Proto", scheme)
 		w := httptest.NewRecorder()
 		env.srv.mux.ServeHTTP(w, req)
@@ -395,6 +395,32 @@ func TestXForwardedProtoInjection(t *testing.T) {
 				t.Errorf("expected %s:// prefix, got %q", scheme, url)
 			}
 		}
+	}
+}
+
+func TestRuntimeRegister_NonLoopbackHostRequiresBaseURL(t *testing.T) {
+	env := setupSecurityTest(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/runtime/register", nil)
+	req.Host = "evil.example"
+	w := httptest.NewRecorder()
+	env.srv.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 for non-loopback host without base_url, got %d; body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestRuntimeRegister_LoopbackHostAllowedWithoutBaseURL(t *testing.T) {
+	env := setupSecurityTest(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/runtime/register", nil)
+	req.Host = "localhost:8090"
+	w := httptest.NewRecorder()
+	env.srv.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for loopback host without base_url, got %d; body: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -514,7 +540,7 @@ func TestDeviceCodePoll_ExpiredToken(t *testing.T) {
 	_ = env.store.CreateDeviceCode(ctx, &store.DeviceCode{
 		ID: uuid.New().String(), UserCode: "EXPD-" + uuid.New().String()[:4],
 		PollingToken: "expired-poll-" + uuid.New().String()[:6],
-		OrgID: "default", Status: "pending",
+		OrgID:        "default", Status: "pending",
 		CreatedAt: time.Now().Add(-10 * time.Minute), ExpiresAt: time.Now().Add(-5 * time.Minute),
 	})
 
@@ -613,13 +639,13 @@ func TestAgentConfig_EmptyBodyRejected(t *testing.T) {
 	}
 }
 
-// --- Bug 18: Non-existent resume_session_id accepted without error ---
+// --- Native resume handles should be accepted directly ---
 
-func TestCreateSession_NonExistentResumeSession(t *testing.T) {
+func TestCreateSession_NativeResumeHandleAccepted(t *testing.T) {
 	env := setupSecurityTest(t)
 
 	body, _ := json.Marshal(map[string]string{
-		"agent_id": env.agentID, "resume_session_id": "nonexistent-session-id",
+		"agent_id": env.agentID, "resume_session_id": "native-session-123",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+env.userToken)
@@ -627,11 +653,8 @@ func TestCreateSession_NonExistentResumeSession(t *testing.T) {
 	w := httptest.NewRecorder()
 	env.srv.mux.ServeHTTP(w, req)
 
-	if w.Code == http.StatusCreated {
-		t.Fatalf("expected non-201 for nonexistent resume_session_id, got 201")
-	}
-	if w.Code != http.StatusNotFound {
-		t.Errorf("expected 404, got %d; body: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for native resume handle, got %d; body: %s", w.Code, w.Body.String())
 	}
 }
 

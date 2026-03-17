@@ -7,7 +7,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/amurg-ai/amurg/runtime/internal/config"
 	"github.com/amurg-ai/amurg/runtime/internal/daemon"
 )
 
@@ -24,8 +23,8 @@ func runStart(cmd *cobra.Command, args []string) error {
 	configPath := resolveConfigPath(cmd, args, "runtime-config.json")
 
 	// Validate config before starting.
-	if _, err := config.Load(configPath); err != nil {
-		return fmt.Errorf("invalid config: %w", err)
+	if _, err := loadConfigWithGuidance(configPath); err != nil {
+		return err
 	}
 
 	// Check if already running.

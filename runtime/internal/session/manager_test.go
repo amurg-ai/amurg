@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +22,27 @@ func (m *mockAdapter) Start(_ context.Context, _ config.AgentConfig) (adapter.Ag
 		return nil, m.startErr
 	}
 	return newMockAgent(), nil
+}
+
+type historyAdapter struct{}
+
+func (a *historyAdapter) Start(_ context.Context, _ config.AgentConfig) (adapter.AgentSession, error) {
+	return &historyAgentSession{mockAgentSession: newMockAgent()}, nil
+}
+
+type historyAgentSession struct {
+	*mockAgentSession
+	resumeID string
+}
+
+func (s *historyAgentSession) SetResumeSessionID(id string) {
+	s.resumeID = id
+}
+
+func (s *historyAgentSession) LoadNativeHistory() []adapter.Output {
+	return []adapter.Output{
+		{Channel: "history_user", Data: []byte("remember this")},
+	}
 }
 
 func testManagerConfig() config.RuntimeConfig {
@@ -267,5 +289,47 @@ func TestManager_Send_NotFound(t *testing.T) {
 	err := m.Send(context.Background(), "nonexistent", []byte("hello"))
 	if err == nil {
 		t.Fatal("expected error sending to nonexistent session, got nil")
+	}
+}
+
+func TestManager_CreateWithResume_HistoryReplayDoesNotEmitFinal(t *testing.T) {
+	registry := adapter.NewRegistry()
+	registry.Register("history-profile", &historyAdapter{})
+
+	var (
+		mu      sync.Mutex
+		outputs []adapter.Output
+		finals  []bool
+	)
+	handler := func(_ string, out adapter.Output, final bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		outputs = append(outputs, out)
+		finals = append(finals, final)
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	m := NewManager(config.RuntimeConfig{ID: "test-runtime", MaxSessions: 3}, []config.AgentConfig{
+		{ID: "hist-1", Name: "History Agent", Profile: "history-profile"},
+	}, registry, handler, nil, logger)
+
+	if err := m.CreateWithResume(context.Background(), "sess-1", "hist-1", "user-1", "native-1"); err != nil {
+		t.Fatalf("CreateWithResume: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(outputs) != 2 {
+		t.Fatalf("expected 2 history outputs, got %d", len(outputs))
+	}
+	for i, final := range finals {
+		if final {
+			t.Fatalf("history output %d unexpectedly marked final", i)
+		}
+	}
+	if outputs[1].Channel != "system" {
+		t.Fatalf("expected final replay message on system channel, got %q", outputs[1].Channel)
 	}
 }

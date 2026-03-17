@@ -43,7 +43,7 @@ type agentFormModel struct {
 	data *WizardData
 
 	// Profile selection
-	profileCursor int
+	profileCursor    int
 	selectingProfile bool
 
 	// Current agent being configured
@@ -253,7 +253,9 @@ func (m *agentFormModel) blurAll() {
 	m.extra2Input.Blur()
 }
 
-func (m agentFormModel) focusCurrent() tea.Cmd {
+// focusCurrent must mutate the live text inputs before returning so the newly
+// selected field actually receives subsequent key events.
+func (m *agentFormModel) focusCurrent() tea.Cmd {
 	switch m.focusedField {
 	case fieldName:
 		m.nameInput.Focus()

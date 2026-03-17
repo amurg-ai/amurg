@@ -302,6 +302,107 @@ func (s *SQLiteStore) migrate() error {
 		}
 	}
 
+	if err := s.normalizeExternalUserIDs(); err != nil {
+		return fmt.Errorf("normalize external user ids: %w", err)
+	}
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_external_id_nonempty ON users(external_id) WHERE external_id <> ''`); err != nil {
+		return fmt.Errorf("create external_id index: %w", err)
+	}
+
+	return nil
+}
+
+type externalUserIDMigration struct {
+	oldID      string
+	externalID string
+}
+
+func (s *SQLiteStore) normalizeExternalUserIDs() error {
+	rows, err := s.db.Query(`SELECT id, external_id FROM users WHERE external_id <> '' AND id <> external_id ORDER BY external_id, id`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var migrations []externalUserIDMigration
+	for rows.Next() {
+		var m externalUserIDMigration
+		if err := rows.Scan(&m.oldID, &m.externalID); err != nil {
+			return err
+		}
+		migrations = append(migrations, m)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(migrations) == 0 {
+		return nil
+	}
+
+	if _, err := s.db.Exec("PRAGMA foreign_keys=OFF"); err != nil {
+		return err
+	}
+	foreignKeysRestored := false
+	defer func() {
+		if !foreignKeysRestored {
+			_, _ = s.db.Exec("PRAGMA foreign_keys=ON")
+		}
+	}()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, m := range migrations {
+		if _, err := tx.Exec(`UPDATE sessions SET user_id = ? WHERE user_id = ?`, m.externalID, m.oldID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`
+			INSERT OR IGNORE INTO agent_permissions (user_id, agent_id, created_at)
+			SELECT ?, agent_id, created_at FROM agent_permissions WHERE user_id = ?
+		`, m.externalID, m.oldID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM agent_permissions WHERE user_id = ?`, m.oldID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE audit_events SET user_id = ? WHERE user_id = ?`, m.externalID, m.oldID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE agent_config_overrides SET updated_by = ? WHERE updated_by = ?`, m.externalID, m.oldID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE device_codes SET approved_by = ? WHERE approved_by = ?`, m.externalID, m.oldID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE runtime_tokens SET created_by = ? WHERE created_by = ?`, m.externalID, m.oldID); err != nil {
+			return err
+		}
+
+		var targetExists int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM users WHERE id = ?`, m.externalID).Scan(&targetExists); err != nil {
+			return err
+		}
+		if targetExists > 0 {
+			if _, err := tx.Exec(`DELETE FROM users WHERE id = ?`, m.oldID); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := tx.Exec(`UPDATE users SET id = ? WHERE id = ?`, m.externalID, m.oldID); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec("PRAGMA foreign_keys=ON"); err != nil {
+		return err
+	}
+	foreignKeysRestored = true
 	return nil
 }
 
