@@ -11,12 +11,25 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/amurg-ai/amurg/hub/auth"
 	"github.com/amurg-ai/amurg/hub/config"
 	"github.com/amurg-ai/amurg/hub/router"
 	"github.com/amurg-ai/amurg/hub/store"
+	"github.com/google/uuid"
 )
+
+type staticAuthProvider struct {
+	identity *auth.Identity
+	name     string
+}
+
+func (p *staticAuthProvider) ValidateToken(context.Context, string) (*auth.Identity, error) {
+	return p.identity, nil
+}
+
+func (p *staticAuthProvider) Bootstrap(context.Context) error { return nil }
+
+func (p *staticAuthProvider) Name() string { return p.name }
 
 func setupTestServer(t *testing.T) (*Server, *auth.Service, store.Store) {
 	t.Helper()
@@ -33,11 +46,11 @@ func setupTestServer(t *testing.T) (*Server, *auth.Service, store.Store) {
 			MaxBodyBytes:   1024 * 1024,
 		},
 		Auth: config.AuthConfig{
-			JWTSecret:             "test-secret-at-least-32-chars-long",
-			JWTExpiry:             config.Duration{Duration: 1 * time.Hour},
-			DefaultAgentAccess: "all",
+			JWTSecret:            "test-secret-at-least-32-chars-long",
+			JWTExpiry:            config.Duration{Duration: 1 * time.Hour},
+			DefaultAgentAccess:   "all",
 			RuntimeTokens:        []config.RuntimeTokenEntry{{RuntimeID: "rt-1", Token: "tok-1"}},
-			RuntimeTokenLifetime:  config.Duration{Duration: 1 * time.Hour},
+			RuntimeTokenLifetime: config.Duration{Duration: 1 * time.Hour},
 		},
 		Session: config.SessionConfig{
 			MaxPerUser:      20,
@@ -231,6 +244,152 @@ func TestLoginInvalidCredentials(t *testing.T) {
 	}
 }
 
+func TestCreateSession_ExistingSessionResumeUsesNativeHandle(t *testing.T) {
+	srv, authSvc, st := setupTestServer(t)
+
+	userToken := createTestUserAndGetToken(t, authSvc, st)
+	runtimeID, agentID := seedAgentAndRuntime(t, st)
+
+	ctx := context.Background()
+	user, err := st.GetUser(ctx, "default", "testuser")
+	if err != nil {
+		t.Fatalf("GetUser: %v", err)
+	}
+	if user == nil {
+		t.Fatal("expected test user")
+	}
+
+	resumeSess := &store.Session{
+		ID:           uuid.New().String(),
+		OrgID:        "default",
+		UserID:       user.ID,
+		AgentID:      agentID,
+		RuntimeID:    runtimeID,
+		Profile:      "default",
+		State:        "active",
+		NativeHandle: "native-claude-session-1",
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	}
+	if err := st.CreateSession(ctx, resumeSess); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	body, _ := json.Marshal(map[string]string{
+		"agent_id":          agentID,
+		"resume_session_id": resumeSess.ID,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+userToken)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", w.Code, w.Body.String())
+	}
+
+	var created store.Session
+	parseJSONResponse(t, w, &created)
+	if created.ResumedFrom != resumeSess.ID {
+		t.Fatalf("ResumedFrom: got %q, want %q", created.ResumedFrom, resumeSess.ID)
+	}
+}
+
+func TestClerkProvisioningUsesStableExternalUserID(t *testing.T) {
+	s, err := store.NewSQLite(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Addr:           ":0",
+			AllowedOrigins: []string{"*"},
+			MaxBodyBytes:   1024 * 1024,
+		},
+		Auth: config.AuthConfig{
+			Provider:             "clerk",
+			ClerkIssuer:          "https://example.clerk.accounts.dev",
+			DefaultAgentAccess:   "all",
+			RuntimeTokenLifetime: config.Duration{Duration: 1 * time.Hour},
+		},
+		Session: config.SessionConfig{
+			MaxPerUser:      20,
+			MaxMessageBytes: 64 * 1024,
+		},
+		RateLimit: config.RateLimitConfig{
+			RequestsPerSecond: 100,
+			Burst:             200,
+		},
+	}
+
+	ctx := context.Background()
+	if err := s.UpsertRuntime(ctx, &store.Runtime{
+		ID:       "rt-clerk",
+		OrgID:    "default",
+		Name:     "clerk-runtime",
+		Online:   true,
+		LastSeen: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertAgent(ctx, &store.Agent{
+		ID:        "ag-clerk",
+		OrgID:     "default",
+		RuntimeID: "rt-clerk",
+		Profile:   "default",
+		Name:      "clerk-agent",
+		Tags:      "{}",
+		Caps:      "{}",
+		Security:  "{}",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &staticAuthProvider{
+		name: "clerk",
+		identity: &auth.Identity{
+			UserID:   "user_clerk_123",
+			Username: "clerk@example.com",
+			Role:     "user",
+			OrgID:    "default",
+		},
+	}
+	rt := router.New(s, provider, nil, slog.Default(), router.Options{})
+	srv := NewServer(s, provider, nil, nil, rt, cfg, ServerOptions{AuthProviderName: "clerk"}, slog.Default())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewReader([]byte(`{"agent_id":"ag-clerk"}`)))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 creating session for Clerk user, got %d; body: %s", w.Code, w.Body.String())
+	}
+
+	user, err := s.GetUserByExternalID(ctx, "user_clerk_123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if user == nil {
+		t.Fatal("expected auto-provisioned Clerk user")
+	}
+	if user.ID != "user_clerk_123" {
+		t.Fatalf("expected Clerk user id to match external id, got %q", user.ID)
+	}
+
+	sessions, err := s.ListSessionsByUser(ctx, "user_clerk_123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session for Clerk user, got %d", len(sessions))
+	}
+}
+
 func TestLoginUsernameValidation(t *testing.T) {
 	srv, _, _ := setupTestServer(t)
 
@@ -318,11 +477,11 @@ func TestAuthMiddleware_ExpiredToken(t *testing.T) {
 			MaxBodyBytes:   1024 * 1024,
 		},
 		Auth: config.AuthConfig{
-			JWTSecret:             "test-secret-at-least-32-chars-long",
-			JWTExpiry:             config.Duration{Duration: 1 * time.Millisecond}, // extremely short
-			DefaultAgentAccess: "all",
+			JWTSecret:            "test-secret-at-least-32-chars-long",
+			JWTExpiry:            config.Duration{Duration: 1 * time.Millisecond}, // extremely short
+			DefaultAgentAccess:   "all",
 			RuntimeTokens:        []config.RuntimeTokenEntry{{RuntimeID: "rt-1", Token: "tok-1"}},
-			RuntimeTokenLifetime:  config.Duration{Duration: 1 * time.Hour},
+			RuntimeTokenLifetime: config.Duration{Duration: 1 * time.Hour},
 		},
 		Session: config.SessionConfig{
 			MaxPerUser:      20,
@@ -587,11 +746,11 @@ func TestRateLimiting(t *testing.T) {
 			MaxBodyBytes:   1024 * 1024,
 		},
 		Auth: config.AuthConfig{
-			JWTSecret:             "test-secret-at-least-32-chars-long",
-			JWTExpiry:             config.Duration{Duration: 1 * time.Hour},
-			DefaultAgentAccess: "all",
+			JWTSecret:            "test-secret-at-least-32-chars-long",
+			JWTExpiry:            config.Duration{Duration: 1 * time.Hour},
+			DefaultAgentAccess:   "all",
 			RuntimeTokens:        []config.RuntimeTokenEntry{{RuntimeID: "rt-1", Token: "tok-1"}},
-			RuntimeTokenLifetime:  config.Duration{Duration: 1 * time.Hour},
+			RuntimeTokenLifetime: config.Duration{Duration: 1 * time.Hour},
 		},
 		Session: config.SessionConfig{
 			MaxPerUser:      20,

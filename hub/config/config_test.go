@@ -204,6 +204,35 @@ func TestValidateClerkProvider(t *testing.T) {
 	}
 }
 
+func TestValidateBaseURL(t *testing.T) {
+	valid := `{
+		"server": {"addr": ":8080", "base_url": "https://hub.example.com"},
+		"auth": {"jwt_secret": "some-secret-value-long-enough-32chars!"}
+	}`
+	path := writeTempConfig(t, valid)
+	if _, err := Load(path); err != nil {
+		t.Fatalf("expected valid base_url, got %v", err)
+	}
+
+	invalidScheme := `{
+		"server": {"addr": ":8080", "base_url": "ftp://hub.example.com"},
+		"auth": {"jwt_secret": "some-secret-value-long-enough-32chars!"}
+	}`
+	path = writeTempConfig(t, invalidScheme)
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for invalid base_url scheme, got nil")
+	}
+
+	invalidRelative := `{
+		"server": {"addr": ":8080", "base_url": "/relative"},
+		"auth": {"jwt_secret": "some-secret-value-long-enough-32chars!"}
+	}`
+	path = writeTempConfig(t, invalidRelative)
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for relative base_url, got nil")
+	}
+}
+
 func TestApplyDefaults(t *testing.T) {
 	// Minimal valid config -- only required fields
 	minimal := `{

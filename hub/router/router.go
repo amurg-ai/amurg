@@ -17,11 +17,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
 	"github.com/amurg-ai/amurg/hub/auth"
 	"github.com/amurg-ai/amurg/hub/store"
 	"github.com/amurg-ai/amurg/pkg/protocol"
+	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 )
 
 // makeUpgrader creates a WebSocket upgrader with origin checking.
@@ -65,16 +65,16 @@ type Router struct {
 
 	permissionTimeout     time.Duration
 	pendingPerms          map[string]*pendingPermission
-	pendingNativeSessions map[string]*clientConn // request_id -> requesting client
+	pendingNativeSessions map[string]*clientConn                  // request_id -> requesting client
 	pendingConfigAcks     map[string]chan protocol.AgentConfigAck // agent_id -> ack channel
 	fileStoragePath       string
 	maxFileBytes          int64
 
 	mu                    sync.RWMutex
-	runtimes              map[string]*runtimeConn  // runtime_id -> conn
-	clients               map[string]*clientConn   // conn_id -> conn
+	runtimes              map[string]*runtimeConn           // runtime_id -> conn
+	clients               map[string]*clientConn            // conn_id -> conn
 	subscribers           map[string]map[string]*clientConn // session_id -> conn_id -> conn
-	turnStartTimes        map[string]time.Time // session_id -> turn start time
+	turnStartTimes        map[string]time.Time              // session_id -> turn start time
 	clientsByUser         map[string]int
 	maxClientConnsPerUser int
 }
@@ -87,10 +87,10 @@ type pendingPermission struct {
 }
 
 type runtimeConn struct {
-	id        string
-	orgID     string
-	conn      *websocket.Conn
-	mu        sync.Mutex
+	id     string
+	orgID  string
+	conn   *websocket.Conn
+	mu     sync.Mutex
 	agents map[string]protocol.AgentRegistration
 }
 
@@ -251,9 +251,9 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 
 	// Register runtime.
 	rtConn := &runtimeConn{
-		id:        hello.RuntimeID,
-		orgID:     orgID,
-		conn:      conn,
+		id:     hello.RuntimeID,
+		orgID:  orgID,
+		conn:   conn,
 		agents: make(map[string]protocol.AgentRegistration),
 	}
 	for _, agent := range hello.Agents {
@@ -1128,7 +1128,8 @@ func (cc *clientConn) allowMessage() bool {
 
 // CreateSessionOption configures session creation.
 type CreateSessionOption struct {
-	ResumeSessionID string
+	ResumeSessionID    string
+	ResumeNativeHandle string
 }
 
 // CreateSession creates a new session and sends the create request to the runtime.
@@ -1176,7 +1177,7 @@ func (r *Router) CreateSession(ctx context.Context, userID, agentID string, opts
 		SessionID:       sess.ID,
 		AgentID:         agentID,
 		UserID:          userID,
-		ResumeSessionID: opt.ResumeSessionID,
+		ResumeSessionID: opt.ResumeNativeHandle,
 	})
 
 	if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{

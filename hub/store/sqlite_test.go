@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"testing"
 	"time"
@@ -148,6 +149,79 @@ func TestCreateAndGetUser(t *testing.T) {
 	}
 	if missing != nil {
 		t.Errorf("expected nil for nonexistent user, got %+v", missing)
+	}
+}
+
+func TestNormalizeExternalUserIDs(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	oldID := uuid.New().String()
+	externalID := "user_clerk_123"
+
+	if _, err := s.db.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
+		t.Fatalf("disable foreign keys: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		"INSERT INTO users (id, org_id, external_id, username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		oldID, "default", externalID, "clerk@example.com", "", "user", time.Now(),
+	); err != nil {
+		t.Fatalf("insert legacy clerk user: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO sessions (id, org_id, user_id, agent_id, runtime_id, profile, state, native_handle, resumed_from, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		uuid.New().String(), "default", oldID, "ag-1", "rt-1", "default", "active", "", "", time.Now(), time.Now(),
+	); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO agent_permissions (user_id, agent_id, created_at) VALUES (?, ?, ?)`,
+		oldID, "ag-1", time.Now(),
+	); err != nil {
+		t.Fatalf("insert permission: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, "PRAGMA foreign_keys=ON"); err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+
+	if err := s.normalizeExternalUserIDs(); err != nil {
+		t.Fatalf("normalizeExternalUserIDs: %v", err)
+	}
+
+	user, err := s.GetUserByID(ctx, externalID)
+	if err != nil {
+		t.Fatalf("GetUserByID: %v", err)
+	}
+	if user == nil {
+		t.Fatal("expected migrated Clerk user")
+	}
+	if user.ExternalID != externalID {
+		t.Fatalf("ExternalID: got %q, want %q", user.ExternalID, externalID)
+	}
+
+	var legacyCount int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users WHERE id = ?", oldID).Scan(&legacyCount); err != nil {
+		t.Fatalf("count legacy users: %v", err)
+	}
+	if legacyCount != 0 {
+		t.Fatalf("expected legacy user row to be removed, got %d rows", legacyCount)
+	}
+
+	var sessionUserID string
+	if err := s.db.QueryRowContext(ctx, "SELECT user_id FROM sessions LIMIT 1").Scan(&sessionUserID); err != nil {
+		t.Fatalf("read migrated session: %v", err)
+	}
+	if sessionUserID != externalID {
+		t.Fatalf("session user_id: got %q, want %q", sessionUserID, externalID)
+	}
+
+	var permissionUserID string
+	if err := s.db.QueryRowContext(ctx, "SELECT user_id FROM agent_permissions LIMIT 1").Scan(&permissionUserID); err != nil && err != sql.ErrNoRows {
+		t.Fatalf("read migrated permission: %v", err)
+	}
+	if permissionUserID != externalID {
+		t.Fatalf("permission user_id: got %q, want %q", permissionUserID, externalID)
 	}
 }
 

@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/amurg-ai/amurg/runtime/internal/config"
 	"github.com/amurg-ai/amurg/runtime/internal/daemon"
 	"github.com/amurg-ai/amurg/runtime/internal/wizard"
 )
@@ -53,8 +52,8 @@ func runDefault(cmd *cobra.Command, args []string) error {
 // IPC socket to become ready, and then attaches the dashboard TUI.
 func startAndAttach(configPath string) error {
 	// Validate config before starting.
-	if _, err := config.Load(configPath); err != nil {
-		return fmt.Errorf("invalid config: %w", err)
+	if _, err := loadConfigWithGuidance(configPath); err != nil {
+		return err
 	}
 
 	// Find our own binary.

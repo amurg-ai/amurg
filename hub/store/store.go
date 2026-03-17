@@ -165,7 +165,7 @@ type Session struct {
 	Profile      string    `json:"profile"`
 	State        string    `json:"state"` // "active", "idle", "closed"
 	NativeHandle string    `json:"native_handle,omitempty"`
-	ResumedFrom  string    `json:"resumed_from,omitempty"` // ID of the session this was resumed from
+	ResumedFrom  string    `json:"resumed_from,omitempty"` // ID of the hub session this was resumed from, if known
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	AgentName    string    `json:"agent_name,omitempty"`
@@ -186,23 +186,23 @@ type Message struct {
 type AgentConfigOverride struct {
 	AgentID   string    `json:"agent_id"`
 	OrgID     string    `json:"org_id"`
-	Security  string    `json:"security"`  // JSON-encoded SecurityProfile
-	Limits    string    `json:"limits"`    // JSON-encoded AgentLimits
+	Security  string    `json:"security"` // JSON-encoded SecurityProfile
+	Limits    string    `json:"limits"`   // JSON-encoded AgentLimits
 	UpdatedBy string    `json:"updated_by"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // AuditEvent is a log entry for audit purposes.
 type AuditEvent struct {
-	ID         string          `json:"id"`
-	OrgID      string          `json:"org_id"`
-	Action     string          `json:"action"`
-	UserID     string          `json:"user_id,omitempty"`
-	RuntimeID  string          `json:"runtime_id,omitempty"`
-	SessionID  string          `json:"session_id,omitempty"`
-	AgentID    string          `json:"agent_id,omitempty"`
-	Detail     json.RawMessage `json:"detail,omitempty"`
-	CreatedAt  time.Time       `json:"created_at"`
+	ID        string          `json:"id"`
+	OrgID     string          `json:"org_id"`
+	Action    string          `json:"action"`
+	UserID    string          `json:"user_id,omitempty"`
+	RuntimeID string          `json:"runtime_id,omitempty"`
+	SessionID string          `json:"session_id,omitempty"`
+	AgentID   string          `json:"agent_id,omitempty"`
+	Detail    json.RawMessage `json:"detail,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
 }
 
 // DeviceCode represents a device authorization code for runtime registration.
@@ -233,10 +233,10 @@ type RuntimeToken struct {
 
 // AuditFilter specifies criteria for filtering audit events.
 type AuditFilter struct {
-	Action     string
-	UserID     string
-	SessionID  string
-	AgentID string
-	Limit   int
-	Offset  int
+	Action    string
+	UserID    string
+	SessionID string
+	AgentID   string
+	Limit     int
+	Offset    int
 }

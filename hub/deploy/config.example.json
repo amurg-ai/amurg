@@ -1,6 +1,7 @@
 {
   "server": {
     "addr": ":8080",
+    "base_url": "https://hub.example.com",
     "ui_static_dir": "/var/lib/amurg/ui",
     "whisper_url": "ws://whisper:8000/asr"
   },

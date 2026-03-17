@@ -246,8 +246,87 @@ func (s *PostgresStore) migrate() error {
 	// Drop sessions_user_id_fkey if it exists: sessions.user_id stores external
 	// IDs (e.g. Clerk user IDs), not the internal UUID from users(id).
 	_, _ = s.db.Exec(`ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_user_id_fkey`)
+	if err := s.normalizeExternalUserIDs(); err != nil {
+		return fmt.Errorf("normalize external user ids: %w", err)
+	}
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_external_id_nonempty ON users(external_id) WHERE external_id <> ''`); err != nil {
+		return fmt.Errorf("create external_id index: %w", err)
+	}
 
 	return nil
+}
+
+func (s *PostgresStore) normalizeExternalUserIDs() error {
+	rows, err := s.db.Query(`SELECT id, external_id FROM users WHERE external_id <> '' AND id <> external_id ORDER BY external_id, id`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var migrations []externalUserIDMigration
+	for rows.Next() {
+		var m externalUserIDMigration
+		if err := rows.Scan(&m.oldID, &m.externalID); err != nil {
+			return err
+		}
+		migrations = append(migrations, m)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(migrations) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, m := range migrations {
+		if _, err := tx.Exec(`UPDATE sessions SET user_id = $1 WHERE user_id = $2`, m.externalID, m.oldID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO agent_permissions (user_id, agent_id, created_at)
+			SELECT $1, agent_id, created_at FROM agent_permissions WHERE user_id = $2
+			ON CONFLICT(user_id, agent_id) DO NOTHING
+		`, m.externalID, m.oldID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM agent_permissions WHERE user_id = $1`, m.oldID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE audit_events SET user_id = $1 WHERE user_id = $2`, m.externalID, m.oldID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE agent_config_overrides SET updated_by = $1 WHERE updated_by = $2`, m.externalID, m.oldID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE device_codes SET approved_by = $1 WHERE approved_by = $2`, m.externalID, m.oldID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE runtime_tokens SET created_by = $1 WHERE created_by = $2`, m.externalID, m.oldID); err != nil {
+			return err
+		}
+
+		var targetExists bool
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)`, m.externalID).Scan(&targetExists); err != nil {
+			return err
+		}
+		if targetExists {
+			if _, err := tx.Exec(`DELETE FROM users WHERE id = $1`, m.oldID); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := tx.Exec(`UPDATE users SET id = $1 WHERE id = $2`, m.externalID, m.oldID); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
 }
 
 func (s *PostgresStore) Ping(ctx context.Context) error {

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -16,16 +17,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-	chimw "github.com/go-chi/chi/v5/middleware"
-	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
 	"github.com/amurg-ai/amurg/hub/auth"
 	"github.com/amurg-ai/amurg/hub/billing"
 	"github.com/amurg-ai/amurg/hub/config"
 	"github.com/amurg-ai/amurg/hub/router"
 	"github.com/amurg-ai/amurg/hub/store"
 	"github.com/amurg-ai/amurg/pkg/protocol"
+	"github.com/go-chi/chi/v5"
+	chimw "github.com/go-chi/chi/v5/middleware"
+	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 )
 
 // ServerOptions contains optional dependencies for the API server.
@@ -39,31 +40,31 @@ type ServerOptions struct {
 
 // Server is the HTTP API server.
 type Server struct {
-	store                 store.Store
-	authProvider          auth.Provider
-	loginProvider         auth.LoginProvider
-	runtimeAuth           auth.RuntimeAuthProvider
-	billing               billing.Service  // nil when billing is disabled
-	enforcer              billing.Enforcer // nil when billing is disabled
-	router                *router.Router
-	logger                *slog.Logger
-	mux                   *chi.Mux
+	store              store.Store
+	authProvider       auth.Provider
+	loginProvider      auth.LoginProvider
+	runtimeAuth        auth.RuntimeAuthProvider
+	billing            billing.Service  // nil when billing is disabled
+	enforcer           billing.Enforcer // nil when billing is disabled
+	router             *router.Router
+	logger             *slog.Logger
+	mux                *chi.Mux
 	defaultAgentAccess string // "all" or "none"
-	startTime             time.Time
-	maxBodyBytes          int64
-	authProviderName      string // "builtin" or "clerk"
-	baseURL               string // configured public base URL for generated links
-	fileStoragePath       string // path for uploaded files
-	maxFileBytes          int64  // max file upload size
-	whisperURL            string // upstream Whisper WebSocket URL for /asr proxy
-	stripePriceSingle     string // Stripe price ID for single plan
-	stripePriceTeam       string // Stripe price ID for team plan
-	loginRL               *rateLimiter
-	rl                    *rateLimiter
-	deviceCodeRL          *rateLimiter
-	deviceCodePollRL      *rateLimiter
-	tokenBlocklist        *tokenBlocklist   // revoked JWT IDs
-	loginLockout          *loginLockout     // per-account failed login tracking
+	startTime          time.Time
+	maxBodyBytes       int64
+	authProviderName   string // "builtin" or "clerk"
+	baseURL            string // configured public base URL for generated links
+	fileStoragePath    string // path for uploaded files
+	maxFileBytes       int64  // max file upload size
+	whisperURL         string // upstream Whisper WebSocket URL for /asr proxy
+	stripePriceSingle  string // Stripe price ID for single plan
+	stripePriceTeam    string // Stripe price ID for team plan
+	loginRL            *rateLimiter
+	rl                 *rateLimiter
+	deviceCodeRL       *rateLimiter
+	deviceCodePollRL   *rateLimiter
+	tokenBlocklist     *tokenBlocklist // revoked JWT IDs
+	loginLockout       *loginLockout   // per-account failed login tracking
 }
 
 // NewServer creates a new API server.
@@ -73,24 +74,24 @@ func NewServer(s store.Store, ap auth.Provider, lp auth.LoginProvider, ra auth.R
 		authName = ap.Name()
 	}
 	srv := &Server{
-		store:                 s,
-		authProvider:          ap,
-		loginProvider:         lp,
-		runtimeAuth:           ra,
-		billing:               opts.Billing,
-		enforcer:              opts.Enforcer,
-		router:                rt,
-		logger:                logger.With("component", "api"),
+		store:              s,
+		authProvider:       ap,
+		loginProvider:      lp,
+		runtimeAuth:        ra,
+		billing:            opts.Billing,
+		enforcer:           opts.Enforcer,
+		router:             rt,
+		logger:             logger.With("component", "api"),
 		defaultAgentAccess: cfg.Auth.DefaultAgentAccess,
-		startTime:             time.Now(),
-		maxBodyBytes:          cfg.Server.MaxBodyBytes,
-		authProviderName:      authName,
-		baseURL:               cfg.Server.BaseURL,
-		fileStoragePath:       cfg.Server.FileStoragePath,
-		maxFileBytes:          cfg.Server.MaxFileBytes,
-		whisperURL:            cfg.Server.WhisperURL,
-		stripePriceSingle:     opts.StripePriceSingle,
-		stripePriceTeam:       opts.StripePriceTeam,
+		startTime:          time.Now(),
+		maxBodyBytes:       cfg.Server.MaxBodyBytes,
+		authProviderName:   authName,
+		baseURL:            cfg.Server.BaseURL,
+		fileStoragePath:    cfg.Server.FileStoragePath,
+		maxFileBytes:       cfg.Server.MaxFileBytes,
+		whisperURL:         cfg.Server.WhisperURL,
+		stripePriceSingle:  opts.StripePriceSingle,
+		stripePriceTeam:    opts.StripePriceTeam,
 	}
 
 	srv.tokenBlocklist = newTokenBlocklist()
@@ -504,16 +505,32 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate resume_session_id ownership if provided.
+	resumeNativeHandle := req.ResumeSessionID
+	resumedFrom := ""
 	if req.ResumeSessionID != "" {
-		resumeSess, err := s.store.GetSession(r.Context(), req.ResumeSessionID)
-		if err != nil || resumeSess == nil {
-			writeError(w, http.StatusNotFound, "resume session not found")
+		if len(req.ResumeSessionID) > 256 {
+			writeError(w, http.StatusBadRequest, "resume_session_id exceeds maximum length of 256 characters")
 			return
 		}
-		if resumeSess.UserID != identity.UserID {
-			writeError(w, http.StatusForbidden, "cannot resume another user's session")
+
+		// Backward compatibility: if the caller supplied an existing Amurg session
+		// ID, resolve it to the agent's native handle and preserve lineage.
+		resumeSess, err := s.store.GetSession(r.Context(), req.ResumeSessionID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load resume session")
 			return
+		}
+		if resumeSess != nil {
+			if resumeSess.UserID != identity.UserID {
+				writeError(w, http.StatusForbidden, "cannot resume another user's session")
+				return
+			}
+			if resumeSess.NativeHandle == "" {
+				writeError(w, http.StatusConflict, "session cannot be resumed until a native handle is available")
+				return
+			}
+			resumeNativeHandle = resumeSess.NativeHandle
+			resumedFrom = resumeSess.ID
 		}
 	}
 
@@ -530,8 +547,11 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var createOpts []router.CreateSessionOption
-	if req.ResumeSessionID != "" {
-		createOpts = append(createOpts, router.CreateSessionOption{ResumeSessionID: req.ResumeSessionID})
+	if resumeNativeHandle != "" || resumedFrom != "" {
+		createOpts = append(createOpts, router.CreateSessionOption{
+			ResumeSessionID:    resumedFrom,
+			ResumeNativeHandle: resumeNativeHandle,
+		})
 	}
 	sess, err := s.router.CreateSession(r.Context(), identity.UserID, req.AgentID, createOpts...)
 	if err != nil {
@@ -684,7 +704,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	identity := getIdentityFromContext(r.Context())
 	if err := s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
 		ID: uuid.New().String(), OrgID: identity.OrgID, Action: "user.create",
-		UserID: identity.UserID,
+		UserID:    identity.UserID,
 		Detail:    json.RawMessage(fmt.Sprintf(`{"created_user_id":%q,"username":%q,"role":%q}`, user.ID, user.Username, user.Role)),
 		CreatedAt: time.Now(),
 	}); err != nil {
@@ -836,8 +856,8 @@ func (s *Server) handleAdminListAuditEvents(w http.ResponseWriter, r *http.Reque
 			UserID:    userID,
 			SessionID: sessionID,
 			AgentID:   agentID,
-			Limit:      limit,
-			Offset:     offset,
+			Limit:     limit,
+			Offset:    offset,
 		})
 	} else {
 		events, err = s.store.ListAuditEvents(r.Context(), identity.OrgID, limit, offset)
@@ -877,16 +897,16 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 
 // adminAgentInfo extends agent data with runtime info and config override.
 type adminAgentInfo struct {
-	ID             string                    `json:"id"`
-	OrgID          string                    `json:"org_id"`
-	RuntimeID      string                    `json:"runtime_id"`
-	RuntimeName    string                    `json:"runtime_name"`
-	RuntimeOnline  bool                      `json:"runtime_online"`
-	Profile        string                    `json:"profile"`
-	Name           string                    `json:"name"`
-	Tags           json.RawMessage           `json:"tags"`
-	Caps           json.RawMessage           `json:"caps"`
-	Security       json.RawMessage           `json:"security"`
+	ID             string                     `json:"id"`
+	OrgID          string                     `json:"org_id"`
+	RuntimeID      string                     `json:"runtime_id"`
+	RuntimeName    string                     `json:"runtime_name"`
+	RuntimeOnline  bool                       `json:"runtime_online"`
+	Profile        string                     `json:"profile"`
+	Name           string                     `json:"name"`
+	Tags           json.RawMessage            `json:"tags"`
+	Caps           json.RawMessage            `json:"caps"`
+	Security       json.RawMessage            `json:"security"`
 	ConfigOverride *store.AgentConfigOverride `json:"config_override,omitempty"`
 }
 
@@ -1228,18 +1248,23 @@ func (s *Server) handleRuntimeRegister(w http.ResponseWriter, r *http.Request) {
 		// Use the configured base URL to prevent host header injection.
 		verificationURL = fmt.Sprintf("%s/connect?code=%s", strings.TrimRight(s.baseURL, "/"), userCode)
 	} else {
+		host := r.Host
+		if strings.ContainsAny(host, " \r\n\t/<>\"'") || host == "" {
+			writeError(w, http.StatusBadRequest, "invalid host header")
+			return
+		}
+		if !isLoopbackHost(host) {
+			s.logger.Warn("device registration denied because server.base_url is unset for non-loopback host", "host", host)
+			writeError(w, http.StatusServiceUnavailable, "device registration requires server.base_url to be configured")
+			return
+		}
+
 		scheme := "https"
 		if r.TLS == nil {
 			scheme = "http"
 		}
 		if fwd := r.Header.Get("X-Forwarded-Proto"); fwd == "https" || fwd == "http" {
 			scheme = fwd
-		}
-		// Validate host header to prevent header injection / phishing.
-		host := r.Host
-		if strings.ContainsAny(host, " \r\n\t/<>\"'") || host == "" {
-			writeError(w, http.StatusBadRequest, "invalid host header")
-			return
 		}
 		verificationURL = fmt.Sprintf("%s://%s/connect?code=%s", scheme, host, userCode)
 	}
@@ -1368,6 +1393,25 @@ func generateUserCode() string {
 		code[i] = chars[int(b[i])%len(chars)]
 	}
 	return string(code[:4]) + "-" + string(code[4:])
+}
+
+func isLoopbackHost(host string) bool {
+	if host == "" {
+		return false
+	}
+
+	name := host
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		name = parsedHost
+	}
+	name = strings.Trim(name, "[]")
+
+	if strings.EqualFold(name, "localhost") {
+		return true
+	}
+
+	ip := net.ParseIP(name)
+	return ip != nil && ip.IsLoopback()
 }
 
 func generateHexToken(n int) string {

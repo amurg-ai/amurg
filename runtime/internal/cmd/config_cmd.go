@@ -8,8 +8,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-
-	"github.com/amurg-ai/amurg/runtime/internal/config"
 )
 
 func newConfigCmd() *cobra.Command {
@@ -41,9 +39,9 @@ func newConfigEditCmd() *cobra.Command {
 
 func runConfigShow(cmd *cobra.Command, args []string) error {
 	configPath := resolveConfigPath(cmd, nil, "runtime-config.json")
-	cfg, err := config.Load(configPath)
+	cfg, err := loadConfigWithGuidance(configPath)
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return err
 	}
 
 	// Mask the token for display.

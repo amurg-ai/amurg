@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"time"
 )
@@ -40,7 +41,7 @@ type Config struct {
 
 // BillingConfig defines Stripe billing settings. Disabled by default.
 type BillingConfig struct {
-	Enabled              bool   `json:"enabled,omitempty"`               // false by default
+	Enabled              bool   `json:"enabled,omitempty"` // false by default
 	StripeSecretKey      string `json:"stripe_secret_key,omitempty"`
 	StripeWebhookSecret  string `json:"stripe_webhook_secret,omitempty"`
 	StripePublishableKey string `json:"stripe_publishable_key,omitempty"` // for frontend checkout
@@ -50,14 +51,14 @@ type BillingConfig struct {
 
 // ServerConfig defines the hub's listener settings.
 type ServerConfig struct {
-	Addr            string   `json:"addr"`                       // e.g. ":8080"
-	BaseURL         string   `json:"base_url,omitempty"`         // public base URL (e.g. "https://hub.example.com"); used for device code URLs
+	Addr            string   `json:"addr"`               // e.g. ":8080"
+	BaseURL         string   `json:"base_url,omitempty"` // public base URL (e.g. "https://hub.example.com"); used for device code URLs
 	TLSCert         string   `json:"tls_cert,omitempty"`
 	TLSKey          string   `json:"tls_key,omitempty"`
-	UIStaticDir     string   `json:"ui_static_dir,omitempty"`    // path to built UI files
-	AllowedOrigins  []string `json:"allowed_origins,omitempty"`  // CORS origins; default ["*"]
-	TrustedProxies  []string `json:"trusted_proxies,omitempty"`  // CIDRs to trust for X-Forwarded-For; empty = use direct IP only
-	MaxBodyBytes    int64    `json:"max_body_bytes,omitempty"`   // max request body size; default 1MB
+	UIStaticDir     string   `json:"ui_static_dir,omitempty"`     // path to built UI files
+	AllowedOrigins  []string `json:"allowed_origins,omitempty"`   // CORS origins; default ["*"]
+	TrustedProxies  []string `json:"trusted_proxies,omitempty"`   // CIDRs to trust for X-Forwarded-For; empty = use direct IP only
+	MaxBodyBytes    int64    `json:"max_body_bytes,omitempty"`    // max request body size; default 1MB
 	FileStoragePath string   `json:"file_storage_path,omitempty"` // path for uploaded files; default "./amurg-files"
 	MaxFileBytes    int64    `json:"max_file_bytes,omitempty"`    // max file size; default 10MB
 	WhisperURL      string   `json:"whisper_url,omitempty"`       // upstream Whisper WebSocket URL to proxy at /asr
@@ -65,16 +66,16 @@ type ServerConfig struct {
 
 // AuthConfig defines authentication settings.
 type AuthConfig struct {
-	Provider               string              `json:"provider,omitempty"`                // "builtin" (default) or "clerk"
-	ClerkIssuer            string              `json:"clerk_issuer,omitempty"`            // e.g. "https://foo.clerk.accounts.dev"
-	ClerkSecretKey         string              `json:"clerk_secret_key,omitempty"`
-	JWTSecret              string              `json:"jwt_secret"`
-	JWTExpiry              Duration            `json:"jwt_expiry,omitempty"`
-	RuntimeTokens          []RuntimeTokenEntry `json:"runtime_tokens"`
-	RuntimeTokenSecret     string              `json:"runtime_token_secret,omitempty"`     // HMAC secret for time-limited tokens
-	RuntimeTokenLifetime   Duration            `json:"runtime_token_lifetime,omitempty"`   // lifetime for generated tokens (default 1h)
-	InitialAdmin           *InitialAdmin       `json:"initial_admin,omitempty"`
-	DefaultAgentAccess     string              `json:"default_agent_access,omitempty"` // "all" (default) or "none"
+	Provider             string              `json:"provider,omitempty"`     // "builtin" (default) or "clerk"
+	ClerkIssuer          string              `json:"clerk_issuer,omitempty"` // e.g. "https://foo.clerk.accounts.dev"
+	ClerkSecretKey       string              `json:"clerk_secret_key,omitempty"`
+	JWTSecret            string              `json:"jwt_secret"`
+	JWTExpiry            Duration            `json:"jwt_expiry,omitempty"`
+	RuntimeTokens        []RuntimeTokenEntry `json:"runtime_tokens"`
+	RuntimeTokenSecret   string              `json:"runtime_token_secret,omitempty"`   // HMAC secret for time-limited tokens
+	RuntimeTokenLifetime Duration            `json:"runtime_token_lifetime,omitempty"` // lifetime for generated tokens (default 1h)
+	InitialAdmin         *InitialAdmin       `json:"initial_admin,omitempty"`
+	DefaultAgentAccess   string              `json:"default_agent_access,omitempty"` // "all" (default) or "none"
 }
 
 // RuntimeTokenEntry maps a runtime ID to its auth token.
@@ -102,10 +103,10 @@ type StorageConfig struct {
 type SessionConfig struct {
 	MaxPerUser          int                 `json:"max_per_user,omitempty"`
 	IdleTimeout         Duration            `json:"idle_timeout,omitempty"`
-	TurnBased           bool                `json:"turn_based,omitempty"`              // enforce turn-based globally
-	ReplayBuffer        int                 `json:"replay_buffer,omitempty"`           // messages to buffer for reconnect
-	ProfileIdleTimeouts map[string]Duration `json:"profile_idle_timeouts,omitempty"`   // per-profile idle timeout overrides; "0" disables
-	MaxMessageBytes     int64               `json:"max_message_bytes,omitempty"`       // max WebSocket message from client; default 64KB
+	TurnBased           bool                `json:"turn_based,omitempty"`            // enforce turn-based globally
+	ReplayBuffer        int                 `json:"replay_buffer,omitempty"`         // messages to buffer for reconnect
+	ProfileIdleTimeouts map[string]Duration `json:"profile_idle_timeouts,omitempty"` // per-profile idle timeout overrides; "0" disables
+	MaxMessageBytes     int64               `json:"max_message_bytes,omitempty"`     // max WebSocket message from client; default 64KB
 }
 
 // LoggingConfig defines logging settings.
@@ -185,6 +186,15 @@ func (c *Config) validate() error {
 	}
 	if c.Auth.Provider == "clerk" && c.Auth.ClerkIssuer == "" {
 		return fmt.Errorf("auth.clerk_issuer is required when provider is clerk")
+	}
+	if c.Server.BaseURL != "" {
+		baseURL, err := url.Parse(c.Server.BaseURL)
+		if err != nil || !baseURL.IsAbs() || baseURL.Host == "" {
+			return fmt.Errorf("server.base_url must be an absolute URL")
+		}
+		if baseURL.Scheme != "http" && baseURL.Scheme != "https" {
+			return fmt.Errorf("server.base_url must use http or https")
+		}
 	}
 	return nil
 }

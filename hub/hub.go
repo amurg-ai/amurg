@@ -69,12 +69,12 @@ func New(cfg *config.Config, opts Options, logger *slog.Logger) (*Hub, error) {
 
 	// Initialize router.
 	rt := router.New(db, authProvider, runtimeAuth, logger, router.Options{
-		TurnBased:          cfg.Session.TurnBased,
-		MaxPerUser:         cfg.Session.MaxPerUser,
-		AllowedOrigins:     cfg.Server.AllowedOrigins,
-		MaxClientMsgBytes:  cfg.Session.MaxMessageBytes,
-		FileStoragePath:    cfg.Server.FileStoragePath,
-		MaxFileBytes:       cfg.Server.MaxFileBytes,
+		TurnBased:         cfg.Session.TurnBased,
+		MaxPerUser:        cfg.Session.MaxPerUser,
+		AllowedOrigins:    cfg.Server.AllowedOrigins,
+		MaxClientMsgBytes: cfg.Session.MaxMessageBytes,
+		FileStoragePath:   cfg.Server.FileStoragePath,
+		MaxFileBytes:      cfg.Server.MaxFileBytes,
 	})
 
 	// Initialize billing (if factory provided and billing enabled).
@@ -117,6 +117,9 @@ func New(cfg *config.Config, opts Options, logger *slog.Logger) (*Hub, error) {
 			logger.Warn("CORS allowed_origins contains wildcard '*' — restrict to specific origins in production")
 			break
 		}
+	}
+	if cfg.Server.BaseURL == "" {
+		logger.Warn("server.base_url is not configured — device-code registration is limited to localhost")
 	}
 
 	// Pre-create file storage directory to avoid runtime permission errors.
