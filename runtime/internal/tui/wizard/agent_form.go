@@ -11,6 +11,7 @@ import (
 
 	"github.com/amurg-ai/amurg/pkg/protocol"
 	"github.com/amurg-ai/amurg/runtime/internal/config"
+	"github.com/amurg-ai/amurg/runtime/internal/permissionmode"
 	"github.com/amurg-ai/amurg/runtime/internal/tui"
 )
 
@@ -53,9 +54,10 @@ type agentFormModel struct {
 	extra1Input textinput.Model
 	extra2Input textinput.Model
 
-	focusedField agentField
-	dirError     string
-	agents       []config.AgentConfig
+	focusedField       agentField
+	dirError           string
+	agents             []config.AgentConfig
+	claudePermissionIx int
 }
 
 func newAgentForm(data *WizardData) agentFormModel {
@@ -77,12 +79,13 @@ func newAgentForm(data *WizardData) agentFormModel {
 	extra2.Width = 50
 
 	return agentFormModel{
-		data:             data,
-		selectingProfile: true,
-		nameInput:        name,
-		dirInput:         dir,
-		extra1Input:      extra1,
-		extra2Input:      extra2,
+		data:               data,
+		selectingProfile:   true,
+		nameInput:          name,
+		dirInput:           dir,
+		extra1Input:        extra1,
+		extra2Input:        extra2,
+		claudePermissionIx: 0,
 	}
 }
 
@@ -145,7 +148,9 @@ func (m *agentFormModel) setupFieldsForProfile(profile string) {
 		case protocol.ProfileKilo:
 			m.extra2Input.Placeholder = "provider (leave empty for default)"
 		case protocol.ProfileClaudeCode:
-			m.extra2Input.Placeholder = "permission mode (leave empty for default)"
+			m.claudePermissionIx = 0
+		case protocol.ProfileCodex:
+			m.extra2Input.Placeholder = "transport: exec or tmux (default exec)"
 		}
 	case protocol.ProfileGenericCLI, protocol.ProfileGenericJob, protocol.ProfileExternal:
 		m.extra1Input.Placeholder = "command"
@@ -156,8 +161,24 @@ func (m *agentFormModel) setupFieldsForProfile(profile string) {
 }
 
 func (m agentFormModel) updateFields(msg tea.Msg) (agentFormModel, tea.Cmd) {
+	profile := profileOptions[m.profileCursor].profile
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if profile == protocol.ProfileClaudeCode && m.focusedField == fieldExtra2 {
+			switch msg.String() {
+			case "left", "h":
+				if m.claudePermissionIx > 0 {
+					m.claudePermissionIx--
+				}
+				return m, nil
+			case "right", "l":
+				if m.claudePermissionIx < len(permissionmode.ClaudeWizardOptions)-1 {
+					m.claudePermissionIx++
+				}
+				return m, nil
+			}
+		}
+
 		switch msg.String() {
 		case "tab", "down":
 			return m.nextField()
@@ -185,6 +206,9 @@ func (m agentFormModel) updateFields(msg tea.Msg) (agentFormModel, tea.Cmd) {
 	case fieldExtra1:
 		m.extra1Input, cmd = m.extra1Input.Update(msg)
 	case fieldExtra2:
+		if profile == protocol.ProfileClaudeCode {
+			return m, nil
+		}
 		m.extra2Input, cmd = m.extra2Input.Update(msg)
 	}
 	return m, cmd
@@ -193,9 +217,9 @@ func (m agentFormModel) updateFields(msg tea.Msg) (agentFormModel, tea.Cmd) {
 func (m agentFormModel) lastField() agentField {
 	profile := profileOptions[m.profileCursor].profile
 	switch profile {
-	case protocol.ProfileClaudeCode, protocol.ProfileKilo:
+	case protocol.ProfileClaudeCode, protocol.ProfileCodex, protocol.ProfileKilo:
 		return fieldExtra2
-	case protocol.ProfileGitHubCopilot, protocol.ProfileCodex:
+	case protocol.ProfileGitHubCopilot:
 		return fieldExtra1
 	case protocol.ProfileGenericCLI, protocol.ProfileGenericJob, protocol.ProfileExternal:
 		return fieldExtra2
@@ -286,6 +310,14 @@ func (m agentFormModel) finishAgent() (agentFormModel, tea.Cmd) {
 			return m, m.focusCurrent()
 		}
 	}
+	if profile == protocol.ProfileCodex {
+		transport := strings.TrimSpace(strings.ToLower(m.extra2Input.Value()))
+		if transport != "" && transport != "exec" && transport != "tmux" {
+			m.dirError = "Transport must be exec or tmux"
+			m.focusedField = fieldExtra2
+			return m, m.focusCurrent()
+		}
+	}
 
 	agent := m.buildAgent(profile)
 	m.agents = append(m.agents, agent)
@@ -322,8 +354,8 @@ func (m agentFormModel) buildAgent(profile string) config.AgentConfig {
 		if v := m.extra1Input.Value(); v != "" {
 			cc.Model = v
 		}
-		if v := m.extra2Input.Value(); v != "" {
-			cc.PermissionMode = v
+		if option := permissionmode.ClaudeWizardOptions[m.claudePermissionIx]; option.Value != "" {
+			cc.PermissionMode = option.Value
 		}
 		agent.ClaudeCode = cc
 
@@ -338,6 +370,9 @@ func (m agentFormModel) buildAgent(profile string) config.AgentConfig {
 		cx := &config.CodexConfig{WorkDir: workDir}
 		if v := m.extra1Input.Value(); v != "" {
 			cx.Model = v
+		}
+		if v := strings.TrimSpace(strings.ToLower(m.extra2Input.Value())); v != "" && v != "exec" {
+			cx.Transport = v
 		}
 		agent.Codex = cx
 
@@ -411,9 +446,12 @@ func (m agentFormModel) View() string {
 	switch profile {
 	case protocol.ProfileClaudeCode:
 		s += m.renderField("  Model", m.extra1Input, fieldExtra1)
-		s += m.renderField("  Permission mode", m.extra2Input, fieldExtra2)
-	case protocol.ProfileGitHubCopilot, protocol.ProfileCodex:
+		s += m.renderClaudePermissionField()
+	case protocol.ProfileGitHubCopilot:
 		s += m.renderField("  Model", m.extra1Input, fieldExtra1)
+	case protocol.ProfileCodex:
+		s += m.renderField("  Model", m.extra1Input, fieldExtra1)
+		s += m.renderField("  Transport", m.extra2Input, fieldExtra2)
 	case protocol.ProfileKilo:
 		s += m.renderField("  Model", m.extra1Input, fieldExtra1)
 		s += m.renderField("  Provider", m.extra2Input, fieldExtra2)
@@ -424,7 +462,11 @@ func (m agentFormModel) View() string {
 		s += m.renderField("  Base URL", m.extra1Input, fieldExtra1)
 	}
 
-	s += "\n" + tui.Help.Render("  tab/↓ next • shift+tab/↑ prev • enter submit • esc back")
+	help := "  tab/↓ next • shift+tab/↑ prev • enter submit • esc back"
+	if profile == protocol.ProfileClaudeCode {
+		help += " • ←/→ change permission mode"
+	}
+	s += "\n" + tui.Help.Render(help)
 	return s
 }
 
@@ -434,6 +476,19 @@ func (m agentFormModel) renderField(label string, input textinput.Model, field a
 		prefix = tui.Selected.Render("> ")
 	}
 	return prefix + lipgloss.NewStyle().Foreground(tui.ColorText).Render(label+":") + "\n  " + input.View() + "\n"
+}
+
+func (m agentFormModel) renderClaudePermissionField() string {
+	prefix := "  "
+	if m.focusedField == fieldExtra2 {
+		prefix = tui.Selected.Render("> ")
+	}
+
+	option := permissionmode.ClaudeWizardOptions[m.claudePermissionIx]
+	s := prefix + lipgloss.NewStyle().Foreground(tui.ColorText).Render("  Permission mode:") + "\n"
+	s += "  " + tui.Description.Render(option.Label) + "\n"
+	s += "  " + tui.Dimmed.Render(option.Description) + "\n"
+	return s
 }
 
 func expandHome(path string) string {

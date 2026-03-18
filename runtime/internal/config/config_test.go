@@ -296,7 +296,7 @@ func TestLoad_FileNotFound(t *testing.T) {
 }
 
 func TestLoad_ValidClaudeCodePermissionModes(t *testing.T) {
-	for _, mode := range []string{"skip", "acceptEdits", "plan", "strict", "auto", "default", "bypassPermissions", "dangerously-skip-permissions"} {
+	for _, mode := range []string{"skip", "acceptEdits", "plan", "dontAsk", "strict", "auto", "default", "bypassPermissions", "dangerously-skip-permissions"} {
 		cfgJSON := `{
 			"hub": {"url": "ws://localhost", "token": "t"},
 			"runtime": {"id": "r1"},
@@ -354,4 +354,36 @@ func writeTemp(t *testing.T, content string) string {
 		t.Fatalf("write temp file: %v", err)
 	}
 	return path
+}
+
+func TestLoad_ValidCodexTransport(t *testing.T) {
+	for _, transport := range []string{"exec", "tmux"} {
+		cfgJSON := `{
+			"hub": {"url": "ws://localhost", "token": "t"},
+			"runtime": {"id": "r1"},
+			"agents": [{
+				"id": "codex1", "name": "Codex", "profile": "codex",
+				"codex": {"transport": "` + transport + `"}
+			}]
+		}`
+		path := writeTemp(t, cfgJSON)
+		if _, err := Load(path); err != nil {
+			t.Fatalf("transport %q should be valid, got %v", transport, err)
+		}
+	}
+}
+
+func TestLoad_InvalidCodexTransport(t *testing.T) {
+	cfgJSON := `{
+		"hub": {"url": "ws://localhost", "token": "t"},
+		"runtime": {"id": "r1"},
+		"agents": [{
+			"id": "codex1", "name": "Codex", "profile": "codex",
+			"codex": {"transport": "pty"}
+		}]
+	}`
+	path := writeTemp(t, cfgJSON)
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected validation error for invalid codex.transport")
+	}
 }

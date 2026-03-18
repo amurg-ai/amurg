@@ -129,8 +129,8 @@ export class AmurgSocket {
 
   send(type: string, payload: unknown, sessionId?: string): boolean {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      // Enqueue user messages and permission responses when not connected
-      if (type === "user.message" || type === "permission.response") {
+      // Enqueue user messages, interactive replies, and permission responses when not connected
+      if (type === "user.message" || type === "interactive.input" || type === "permission.response") {
         if (this.pendingQueue.length < MAX_PENDING_QUEUE) {
           this.pendingQueue.push({ type, payload, sessionId });
         }
@@ -153,6 +153,19 @@ export class AmurgSocket {
     const messageId = crypto.randomUUID();
     return this.send(
       "user.message",
+      {
+        session_id: sessionId,
+        message_id: messageId,
+        content,
+      },
+      sessionId
+    );
+  }
+
+  sendInteractiveInput(sessionId: string, content: string): boolean {
+    const messageId = crypto.randomUUID();
+    return this.send(
+      "interactive.input",
       {
         session_id: sessionId,
         message_id: messageId,

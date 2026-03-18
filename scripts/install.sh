@@ -25,6 +25,45 @@ need_cmd() {
     command -v "$1" > /dev/null 2>&1 || fatal "Required command not found: $1"
 }
 
+has_tty() {
+    [ -r /dev/tty ] && [ -w /dev/tty ]
+}
+
+prompt_yes_no() {
+    prompt="$1"
+    default="${2:-n}"
+
+    if ! has_tty; then
+        return 1
+    fi
+
+    while :; do
+        if [ "$default" = "y" ]; then
+            suffix="[Y/n]"
+        else
+            suffix="[y/N]"
+        fi
+        printf '%s %s ' "$prompt" "$suffix" > /dev/tty
+        if ! IFS= read -r reply < /dev/tty; then
+            return 1
+        fi
+        case "$reply" in
+            "")
+                if [ "$default" = "y" ]; then
+                    return 0
+                fi
+                return 1
+                ;;
+            y|Y|yes|Yes|YES)
+                return 0
+                ;;
+            n|N|no|No|NO)
+                return 1
+                ;;
+        esac
+    done
+}
+
 # download URL DEST — uses curl or wget
 download() {
     if command -v curl > /dev/null 2>&1; then
@@ -66,6 +105,98 @@ detect_install_dir() {
         INSTALL_DIR="$HOME/.local/bin"
         mkdir -p "$INSTALL_DIR"
     fi
+}
+
+detect_tmux_install_command() {
+    TMUX_INSTALL_CMD=""
+    TMUX_INSTALL_DISPLAY=""
+
+    if [ "$OS" = "darwin" ]; then
+        if command -v brew > /dev/null 2>&1; then
+            TMUX_INSTALL_CMD="brew install tmux"
+            TMUX_INSTALL_DISPLAY="$TMUX_INSTALL_CMD"
+            return 0
+        fi
+        return 1
+    fi
+
+    if command -v apt-get > /dev/null 2>&1; then
+        TMUX_INSTALL_CMD="apt-get install -y tmux"
+    elif command -v dnf > /dev/null 2>&1; then
+        TMUX_INSTALL_CMD="dnf install -y tmux"
+    elif command -v yum > /dev/null 2>&1; then
+        TMUX_INSTALL_CMD="yum install -y tmux"
+    elif command -v pacman > /dev/null 2>&1; then
+        TMUX_INSTALL_CMD="pacman -Sy --noconfirm tmux"
+    elif command -v apk > /dev/null 2>&1; then
+        TMUX_INSTALL_CMD="apk add tmux"
+    elif command -v zypper > /dev/null 2>&1; then
+        TMUX_INSTALL_CMD="zypper --non-interactive install tmux"
+    else
+        return 1
+    fi
+
+    if [ "$(id -u)" != "0" ]; then
+        if command -v sudo > /dev/null 2>&1; then
+            TMUX_INSTALL_CMD="sudo ${TMUX_INSTALL_CMD}"
+        else
+            return 1
+        fi
+    fi
+
+    TMUX_INSTALL_DISPLAY="$TMUX_INSTALL_CMD"
+    return 0
+}
+
+print_tmux_manual_hint() {
+    if [ "$OS" = "darwin" ]; then
+        info "Install tmux later with: brew install tmux"
+    else
+        info "Install tmux later with your package manager, for example: sudo apt-get install -y tmux"
+    fi
+    info 'You can also rerun `amurg-runtime init` and it will prompt again when you choose interactive tmux.'
+}
+
+offer_tmux_install() {
+    if [ "${BINARY}" != "amurg-runtime" ] || command -v tmux > /dev/null 2>&1; then
+        return 0
+    fi
+
+    info 'Optional: tmux enables codex.transport="tmux" and other native interactive transports'
+
+    if ! has_tty; then
+        info 'No interactive terminal detected. Install tmux later, or run `amurg-runtime init` to be prompted again.'
+        echo ""
+        return 0
+    fi
+
+    if ! detect_tmux_install_command; then
+        info "Couldn't determine an automatic tmux install command for this host."
+        print_tmux_manual_hint
+        echo ""
+        return 0
+    fi
+
+    if ! prompt_yes_no "Install tmux now for interactive sessions?" y; then
+        info "Skipping tmux install."
+        print_tmux_manual_hint
+        echo ""
+        return 0
+    fi
+
+    info "Installing tmux using: ${TMUX_INSTALL_DISPLAY}"
+    if sh -c "${TMUX_INSTALL_CMD}" < /dev/tty; then
+        if command -v tmux > /dev/null 2>&1; then
+            ok "tmux installed successfully"
+        else
+            err "tmux install command finished, but tmux is still not on your PATH."
+            print_tmux_manual_hint
+        fi
+    else
+        err "tmux installation failed."
+        print_tmux_manual_hint
+    fi
+    echo ""
 }
 
 # ── Version ──────────────────────────────────────────────────────────────────
@@ -153,6 +284,8 @@ do_install() {
     echo "    ${BINARY} init      # interactive setup wizard"
     echo "    ${BINARY} run       # start with generated config"
     echo ""
+
+    offer_tmux_install
 }
 
 # ── Argument parsing ─────────────────────────────────────────────────────────

@@ -18,6 +18,8 @@ import (
 	"github.com/amurg-ai/amurg/pkg/cli"
 	"github.com/amurg-ai/amurg/pkg/protocol"
 	"github.com/amurg-ai/amurg/runtime/internal/config"
+	"github.com/amurg-ai/amurg/runtime/internal/huburl"
+	"github.com/amurg-ai/amurg/runtime/internal/permissionmode"
 )
 
 // Profile metadata for the chooser.
@@ -87,11 +89,21 @@ func (w *Wizard) Run(outputPath string, generateSystemd bool) (string, bool, err
 	hubChoice := w.p.Choose("  Where is your Amurg Hub?",
 		[]string{"Amurg Cloud (hub.amurg.ai)", "Self-hosted"}, 0)
 
+	var endpoints huburl.Endpoints
 	if hubChoice == "Amurg Cloud (hub.amurg.ai)" {
-		cfg.Hub.URL = "wss://hub.amurg.ai/ws/runtime"
+		endpoints = huburl.Cloud()
 	} else {
-		cfg.Hub.URL = w.p.Ask("  Hub WebSocket URL", "ws://localhost:8080/ws/runtime")
+		for {
+			input := w.p.Ask("  Hub URL", huburl.DefaultSelfHosted)
+			parsed, err := huburl.Parse(input)
+			if err == nil {
+				endpoints = parsed
+				break
+			}
+			_, _ = fmt.Fprintf(w.p.Out, "  Invalid hub URL: %v\n", err)
+		}
 	}
+	cfg.Hub.URL = endpoints.WSURL
 	_, _ = fmt.Fprintln(w.p.Out)
 
 	// Authentication.
@@ -101,7 +113,7 @@ func (w *Wizard) Run(outputPath string, generateSystemd bool) (string, bool, err
 
 	runtimeIDFromAuth := ""
 	if authChoice == "Register via browser (recommended)" {
-		token, runtimeID, orgID, err := w.deviceCodeFlow(cfg.Hub.URL)
+		token, runtimeID, orgID, err := w.deviceCodeFlow(endpoints.HTTPBase)
 		if err != nil {
 			return "", false, err
 		}
@@ -133,6 +145,9 @@ func (w *Wizard) Run(outputPath string, generateSystemd bool) (string, bool, err
 		_, _ = fmt.Fprintf(w.p.Out, "\n  ── Agent %d of %d ──\n", i+1, numAgents)
 		agent := w.ConfigureAgent(i)
 		cfg.Agents = append(cfg.Agents, agent)
+	}
+	if err := EnsureTMuxForConfig(w.p, cfg); err != nil {
+		return "", false, err
 	}
 
 	// Output path — use default unless explicitly overridden via flag.
@@ -183,9 +198,7 @@ func (w *Wizard) Run(outputPath string, generateSystemd bool) (string, bool, err
 // deviceCodeFlow initiates the device-code registration flow and polls until
 // approval or expiry. On expiry it offers retry or fallback to manual token.
 // Returns (token, runtimeID, orgID, error).
-func (w *Wizard) deviceCodeFlow(hubWSURL string) (string, string, string, error) {
-	httpBase := wsToHTTP(hubWSURL)
-
+func (w *Wizard) deviceCodeFlow(httpBase string) (string, string, string, error) {
 	for {
 		token, runtimeID, orgID, err := w.doDeviceCodeRound(httpBase)
 		if err != nil {
@@ -286,20 +299,6 @@ func (w *Wizard) doDeviceCodeRound(httpBase string) (string, string, string, err
 	return "", "", "", nil
 }
 
-// wsToHTTP converts a WebSocket URL to its HTTP equivalent.
-// wss://host/ws/runtime → https://host
-// ws://host/ws/runtime  → http://host
-func wsToHTTP(wsURL string) string {
-	u := wsURL
-	if strings.HasPrefix(u, "wss://") {
-		u = "https://" + strings.TrimPrefix(u, "wss://")
-	} else if strings.HasPrefix(u, "ws://") {
-		u = "http://" + strings.TrimPrefix(u, "ws://")
-	}
-	u = strings.TrimSuffix(u, "/ws/runtime")
-	return u
-}
-
 // ConfigureAgent runs the interactive prompt to configure a single agent.
 func (w *Wizard) ConfigureAgent(index int) config.AgentConfig {
 	// Build display options.
@@ -345,7 +344,7 @@ func (w *Wizard) ConfigureAgent(index int) config.AgentConfig {
 		if model != "" {
 			cc.Model = model
 		}
-		perm := w.p.Ask("  Permission mode (leave empty for default)", "")
+		perm := w.chooseClaudePermissionMode()
 		if perm != "" {
 			cc.PermissionMode = perm
 		}
@@ -366,6 +365,10 @@ func (w *Wizard) ConfigureAgent(index int) config.AgentConfig {
 		model := w.p.Ask("  Model (leave empty for default)", "")
 		if model != "" {
 			cx.Model = model
+		}
+		transport := w.p.Choose("  Transport", []string{"Exec (default)", "Interactive tmux"}, 0)
+		if transport == "Interactive tmux" {
+			cx.Transport = "tmux"
 		}
 		agent.Codex = cx
 
@@ -414,6 +417,21 @@ func (w *Wizard) ConfigureAgent(index int) config.AgentConfig {
 	}
 
 	return agent
+}
+
+func (w *Wizard) chooseClaudePermissionMode() string {
+	options := make([]string, 0, len(permissionmode.ClaudeWizardOptions))
+	for _, option := range permissionmode.ClaudeWizardOptions {
+		options = append(options, fmt.Sprintf("%s — %s", option.Label, option.Description))
+	}
+
+	choice := w.p.Choose("  Claude permission mode", options, 0)
+	for i, option := range options {
+		if option == choice {
+			return permissionmode.ClaudeWizardOptions[i].Value
+		}
+	}
+	return ""
 }
 
 func (w *Wizard) writeSystemdUnit(configPath string) error {

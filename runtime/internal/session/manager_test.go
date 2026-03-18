@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/amurg-ai/amurg/pkg/protocol"
 	"github.com/amurg-ai/amurg/runtime/internal/adapter"
 	"github.com/amurg-ai/amurg/runtime/internal/config"
 )
@@ -43,6 +44,25 @@ func (s *historyAgentSession) LoadNativeHistory() []adapter.Output {
 	return []adapter.Output{
 		{Channel: "history_user", Data: []byte("remember this")},
 	}
+}
+
+type securityAdapter struct {
+	session *securityAgentSession
+}
+
+func (a *securityAdapter) Start(_ context.Context, _ config.AgentConfig) (adapter.AgentSession, error) {
+	a.session = &securityAgentSession{mockAgentSession: newMockAgent()}
+	return a.session, nil
+}
+
+type securityAgentSession struct {
+	*mockAgentSession
+	lastSecurity *config.SecurityConfig
+}
+
+func (s *securityAgentSession) UpdateSecurity(security *config.SecurityConfig) bool {
+	s.lastSecurity = security
+	return false
 }
 
 func testManagerConfig() config.RuntimeConfig {
@@ -331,5 +351,71 @@ func TestManager_CreateWithResume_HistoryReplayDoesNotEmitFinal(t *testing.T) {
 	}
 	if outputs[1].Channel != "system" {
 		t.Fatalf("expected final replay message on system channel, got %q", outputs[1].Channel)
+	}
+}
+
+func TestManager_UpdateAgentConfig_AllowsSkipPermissionMode(t *testing.T) {
+	registry := adapter.NewRegistry()
+	adp := &securityAdapter{}
+	registry.Register("security-profile", adp)
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	m := NewManager(config.RuntimeConfig{ID: "test-runtime", MaxSessions: 3}, []config.AgentConfig{
+		{ID: "sec-1", Name: "Security Agent", Profile: "security-profile"},
+	}, registry, func(string, adapter.Output, bool) {}, nil, logger)
+
+	if err := m.Create(context.Background(), "sess-1", "sec-1", "user-1"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := m.UpdateAgentConfig("sec-1", &protocol.SecurityProfile{PermissionMode: "skip", Cwd: "/tmp"}, nil); err != nil {
+		t.Fatalf("UpdateAgentConfig: %v", err)
+	}
+
+	if adp.session == nil || adp.session.lastSecurity == nil {
+		t.Fatal("expected security update to reach running session")
+	}
+	if adp.session.lastSecurity.PermissionMode != "skip" {
+		t.Fatalf("expected permission mode skip, got %q", adp.session.lastSecurity.PermissionMode)
+	}
+	if adp.session.lastSecurity.Cwd != "/tmp" {
+		t.Fatalf("expected cwd /tmp, got %q", adp.session.lastSecurity.Cwd)
+	}
+}
+
+func TestManager_SendInteractive(t *testing.T) {
+	m := newTestManager(t)
+
+	if err := m.Create(context.Background(), "sess-1", "ep-1", "user-1"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := m.Send(context.Background(), "sess-1", []byte("hello")); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if err := m.SendInteractive(context.Background(), "sess-1", []byte("y")); err != nil {
+		t.Fatalf("SendInteractive: %v", err)
+	}
+
+	sess, ok := m.Get("sess-1")
+	if !ok {
+		t.Fatal("session not found")
+	}
+	agent := sess.agent.(*mockAgentSession)
+	inputs := agent.sentInputs()
+	if len(inputs) != 2 {
+		t.Fatalf("expected 2 sends, got %d", len(inputs))
+	}
+	if inputs[0] != "hello" || inputs[1] != "y" {
+		t.Fatalf("unexpected sent inputs: %#v", inputs)
+	}
+
+	close(agent.outCh)
+	time.Sleep(50 * time.Millisecond)
+}
+
+func TestManager_SendInteractive_NotFound(t *testing.T) {
+	m := newTestManager(t)
+	if err := m.SendInteractive(context.Background(), "missing", []byte("y")); err == nil {
+		t.Fatal("expected error sending interactive input to missing session")
 	}
 }

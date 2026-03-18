@@ -42,6 +42,9 @@ func runTUI(outputPath string, generateSystemd bool) (string, bool, error) {
 	if result.Cancelled {
 		return "", false, fmt.Errorf("wizard cancelled")
 	}
+	if err := plainwizard.EnsureTMuxForConfig(cli.DefaultPrompter(), result.Config); err != nil {
+		return "", false, err
+	}
 
 	return result.Path, result.StartNow, nil
 }

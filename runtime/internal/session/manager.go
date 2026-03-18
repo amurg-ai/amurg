@@ -160,6 +160,24 @@ func (m *Manager) Send(ctx context.Context, sessionID string, input []byte) erro
 	return sess.Send(ctx, input, idleTimeout)
 }
 
+// SendInteractive delivers follow-up input to an already running interactive session.
+func (m *Manager) SendInteractive(ctx context.Context, sessionID string, input []byte) error {
+	m.mu.RLock()
+	sess, ok := m.sessions[sessionID]
+	m.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("session not found: %s", sessionID)
+	}
+
+	idleTimeout := m.cfg.IdleTimeout.Duration
+	if agentCfg, ok := m.agentCfgs[sess.AgentID]; ok && agentCfg.Limits != nil && agentCfg.Limits.IdleTimeout.Duration > 0 {
+		idleTimeout = agentCfg.Limits.IdleTimeout.Duration
+	}
+
+	return sess.SendInteractive(ctx, input, idleTimeout)
+}
+
 // Stop requests stop for a session.
 func (m *Manager) Stop(sessionID string) error {
 	m.mu.RLock()
@@ -278,15 +296,6 @@ func (m *Manager) UpdateAgentConfig(agentID string, security *protocol.SecurityP
 	}
 
 	if security != nil {
-		// Block remote override of permission_mode to "skip" or "bypassPermissions"
-		// unless explicitly allowed.
-		if (security.PermissionMode == "skip" || security.PermissionMode == "bypassPermissions") && !m.cfg.AllowRemotePermissionSkip {
-			m.logger.Warn("blocked remote permission_mode override to skip-equivalent",
-				"agent_id", agentID,
-				"permission_mode", security.PermissionMode)
-			return fmt.Errorf("remote override of permission_mode to %q is not allowed (set allow_remote_permission_skip: true to enable)", security.PermissionMode)
-		}
-
 		if agentCfg.Security == nil {
 			agentCfg.Security = &config.SecurityConfig{}
 		}

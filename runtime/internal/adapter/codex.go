@@ -30,6 +30,10 @@ func (a *CodexAdapter) Start(ctx context.Context, cfg config.AgentConfig) (Agent
 		cxCfg.Command = "codex"
 	}
 
+	if cxCfg.Transport == "tmux" {
+		return newCodexTMuxSession(ctx, *cxCfg, cfg.Security), nil
+	}
+
 	sess := &codexSession{
 		ctx:      ctx,
 		cfg:      *cxCfg,
@@ -171,6 +175,81 @@ type codexSession struct {
 	permHandler func(tool, description, resource string) bool
 }
 
+func buildCodexArgs(cfg config.CodexConfig, security *config.SecurityConfig, threadID, prompt string) []string {
+	args := make([]string, 0, 16)
+
+	permMode := cfg.ApprovalMode
+	if security != nil && security.PermissionMode != "" {
+		switch security.PermissionMode {
+		case "skip", "bypassPermissions", "dontAsk":
+			permMode = "never"
+		case "strict":
+			permMode = "untrusted"
+		case "auto", "acceptEdits", "plan":
+			permMode = "on-request"
+		}
+	}
+	if permMode == "skip" {
+		permMode = "never"
+	}
+	if permMode != "" {
+		args = append(args, "-a", permMode)
+	}
+
+	sandboxMode := cfg.SandboxMode
+	if sandboxMode != "" {
+		args = append(args, "--sandbox", sandboxMode)
+	}
+	if cfg.FullAuto && sandboxMode == "" && permMode == "" {
+		args = append(args, "--full-auto")
+	}
+	if cfg.Model != "" {
+		args = append(args, "--model", cfg.Model)
+	}
+	if cfg.Profile != "" {
+		args = append(args, "--profile", cfg.Profile)
+	}
+	if dir := resolveWorkDir(cfg.WorkDir, security); dir != "" {
+		args = append(args, "--cd", dir)
+	}
+	for _, dir := range codexMergeUnique(cfg.AdditionalDirs, securityAllowedPaths(security)) {
+		args = append(args, "--add-dir", dir)
+	}
+
+	args = append(args, "exec")
+	if threadID != "" {
+		args = append(args, "resume", threadID)
+	}
+	args = append(args, "--json", "--color", "never", prompt)
+	return args
+}
+
+func codexMergeUnique(groups ...[]string) []string {
+	seen := make(map[string]struct{})
+	var merged []string
+	for _, group := range groups {
+		for _, value := range group {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				continue
+			}
+			if _, ok := seen[value]; ok {
+				continue
+			}
+			seen[value] = struct{}{}
+			merged = append(merged, value)
+		}
+	}
+	return merged
+}
+
+func securityAllowedPaths(security *config.SecurityConfig) []string {
+	if security == nil {
+		return nil
+	}
+	return security.AllowedPaths
+}
+
 func (s *codexSession) Send(ctx context.Context, input []byte) error {
 	s.mu.Lock()
 	if s.closed {
@@ -180,69 +259,7 @@ func (s *codexSession) Send(ctx context.Context, input []byte) error {
 	tid := s.threadID
 	s.mu.Unlock()
 
-	// Build command: codex exec --json [flags] "prompt"
-	// or: codex exec resume <thread_id> --json [flags] "prompt"
-	args := []string{"exec"}
-
-	// Resume with thread ID if available.
-	if tid != "" {
-		args = append(args, "resume", tid)
-	}
-
-	args = append(args, "--json", "--color", "never")
-
-	// Permission mode from security config.
-	permMode := s.cfg.ApprovalMode
-	if s.security != nil && s.security.PermissionMode != "" {
-		switch s.security.PermissionMode {
-		case "skip":
-			permMode = "never"
-		case "strict":
-			permMode = "untrusted"
-		case "auto":
-			permMode = "on-request"
-		}
-	}
-	if permMode == "skip" {
-		permMode = "never"
-	}
-	if permMode != "" {
-		args = append(args, "--ask-for-approval", permMode)
-	}
-
-	// Sandbox mode.
-	sandboxMode := s.cfg.SandboxMode
-	if sandboxMode != "" {
-		args = append(args, "--sandbox", sandboxMode)
-	}
-
-	// Full-auto convenience preset.
-	if s.cfg.FullAuto && sandboxMode == "" && permMode == "" {
-		args = append(args, "--full-auto")
-	}
-
-	// Model.
-	if s.cfg.Model != "" {
-		args = append(args, "--model", s.cfg.Model)
-	}
-
-	// Config profile.
-	if s.cfg.Profile != "" {
-		args = append(args, "--profile", s.cfg.Profile)
-	}
-
-	// Working directory — validated with fallback.
-	if dir := resolveWorkDir(s.cfg.WorkDir, s.security); dir != "" {
-		args = append(args, "--cd", dir)
-	}
-
-	// Additional writable directories.
-	for _, dir := range s.cfg.AdditionalDirs {
-		args = append(args, "--add-dir", dir)
-	}
-
-	// The prompt text is the final argument.
-	args = append(args, string(input))
+	args := buildCodexArgs(s.cfg, s.security, tid, string(input))
 
 	cmd := exec.CommandContext(ctx, s.cfg.Command, args...)
 	cmd.Env = os.Environ()
@@ -409,11 +426,11 @@ func (s *codexSession) handleCodexItem(raw json.RawMessage) {
 		Content json.RawMessage `json:"content,omitempty"`
 
 		// command_execution fields
-		Command         string `json:"command,omitempty"`
-		Cwd             string `json:"cwd,omitempty"`
-		Status          string `json:"status,omitempty"`
-		ExitCode        *int   `json:"exitCode,omitempty"`
-		DurationMs      int    `json:"durationMs,omitempty"`
+		Command          string `json:"command,omitempty"`
+		Cwd              string `json:"cwd,omitempty"`
+		Status           string `json:"status,omitempty"`
+		ExitCode         *int   `json:"exitCode,omitempty"`
+		DurationMs       int    `json:"durationMs,omitempty"`
 		AggregatedOutput string `json:"aggregatedOutput,omitempty"`
 
 		// file_change fields
@@ -526,9 +543,9 @@ func (s *codexSession) handleCodexItem(raw json.RawMessage) {
 
 	case "mcp_tool_call":
 		toolData := map[string]any{
-			"type": "tool_use",
-			"id":   item.ID,
-			"name": item.Server + "/" + item.Tool,
+			"type":  "tool_use",
+			"id":    item.ID,
+			"name":  item.Server + "/" + item.Tool,
 			"input": json.RawMessage(item.Arguments),
 		}
 		if data, err := json.Marshal(toolData); err == nil {

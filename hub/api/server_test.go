@@ -15,6 +15,7 @@ import (
 	"github.com/amurg-ai/amurg/hub/config"
 	"github.com/amurg-ai/amurg/hub/router"
 	"github.com/amurg-ai/amurg/hub/store"
+	"github.com/amurg-ai/amurg/pkg/protocol"
 	"github.com/google/uuid"
 )
 
@@ -956,5 +957,60 @@ func TestGetMessages_OtherUserDenied(t *testing.T) {
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected other user to get 403, got %d; body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestListAgents_MarksUnavailableAgentsOffline(t *testing.T) {
+	srv, authSvc, s := setupTestServer(t)
+	token := createTestUserAndGetToken(t, authSvc, s)
+
+	ctx := context.Background()
+	runtimeID := "rt-unavailable"
+	agentID := "ag-unavailable"
+	if err := s.UpsertRuntime(ctx, &store.Runtime{
+		ID:       runtimeID,
+		OrgID:    "default",
+		Name:     "test-runtime",
+		Online:   true,
+		LastSeen: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertAgent(ctx, &store.Agent{
+		ID:        agentID,
+		OrgID:     "default",
+		RuntimeID: runtimeID,
+		Profile:   protocol.ProfileClaudeCode,
+		Name:      "broken-claude",
+		Tags:      "{}",
+		Caps:      `{"available":false,"unavailable_reason":"command \"claude\" is not on PATH"}`,
+		Security:  "{}",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	srv.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+
+	var agents []struct {
+		ID     string          `json:"id"`
+		Online bool            `json:"online"`
+		Caps   json.RawMessage `json:"caps"`
+	}
+	parseJSONResponse(t, w, &agents)
+	if len(agents) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(agents))
+	}
+	if agents[0].ID != agentID {
+		t.Fatalf("expected agent %q, got %q", agentID, agents[0].ID)
+	}
+	if agents[0].Online {
+		t.Fatal("expected unavailable agent to be reported offline")
 	}
 }

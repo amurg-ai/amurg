@@ -1,6 +1,10 @@
 import { useState, useEffect, useMemo } from "react";
 import { useSessionStore } from "@/stores/sessionStore";
-import { PROFILE_DISPLAY } from "@/types";
+import {
+  PROFILE_DISPLAY,
+  getAgentUnavailableReason,
+  isAgentUsable,
+} from "@/types";
 import type { UnifiedSession } from "@/types";
 import { SecurityBadge } from "@/components/SecurityBadge";
 import { OnboardingGuide } from "@/components/OnboardingGuide";
@@ -86,7 +90,9 @@ export function AgentHomeScreen() {
   const [search, setSearch] = useState("");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
-  useEffect(() => { loadAgents(); }, [loadAgents]);
+  useEffect(() => {
+    loadAgents();
+  }, [loadAgents]);
 
   // Load native sessions from all capable agents once agents are available
   useEffect(() => {
@@ -109,11 +115,12 @@ export function AgentHomeScreen() {
     const items: UnifiedSession[] = [];
 
     // Hub sessions (exclude preview sessions)
-    for (const s of sessions.filter(s => !previewSessionIds.has(s.id))) {
+    for (const s of sessions.filter((s) => !previewSessionIds.has(s.id))) {
       const agent = agentMap.get(s.agent_id);
       const profile = agent?.profile || s.profile || "generic-cli";
       const profileMeta = PROFILE_DISPLAY[profile];
-      const agentName = s.agent_name || agent?.name || profileMeta?.label || profile;
+      const agentName =
+        s.agent_name || agent?.name || profileMeta?.label || profile;
       items.push({
         id: s.id,
         source: "hub",
@@ -164,7 +171,7 @@ export function AgentHomeScreen() {
         s.agentName.toLowerCase().includes(q) ||
         s.projectPath?.toLowerCase().includes(q) ||
         s.gitBranch?.toLowerCase().includes(q) ||
-        s.state?.toLowerCase().includes(q)
+        s.state?.toLowerCase().includes(q),
     );
   }, [unifiedSessions, search]);
 
@@ -189,11 +196,14 @@ export function AgentHomeScreen() {
 
     for (const group of map.values()) {
       group.sessions.sort(
-        (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+        (a, b) =>
+          new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
       );
     }
 
-    return Array.from(map.values()).sort((a, b) => b.latestUpdate - a.latestUpdate);
+    return Array.from(map.values()).sort(
+      (a, b) => b.latestUpdate - a.latestUpdate,
+    );
   }, [filtered]);
 
   const handleSelect = async (agentId: string) => {
@@ -202,7 +212,10 @@ export function AgentHomeScreen() {
     try {
       await createSession(agentId);
     } catch (err) {
-      addToast(err instanceof Error ? err.message : "Failed to create session", "error");
+      addToast(
+        err instanceof Error ? err.message : "Failed to create session",
+        "error",
+      );
     } finally {
       setCreating(null);
     }
@@ -218,7 +231,10 @@ export function AgentHomeScreen() {
       try {
         await createSessionWithResume(session.agentId, session.id);
       } catch (err) {
-        addToast(err instanceof Error ? err.message : "Failed to resume session", "error");
+        addToast(
+          err instanceof Error ? err.message : "Failed to resume session",
+          "error",
+        );
       } finally {
         setResumingId(null);
       }
@@ -249,7 +265,9 @@ export function AgentHomeScreen() {
         {/* Header */}
         <div className="mb-8">
           <h2 className="text-lg font-semibold text-slate-200 mb-1">Agents</h2>
-          <p className="text-sm text-slate-500">Select an agent to start a new session</p>
+          <p className="text-sm text-slate-500">
+            Select an agent to start a new session
+          </p>
         </div>
 
         {/* Agent cards */}
@@ -260,12 +278,17 @@ export function AgentHomeScreen() {
               color: "bg-slate-600",
               icon: "?",
             };
+            const usable = isAgentUsable(ep);
+            const unavailableReason = getAgentUnavailableReason(ep);
 
             return (
               <button
                 key={ep.id}
                 onClick={() => handleSelect(ep.id)}
-                disabled={!!creating}
+                disabled={!!creating || !usable}
+                title={
+                  usable ? undefined : unavailableReason || "Agent unavailable"
+                }
                 className="group relative flex items-center gap-3 p-4 rounded-xl
                            bg-slate-800/60 border border-slate-700/50
                            hover:bg-slate-700/80 hover:border-teal-500/30 hover:shadow-lg hover:shadow-teal-900/10
@@ -289,19 +312,38 @@ export function AgentHomeScreen() {
                       {ep.name || profile.label}
                     </span>
                     <span
-                      className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${ep.online ? "bg-green-400" : "bg-slate-600"}`}
-                      title={ep.online ? "Online" : "Offline"}
+                      className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${usable ? "bg-green-400" : "bg-slate-600"}`}
+                      title={usable ? "Online" : unavailableReason || "Offline"}
                     />
                     <SecurityBadge security={ep.security} />
                   </div>
-                  <span className="text-xs text-slate-500">{profile.label}</span>
+                  <span className="text-xs text-slate-500">
+                    {usable
+                      ? profile.label
+                      : unavailableReason || `${profile.label} unavailable`}
+                  </span>
                 </div>
 
                 {creating === ep.id && (
                   <div className="absolute inset-0 flex items-center justify-center bg-slate-800/90 rounded-xl">
-                    <svg className="w-5 h-5 animate-spin text-teal-400" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    <svg
+                      className="w-5 h-5 animate-spin text-teal-400"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      />
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                      />
                     </svg>
                   </div>
                 )}
@@ -316,9 +358,12 @@ export function AgentHomeScreen() {
             {/* Section header with search */}
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="text-sm font-semibold text-slate-300">All Sessions</h3>
+                <h3 className="text-sm font-semibold text-slate-300">
+                  All Sessions
+                </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  {totalSessions} session{totalSessions !== 1 ? "s" : ""} across {groups.length} agent{groups.length !== 1 ? "s" : ""}
+                  {totalSessions} session{totalSessions !== 1 ? "s" : ""} across{" "}
+                  {groups.length} agent{groups.length !== 1 ? "s" : ""}
                 </p>
               </div>
               <div className="relative">
@@ -335,18 +380,40 @@ export function AgentHomeScreen() {
                 />
                 <svg
                   className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-600"
-                  fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
                 >
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                  />
                 </svg>
               </div>
             </div>
 
             {nativeSessionsLoading && groups.length === 0 && (
               <div className="flex items-center gap-2 text-sm text-slate-500 py-4">
-                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                <svg
+                  className="w-4 h-4 animate-spin"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                  />
                 </svg>
                 Loading sessions...
               </div>
@@ -375,11 +442,28 @@ export function AgentHomeScreen() {
                       <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
                         {profileMeta?.label || group.agentName}
                       </span>
-                      <span className="text-xs text-slate-600">({group.sessions.length})</span>
+                      <span className="text-xs text-slate-600">
+                        ({group.sessions.length})
+                      </span>
                       {nativeSessionsLoading && (
-                        <svg className="w-3 h-3 animate-spin text-slate-600" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        <svg
+                          className="w-3 h-3 animate-spin text-slate-600"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                        >
+                          <circle
+                            className="opacity-25"
+                            cx="12"
+                            cy="12"
+                            r="10"
+                            stroke="currentColor"
+                            strokeWidth="4"
+                          />
+                          <path
+                            className="opacity-75"
+                            fill="currentColor"
+                            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                          />
                         </svg>
                       )}
                     </div>
@@ -404,42 +488,68 @@ export function AgentHomeScreen() {
                               {s.label}
                             </span>
 
-                            {s.source === "hub" && <StateBadge state={s.state} />}
-
-                            {s.source === "native" && s.messageCount != null && s.messageCount > 0 && (
-                              <span className="text-[11px] text-slate-500 flex-shrink-0">
-                                {s.messageCount} msgs
-                              </span>
+                            {s.source === "hub" && (
+                              <StateBadge state={s.state} />
                             )}
+
+                            {s.source === "native" &&
+                              s.messageCount != null &&
+                              s.messageCount > 0 && (
+                                <span className="text-[11px] text-slate-500 flex-shrink-0">
+                                  {s.messageCount} msgs
+                                </span>
+                              )}
 
                             <span className="flex-shrink-0 text-[11px] text-slate-600 whitespace-nowrap">
                               {timeAgo(s.updatedAt)}
                             </span>
 
                             {resumingId === s.id && (
-                              <svg className="w-3.5 h-3.5 animate-spin text-teal-400 flex-shrink-0" fill="none" viewBox="0 0 24 24">
-                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                              <svg
+                                className="w-3.5 h-3.5 animate-spin text-teal-400 flex-shrink-0"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                              >
+                                <circle
+                                  className="opacity-25"
+                                  cx="12"
+                                  cy="12"
+                                  r="10"
+                                  stroke="currentColor"
+                                  strokeWidth="4"
+                                />
+                                <path
+                                  className="opacity-75"
+                                  fill="currentColor"
+                                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                                />
                               </svg>
                             )}
                           </div>
 
                           {/* Second line for native sessions: folder + date */}
-                          {s.source === "native" && (s.projectPath || s.updatedAt) && (
-                            <div className="flex items-center gap-3 mt-1 ml-[38px]">
-                              {s.projectPath && (
-                                <span className="text-[11px] text-slate-500 truncate" title={s.projectPath}>
-                                  <span className="text-slate-600">~/</span>
-                                  {s.projectPath.replace(/^\/home\/[^/]+\//, "")}
-                                </span>
-                              )}
-                              {s.updatedAt && (
-                                <span className="flex-shrink-0 text-[11px] text-slate-600 ml-auto">
-                                  {formatDate(s.updatedAt)}
-                                </span>
-                              )}
-                            </div>
-                          )}
+                          {s.source === "native" &&
+                            (s.projectPath || s.updatedAt) && (
+                              <div className="flex items-center gap-3 mt-1 ml-[38px]">
+                                {s.projectPath && (
+                                  <span
+                                    className="text-[11px] text-slate-500 truncate"
+                                    title={s.projectPath}
+                                  >
+                                    <span className="text-slate-600">~/</span>
+                                    {s.projectPath.replace(
+                                      /^\/home\/[^/]+\//,
+                                      "",
+                                    )}
+                                  </span>
+                                )}
+                                {s.updatedAt && (
+                                  <span className="flex-shrink-0 text-[11px] text-slate-600 ml-auto">
+                                    {formatDate(s.updatedAt)}
+                                  </span>
+                                )}
+                              </div>
+                            )}
                         </button>
                       ))}
                     </div>
@@ -460,7 +570,9 @@ export function AgentHomeScreen() {
 
             {/* No results */}
             {search && groups.length === 0 && !nativeSessionsLoading && (
-              <p className="text-sm text-slate-500 py-4">No sessions matching &quot;{search}&quot;</p>
+              <p className="text-sm text-slate-500 py-4">
+                No sessions matching &quot;{search}&quot;
+              </p>
             )}
           </div>
         )}

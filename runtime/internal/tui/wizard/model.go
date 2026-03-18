@@ -24,8 +24,9 @@ const (
 
 // WizardData collects all configuration from the wizard steps.
 type WizardData struct {
-	HubChoice string // "cloud" or "self-hosted"
-	HubURL    string
+	HubChoice  string // "cloud" or "self-hosted"
+	HubURL     string
+	HubBaseURL string
 
 	AuthChoice string // "device-code" or "manual"
 	Token      string
@@ -36,7 +37,7 @@ type WizardData struct {
 
 	LogLevel string
 
-	OutputPath     string
+	OutputPath      string
 	GenerateSystemd bool
 }
 

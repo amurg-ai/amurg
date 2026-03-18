@@ -15,18 +15,18 @@ import (
 func TestWizard_ClaudeCode_ManualToken(t *testing.T) {
 	// Simulate user input: self-hosted hub, manual token, configure one claude-code agent.
 	input := strings.Join([]string{
-		"2",                               // hub: Self-hosted
-		"ws://hub.example.com/ws/runtime", // hub URL
-		"2",                               // auth: Enter token manually
-		"my-token-123",                    // token
-		"test-runtime",                    // runtime ID
-		"info",                            // log level
-		"1",                               // 1 agent
-		"1",                               // profile: claude-code (first option)
-		"My Claude Agent",                 // agent name
-		"",                                // model (default)
-		"",                                // permission mode (default)
-		"2",                               // start now: No
+		"2",                      // hub: Self-hosted
+		"http://hub.example.com", // hub URL
+		"2",                      // auth: Enter token manually
+		"my-token-123",           // token
+		"test-runtime",           // runtime ID
+		"info",                   // log level
+		"1",                      // 1 agent
+		"1",                      // profile: claude-code (first option)
+		"My Claude Agent",        // agent name
+		"",                       // model (default)
+		"",                       // permission mode (default)
+		"2",                      // start now: No
 	}, "\n") + "\n"
 
 	out := &bytes.Buffer{}
@@ -119,18 +119,18 @@ func TestWizard_CloudHub(t *testing.T) {
 
 func TestWizard_GenericCLI(t *testing.T) {
 	input := strings.Join([]string{
-		"2",                                 // hub: Self-hosted
-		"ws://localhost:8080/ws/runtime",     // hub URL
-		"2",                                 // auth: Enter token manually
-		"dev-token",                         // token
-		"dev-runtime",                       // runtime ID
-		"debug",                             // log level
-		"1",                                 // 1 agent
-		"5",                                 // profile: generic-cli (5th option)
-		"Bash Shell",                        // agent name
-		"bash",                              // command
-		"--norc -i",                         // args
-		"2",                                 // start now: No
+		"2",                     // hub: Self-hosted
+		"http://localhost:8080", // hub URL
+		"2",                     // auth: Enter token manually
+		"dev-token",             // token
+		"dev-runtime",           // runtime ID
+		"debug",                 // log level
+		"1",                     // 1 agent
+		"5",                     // profile: generic-cli (5th option)
+		"Bash Shell",            // agent name
+		"bash",                  // command
+		"--norc -i",             // args
+		"2",                     // start now: No
 	}, "\n") + "\n"
 
 	out := &bytes.Buffer{}
@@ -172,6 +172,63 @@ func TestWizard_GenericCLI(t *testing.T) {
 	}
 }
 
+func TestWizard_CodexTMux_DeclinedInstall(t *testing.T) {
+	origLookPath := lookPath
+	t.Cleanup(func() { lookPath = origLookPath })
+	lookPath = func(name string) (string, error) {
+		if name == "tmux" {
+			return "", os.ErrNotExist
+		}
+		return "/usr/bin/" + name, nil
+	}
+
+	input := strings.Join([]string{
+		"2",
+		"http://localhost:8080",
+		"2",
+		"dev-token",
+		"codex-runtime",
+		"info",
+		"1",
+		"3",
+		"Codex Agent",
+		"",
+		"2",
+		"n",
+		"2",
+	}, "\n") + "\n"
+
+	out := &bytes.Buffer{}
+	p := &cli.Prompter{In: strings.NewReader(input), Out: out}
+
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "config.json")
+
+	w := New(p)
+	if _, _, err := w.Run(outputPath, false); err != nil {
+		t.Fatalf("wizard.Run() error: %v", err)
+	}
+
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+
+	var cfg config.Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if len(cfg.Agents) != 1 || cfg.Agents[0].Codex == nil {
+		t.Fatalf("expected one codex agent, got %#v", cfg.Agents)
+	}
+	if cfg.Agents[0].Codex.Transport != "tmux" {
+		t.Fatalf("codex transport = %q, want tmux", cfg.Agents[0].Codex.Transport)
+	}
+	if !strings.Contains(out.String(), "Install tmux manually") {
+		t.Fatalf("expected tmux guidance in output, got %q", out.String())
+	}
+}
+
 func TestSplitArgs(t *testing.T) {
 	tests := []struct {
 		input string
@@ -190,20 +247,44 @@ func TestSplitArgs(t *testing.T) {
 	}
 }
 
-func TestWsToHTTP(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"wss://hub.amurg.ai/ws/runtime", "https://hub.amurg.ai"},
-		{"ws://localhost:8080/ws/runtime", "http://localhost:8080"},
-		{"wss://example.com:443/ws/runtime", "https://example.com:443"},
-		{"ws://10.0.0.1:3000/ws/runtime", "http://10.0.0.1:3000"},
+func TestWizard_SelfHostedBareHostNormalizesToRuntimeWSURL(t *testing.T) {
+	input := strings.Join([]string{
+		"2",
+		"localhost:8090",
+		"2",
+		"token-123",
+		"runtime-local",
+		"info",
+		"1",
+		"1",
+		"Claude",
+		"",
+		"",
+		"2",
+	}, "\n") + "\n"
+
+	out := &bytes.Buffer{}
+	p := &cli.Prompter{In: strings.NewReader(input), Out: out}
+
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "config.json")
+
+	w := New(p)
+	if _, _, err := w.Run(outputPath, false); err != nil {
+		t.Fatalf("wizard.Run() error: %v", err)
 	}
-	for _, tt := range tests {
-		got := wsToHTTP(tt.input)
-		if got != tt.want {
-			t.Errorf("wsToHTTP(%q) = %q, want %q", tt.input, got, tt.want)
-		}
+
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+
+	var cfg config.Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+
+	if cfg.Hub.URL != "ws://localhost:8090/ws/runtime" {
+		t.Fatalf("hub.url = %q, want %q", cfg.Hub.URL, "ws://localhost:8090/ws/runtime")
 	}
 }

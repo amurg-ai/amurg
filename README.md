@@ -60,7 +60,7 @@ That's it. Your runtime connects to the hub and you can chat with your agents fr
 
 For a full self-hosted stack, you also need the hub. Two options:
 
-### Docker Compose (recommended)
+### Docker Compose (recommended for the hub)
 
 ```bash
 git clone https://github.com/amurg-ai/amurg.git
@@ -68,7 +68,14 @@ cd amurg
 docker compose up -d
 ```
 
-The hub runs on `http://localhost:8080`. Log in with `admin` / `admin`.
+This starts the hub only. The hub runs on `http://localhost:8080`. Log in with `admin` / `admin`.
+
+Run your runtime separately on the host so it can use your locally installed agent CLIs:
+
+```bash
+amurg-runtime init
+amurg-runtime run
+```
 
 ### Standalone Binary
 

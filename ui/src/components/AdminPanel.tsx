@@ -2,6 +2,11 @@ import { Fragment, useEffect, useState } from "react";
 import { api } from "@/api/client";
 import type { SessionInfo, UserInfo, AuditEvent, RuntimeInfo, AdminAgentInfo, SecurityProfile, AgentLimitsWire } from "@/types";
 import { PROFILE_DISPLAY } from "@/types";
+import {
+  formatPermissionModeLabel,
+  getPermissionModeOption,
+  PERMISSION_MODE_OPTIONS,
+} from "@/lib/permissionModes";
 
 type Tab = "agents" | "runtimes" | "users" | "sessions" | "audit";
 
@@ -29,13 +34,6 @@ const PROFILE_TOOLS: Record<string, string[]> = {
   "claude-code": ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch", "NotebookEdit"],
   "github-copilot": ["shell(*)", "shell(git *)", "shell(npm *)", "shell(node *)"],
 };
-
-const PERMISSION_MODES = [
-  { value: "", label: "Default" },
-  { value: "skip", label: "Skip" },
-  { value: "strict", label: "Strict" },
-  { value: "auto", label: "Auto" },
-] as const;
 
 function AgentConfigEditor({
   agent,
@@ -87,6 +85,7 @@ function AgentConfigEditor({
   const [idleTimeout, setIdleTimeout] = useState(initLim.idle_timeout || "");
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+  const selectedPermissionMode = getPermissionModeOption(permissionMode);
 
   const splitLines = (s: string) => s.split("\n").map(l => l.trim()).filter(Boolean);
 
@@ -164,22 +163,23 @@ function AgentConfigEditor({
           </label>
           <div className="space-y-1">
             <span className="text-xs text-slate-400">Permission Mode</span>
-            <div className="flex rounded-lg border border-slate-600 overflow-hidden">
-              {PERMISSION_MODES.map(mode => (
-                <button
-                  key={mode.value}
-                  type="button"
-                  onClick={() => setPermissionMode(mode.value)}
-                  className={`flex-1 text-xs py-2 px-1 transition-colors ${
-                    permissionMode === mode.value
-                      ? "bg-teal-600 text-white"
-                      : "bg-slate-700 text-slate-400 hover:text-slate-200"
-                  }`}
-                >
+            <select
+              value={permissionMode}
+              onChange={(e) => setPermissionMode(e.target.value)}
+              className="w-full bg-slate-700 text-slate-200 text-sm rounded px-3 py-2 border border-slate-600 focus:border-teal-500 focus:outline-none"
+            >
+              {PERMISSION_MODE_OPTIONS.map((mode) => (
+                <option key={mode.value || "default"} value={mode.value}>
                   {mode.label}
-                </button>
+                </option>
               ))}
-            </div>
+            </select>
+            <p className="text-[11px] leading-relaxed text-slate-500">
+              {selectedPermissionMode.summary}
+            </p>
+            <p className="text-[11px] text-slate-600">
+              Amurg maps this preset to the native agent CLI when supported.
+            </p>
           </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -358,7 +358,7 @@ function AgentsTab() {
                           </span>
                         </td>
                         <td className="px-4 py-2 text-slate-400 text-xs">
-                          {sec.permission_mode || "default"}
+                          {formatPermissionModeLabel(sec.permission_mode)}
                         </td>
                         <td className="px-4 py-2">
                           {ep.config_override ? (

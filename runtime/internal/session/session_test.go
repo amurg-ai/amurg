@@ -18,6 +18,7 @@ type mockAgentSession struct {
 	stopErr error
 	closed  bool
 	outCh   chan adapter.Output
+	sent    [][]byte
 }
 
 func newMockAgent() *mockAgentSession {
@@ -26,9 +27,14 @@ func newMockAgent() *mockAgentSession {
 	}
 }
 
-func (m *mockAgentSession) Send(_ context.Context, _ []byte) error {
+func (m *mockAgentSession) Send(_ context.Context, input []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if input != nil {
+		clone := make([]byte, len(input))
+		copy(clone, input)
+		m.sent = append(m.sent, clone)
+	}
 	return m.sendErr
 }
 
@@ -55,6 +61,16 @@ func (m *mockAgentSession) isClosed() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.closed
+}
+
+func (m *mockAgentSession) sentInputs() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	inputs := make([]string, len(m.sent))
+	for i, value := range m.sent {
+		inputs[i] = string(value)
+	}
+	return inputs
 }
 
 func testLogger() *slog.Logger {
@@ -317,4 +333,71 @@ func TestSession_Stop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+func TestSession_SendInteractive_WhileRespondingForwardsInput(t *testing.T) {
+	agent := newMockAgent()
+	handler := func(string, adapter.Output, bool) {}
+	sess := NewSession("s1", "e1", "u1", agent, handler, testLogger())
+
+	if err := sess.Send(context.Background(), []byte("hello"), 5*time.Second); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if err := sess.SendInteractive(context.Background(), []byte("y"), 5*time.Second); err != nil {
+		t.Fatalf("SendInteractive: %v", err)
+	}
+
+	close(agent.outCh)
+	time.Sleep(50 * time.Millisecond)
+
+	inputs := agent.sentInputs()
+	if len(inputs) != 2 {
+		t.Fatalf("expected 2 sends, got %d", len(inputs))
+	}
+	if inputs[0] != "hello" || inputs[1] != "y" {
+		t.Fatalf("unexpected sent inputs: %#v", inputs)
+	}
+}
+
+func TestSession_SendInteractive_FromActiveStartsDrain(t *testing.T) {
+	agent := newMockAgent()
+
+	var (
+		mu      sync.Mutex
+		outputs []adapter.Output
+		finals  []bool
+	)
+	handler := func(_ string, out adapter.Output, final bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		outputs = append(outputs, out)
+		finals = append(finals, final)
+	}
+
+	sess := NewSession("s1", "e1", "u1", agent, handler, testLogger())
+	if err := sess.SendInteractive(context.Background(), []byte("resume"), 50*time.Millisecond); err != nil {
+		t.Fatalf("SendInteractive: %v", err)
+	}
+
+	agent.outCh <- adapter.Output{Channel: "stdout", Data: []byte("ok")}
+	time.Sleep(200 * time.Millisecond)
+
+	inputs := agent.sentInputs()
+	if len(inputs) != 1 || inputs[0] != "resume" {
+		t.Fatalf("unexpected sent inputs: %#v", inputs)
+	}
+	if sess.State() != StateActive {
+		t.Fatalf("expected session to return to active, got %s", sess.State())
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(outputs) < 2 {
+		t.Fatalf("expected output and final marker, got %d outputs", len(outputs))
+	}
+	if !finals[len(finals)-1] {
+		t.Fatal("expected final output after idle timeout")
+	}
+
+	close(agent.outCh)
 }

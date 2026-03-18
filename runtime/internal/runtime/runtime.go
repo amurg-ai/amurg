@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/amurg-ai/amurg/pkg/protocol"
 	"github.com/amurg-ai/amurg/runtime/internal/adapter"
 	"github.com/amurg-ai/amurg/runtime/internal/config"
@@ -21,6 +20,7 @@ import (
 	"github.com/amurg-ai/amurg/runtime/internal/hub"
 	"github.com/amurg-ai/amurg/runtime/internal/ipc"
 	"github.com/amurg-ai/amurg/runtime/internal/session"
+	"github.com/google/uuid"
 )
 
 // Runtime is the main runtime process.
@@ -73,6 +73,10 @@ func New(cfg *config.Config, logger *slog.Logger, bus *eventbus.Bus) *Runtime {
 		if !ok {
 			caps = protocol.ProfileCaps{ExecModel: protocol.ExecInteractive}
 		}
+		if agent.Profile == protocol.ProfileCodex && agent.Codex != nil && agent.Codex.Transport == "tmux" {
+			caps.ExecModel = protocol.ExecInteractive
+		}
+		caps = withAgentAvailability(agent, caps)
 
 		var sec *protocol.SecurityProfile
 		if agent.Security != nil {
@@ -194,6 +198,8 @@ func (r *Runtime) handleHubMessage(env protocol.Envelope) error {
 		return r.handleSessionClose(env)
 	case protocol.TypeUserMessage:
 		return r.handleUserMessage(env)
+	case protocol.TypeInteractiveInput:
+		return r.handleInteractiveInput(env)
 	case protocol.TypeStopRequest:
 		return r.handleStop(env)
 	case protocol.TypeFileUpload:
@@ -315,6 +321,32 @@ func (r *Runtime) handleUserMessage(env protocol.Envelope) error {
 			SessionID:    msg.SessionID,
 			InResponseTo: msg.MessageID,
 		})
+	}
+
+	return nil
+}
+
+func (r *Runtime) handleInteractiveInput(env protocol.Envelope) error {
+	data, _ := json.Marshal(env.Payload)
+	var msg protocol.InteractiveInput
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return fmt.Errorf("unmarshal interactive input: %w", err)
+	}
+
+	ctx := context.Background()
+	err := r.sessions.SendInteractive(ctx, msg.SessionID, []byte(msg.Content))
+	if err != nil && msg.AgentID != "" {
+		r.logger.Info("attempting lazy interactive session recreation",
+			"session_id", msg.SessionID, "agent_id", msg.AgentID,
+			"native_handle", msg.NativeHandle)
+		if createErr := r.sessions.CreateWithResume(ctx, msg.SessionID, msg.AgentID, msg.UserID, msg.NativeHandle); createErr == nil {
+			err = r.sessions.SendInteractive(ctx, msg.SessionID, []byte(msg.Content))
+		} else {
+			r.logger.Warn("lazy interactive session recreation failed", "session_id", msg.SessionID, "error", createErr)
+		}
+	}
+	if err != nil {
+		r.logger.Warn("send interactive input failed", "session_id", msg.SessionID, "error", err)
 	}
 
 	return nil

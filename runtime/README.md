@@ -15,6 +15,8 @@ amurg-runtime init    # interactive wizard — configures hub connection and end
 amurg-runtime run     # start with generated config
 ```
 
+If you want native interactive Codex sessions through the hub, set `codex.transport` to `tmux`. The runtime Docker image includes `tmux`, and host installs can let `scripts/install.sh` or `amurg-runtime init` prompt to install it.
+
 ## Infrastructure Requirements
 
 | Resource | Minimum | Recommended |
@@ -71,6 +73,8 @@ cp runtime/deploy/config.example.json runtime/deploy/config.local.json
 ### Endpoints (Agents)
 
 Each endpoint defines an agent the runtime can manage. Four adapter profiles are supported:
+
+For `codex` agents, `"transport": "tmux"` runs the native interactive TUI inside tmux instead of the default `exec --json` transport. The runtime Docker image includes `tmux`; host installs can let `scripts/install.sh` or `amurg-runtime init` offer the install.
 
 **CLI** — Long-running interactive process (bash, python, etc.):
 ```json

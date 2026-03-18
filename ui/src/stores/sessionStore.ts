@@ -12,6 +12,7 @@ import type {
   PermissionRequest,
   NativeSessionsResponse,
 } from "@/types";
+import { parseAgentCaps, isAgentUsable } from "@/types";
 import { api } from "@/api/client";
 import { socket } from "@/api/websocket";
 
@@ -23,10 +24,31 @@ function assignSequenceNumbers(sessions: SessionInfo[]): SessionInfo[] {
     byAgent.get(key)!.push(s);
   }
   for (const group of byAgent.values()) {
-    group.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-    group.forEach((s, i) => { s.seq = i + 1; });
+    group.sort(
+      (a, b) =>
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+    );
+    group.forEach((s, i) => {
+      s.seq = i + 1;
+    });
   }
   return sessions;
+}
+
+function parseAgentExecModel(agent: AgentInfo | undefined): string | null {
+  const caps = parseAgentCaps(agent);
+  return typeof caps.exec_model === "string" ? caps.exec_model : null;
+}
+
+function sessionAllowsInteractiveInput(
+  sessionId: string,
+  sessions: SessionInfo[],
+  agents: AgentInfo[],
+): boolean {
+  const session = sessions.find((entry) => entry.id === sessionId);
+  if (!session) return false;
+  const agent = agents.find((entry) => entry.id === session.agent_id);
+  return parseAgentExecModel(agent) === "interactive";
 }
 
 interface SessionState {
@@ -66,14 +88,23 @@ interface SessionState {
   selectSession: (sessionId: string) => Promise<void>;
   deselectSession: () => void;
   sendMessage: (content: string) => void;
+  canSendInteractiveInput: (sessionId: string) => boolean;
   stopSession: () => void;
   closeSession: (sessionId: string) => Promise<void>;
   cleanupSession: (sessionId: string) => void;
-  respondToPermission: (sessionId: string, requestId: string, approved: boolean, alwaysAllow?: boolean) => void;
+  respondToPermission: (
+    sessionId: string,
+    requestId: string,
+    approved: boolean,
+    alwaysAllow?: boolean,
+  ) => void;
   uploadFile: (sessionId: string, file: File) => Promise<void>;
   loadNativeSessions: (agentId: string) => void;
   loadAllNativeSessions: () => void;
-  createSessionWithResume: (agentId: string, resumeSessionId: string) => Promise<SessionInfo>;
+  createSessionWithResume: (
+    agentId: string,
+    resumeSessionId: string,
+  ) => Promise<SessionInfo>;
 }
 
 export const useSessionStore = create<SessionState>((set, get) => {
@@ -104,7 +135,10 @@ export const useSessionStore = create<SessionState>((set, get) => {
       const { activeSessionId: currentActive } = get();
       if (output.session_id !== currentActive) {
         const unreadCounts = new Map(get().unreadCounts);
-        unreadCounts.set(output.session_id, (unreadCounts.get(output.session_id) || 0) + 1);
+        unreadCounts.set(
+          output.session_id,
+          (unreadCounts.get(output.session_id) || 0) + 1,
+        );
         set({ unreadCounts });
       }
     });
@@ -120,7 +154,10 @@ export const useSessionStore = create<SessionState>((set, get) => {
       // Create turn entry
       const sessionTurns = turns.get(payload.session_id) || [];
       const sessionMessages = messages.get(payload.session_id) || [];
-      const lastSeq = sessionMessages.length > 0 ? sessionMessages[sessionMessages.length - 1].seq : 0;
+      const lastSeq =
+        sessionMessages.length > 0
+          ? sessionMessages[sessionMessages.length - 1].seq
+          : 0;
       const newTurn: Turn = {
         turnNumber: sessionTurns.length + 1,
         startSeq: lastSeq,
@@ -145,7 +182,10 @@ export const useSessionStore = create<SessionState>((set, get) => {
       if (sessionTurns.length > 0) {
         const lastTurn = { ...sessionTurns[sessionTurns.length - 1] };
         const sessionMessages = messages.get(payload.session_id) || [];
-        lastTurn.endSeq = sessionMessages.length > 0 ? sessionMessages[sessionMessages.length - 1].seq : lastTurn.startSeq;
+        lastTurn.endSeq =
+          sessionMessages.length > 0
+            ? sessionMessages[sessionMessages.length - 1].seq
+            : lastTurn.startSeq;
         lastTurn.exitCode = payload.exit_code;
         lastTurn.elapsedMs = Date.now() - lastTurn.startTime;
         sessionTurns[sessionTurns.length - 1] = lastTurn;
@@ -179,8 +219,8 @@ export const useSessionStore = create<SessionState>((set, get) => {
 
       // Update session state in the sessions array
       set({
-        sessions: sessions.map(s =>
-          s.id === payload.session_id ? { ...s, state: "closed" } : s
+        sessions: sessions.map((s) =>
+          s.id === payload.session_id ? { ...s, state: "closed" } : s,
         ),
       });
 
@@ -218,12 +258,16 @@ export const useSessionStore = create<SessionState>((set, get) => {
       const allowlist = sessionToolAllowlist.get(req.session_id);
       if (allowlist?.has(req.tool)) {
         // Auto-approve
-        socket.send("permission.response", {
-          session_id: req.session_id,
-          request_id: req.request_id,
-          approved: true,
-          always_allow: true,
-        }, req.session_id);
+        socket.send(
+          "permission.response",
+          {
+            session_id: req.session_id,
+            request_id: req.request_id,
+            approved: true,
+            always_allow: true,
+          },
+          req.session_id,
+        );
         return;
       }
 
@@ -237,10 +281,14 @@ export const useSessionStore = create<SessionState>((set, get) => {
       const resp = env.payload as { session_id: string; request_id: string };
       const { pendingPermissions } = get();
       const requests = pendingPermissions.get(resp.session_id) || [];
-      if (requests.some(r => r.request_id === resp.request_id)) {
+      if (requests.some((r) => r.request_id === resp.request_id)) {
         const updated = new Map(pendingPermissions);
-        updated.set(resp.session_id, requests.filter(r => r.request_id !== resp.request_id));
-        if (updated.get(resp.session_id)?.length === 0) updated.delete(resp.session_id);
+        updated.set(
+          resp.session_id,
+          requests.filter((r) => r.request_id !== resp.request_id),
+        );
+        if (updated.get(resp.session_id)?.length === 0)
+          updated.delete(resp.session_id);
         set({ pendingPermissions: updated });
       }
     });
@@ -270,16 +318,17 @@ export const useSessionStore = create<SessionState>((set, get) => {
       const id = crypto.randomUUID();
       set({ toasts: [...get().toasts, { id, message, type }] });
       setTimeout(() => {
-        set({ toasts: get().toasts.filter(t => t.id !== id) });
+        set({ toasts: get().toasts.filter((t) => t.id !== id) });
       }, 5000);
     },
 
     removeToast: (id) => {
-      set({ toasts: get().toasts.filter(t => t.id !== id) });
+      set({ toasts: get().toasts.filter((t) => t.id !== id) });
     },
 
     cleanupSession: (sessionId: string) => {
-      const { messages, turns, pendingPermissions, sessionToolAllowlist } = get();
+      const { messages, turns, pendingPermissions, sessionToolAllowlist } =
+        get();
       const updatedMessages = new Map(messages);
       updatedMessages.delete(sessionId);
       const updatedTurns = new Map(turns);
@@ -288,7 +337,12 @@ export const useSessionStore = create<SessionState>((set, get) => {
       updatedPerms.delete(sessionId);
       const updatedAllowlist = new Map(sessionToolAllowlist);
       updatedAllowlist.delete(sessionId);
-      set({ messages: updatedMessages, turns: updatedTurns, pendingPermissions: updatedPerms, sessionToolAllowlist: updatedAllowlist });
+      set({
+        messages: updatedMessages,
+        turns: updatedTurns,
+        pendingPermissions: updatedPerms,
+        sessionToolAllowlist: updatedAllowlist,
+      });
     },
 
     init: async () => {
@@ -397,7 +451,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
       const sessionMessages = get().messages.get(sessionId) || [];
       const maxSeq = sessionMessages.reduce(
         (max, m) => Math.max(max, m.seq),
-        0
+        0,
       );
       socket.subscribe(sessionId, maxSeq);
     },
@@ -414,7 +468,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
           set({
             activeSessionId: null,
             previewSessionIds: updatedPreview,
-            sessions: sessions.filter(s => s.id !== activeSessionId),
+            sessions: sessions.filter((s) => s.id !== activeSessionId),
           });
           get().cleanupSession(activeSessionId);
           return;
@@ -424,7 +478,13 @@ export const useSessionStore = create<SessionState>((set, get) => {
     },
 
     sendMessage: (content: string) => {
-      const { activeSessionId, messages, previewSessionIds } = get();
+      const {
+        activeSessionId,
+        messages,
+        previewSessionIds,
+        responding,
+        canSendInteractiveInput,
+      } = get();
       if (!activeSessionId) return;
 
       // Promote preview session to permanent on first message
@@ -451,19 +511,32 @@ export const useSessionStore = create<SessionState>((set, get) => {
       updated.set(activeSessionId, [...sessionMessages, userMessage]);
       set({ messages: updated });
 
-      const sent = socket.sendMessage(activeSessionId, content);
+      const sent =
+        responding.has(activeSessionId) &&
+        canSendInteractiveInput(activeSessionId)
+          ? socket.sendInteractiveInput(activeSessionId, content)
+          : socket.sendMessage(activeSessionId, content);
       if (!sent) {
         // Remove the optimistic message on failure
         const currentMessages = get().messages;
-        const currentSessionMessages = currentMessages.get(activeSessionId) || [];
+        const currentSessionMessages =
+          currentMessages.get(activeSessionId) || [];
         const rolledBack = new Map(currentMessages);
         rolledBack.set(
           activeSessionId,
-          currentSessionMessages.filter(m => m.id !== messageId)
+          currentSessionMessages.filter((m) => m.id !== messageId),
         );
         set({ messages: rolledBack });
-        get().addToast("Message not sent — connection lost. It will be retried when reconnected.", "error");
+        get().addToast(
+          "Message not sent — connection lost. It will be retried when reconnected.",
+          "error",
+        );
       }
+    },
+
+    canSendInteractiveInput: (sessionId: string) => {
+      const { sessions, agents } = get();
+      return sessionAllowsInteractiveInput(sessionId, sessions, agents);
     },
 
     stopSession: () => {
@@ -476,7 +549,9 @@ export const useSessionStore = create<SessionState>((set, get) => {
       await api.closeSession(sessionId);
       const { sessions } = get();
       set({
-        sessions: sessions.map(s => s.id === sessionId ? { ...s, state: "closed" } : s),
+        sessions: sessions.map((s) =>
+          s.id === sessionId ? { ...s, state: "closed" } : s,
+        ),
       });
       get().addToast("Session closed", "success");
     },
@@ -515,16 +590,24 @@ export const useSessionStore = create<SessionState>((set, get) => {
         const currentMessages = get().messages;
         const currentSessionMessages = currentMessages.get(sessionId) || [];
         const rolledBack = new Map(currentMessages);
-        rolledBack.set(sessionId, currentSessionMessages.filter(m => m.id !== tempId));
+        rolledBack.set(
+          sessionId,
+          currentSessionMessages.filter((m) => m.id !== tempId),
+        );
         set({ messages: rolledBack });
         throw err;
       }
     },
 
-    respondToPermission: (sessionId: string, requestId: string, approved: boolean, alwaysAllow?: boolean) => {
+    respondToPermission: (
+      sessionId: string,
+      requestId: string,
+      approved: boolean,
+      alwaysAllow?: boolean,
+    ) => {
       const { pendingPermissions, sessionToolAllowlist } = get();
       const requests = pendingPermissions.get(sessionId) || [];
-      const request = requests.find(r => r.request_id === requestId);
+      const request = requests.find((r) => r.request_id === requestId);
 
       // Handle "always allow" for this session
       if (approved && alwaysAllow && request) {
@@ -537,17 +620,24 @@ export const useSessionStore = create<SessionState>((set, get) => {
 
       // Remove from pending
       const updated = new Map(pendingPermissions);
-      updated.set(sessionId, requests.filter(r => r.request_id !== requestId));
+      updated.set(
+        sessionId,
+        requests.filter((r) => r.request_id !== requestId),
+      );
       if (updated.get(sessionId)?.length === 0) updated.delete(sessionId);
       set({ pendingPermissions: updated });
 
       // Send response via WebSocket
-      socket.send("permission.response", {
-        session_id: sessionId,
-        request_id: requestId,
-        approved,
-        always_allow: alwaysAllow || false,
-      }, sessionId);
+      socket.send(
+        "permission.response",
+        {
+          session_id: sessionId,
+          request_id: requestId,
+          approved,
+          always_allow: alwaysAllow || false,
+        },
+        sessionId,
+      );
     },
 
     loadNativeSessions: (agentId: string) => {
@@ -559,13 +649,8 @@ export const useSessionStore = create<SessionState>((set, get) => {
     loadAllNativeSessions: () => {
       const { agents } = get();
       const capable = agents.filter((a) => {
-        if (!a.online) return false;
-        try {
-          const caps = JSON.parse(a.caps || "{}");
-          return caps.native_session_ids === true;
-        } catch {
-          return false;
-        }
+        if (!isAgentUsable(a)) return false;
+        return parseAgentCaps(a).native_session_ids === true;
       });
       if (capable.length === 0) return;
       set({ nativeSessionsLoading: true, _nativePendingCount: capable.length });
@@ -575,12 +660,18 @@ export const useSessionStore = create<SessionState>((set, get) => {
       }
     },
 
-    createSessionWithResume: async (agentId: string, resumeSessionId: string) => {
+    createSessionWithResume: async (
+      agentId: string,
+      resumeSessionId: string,
+    ) => {
       const session = await api.createSession(agentId, resumeSessionId);
       const { sessions, previewSessionIds } = get();
       const updatedPreview = new Set(previewSessionIds);
       updatedPreview.add(session.id);
-      set({ sessions: assignSequenceNumbers([session, ...sessions]), previewSessionIds: updatedPreview });
+      set({
+        sessions: assignSequenceNumbers([session, ...sessions]),
+        previewSessionIds: updatedPreview,
+      });
       await get().selectSession(session.id);
       return session;
     },

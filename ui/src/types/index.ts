@@ -28,6 +28,48 @@ export interface AgentInfo {
   security?: string | SecurityProfile; // JSON string from hub or parsed object
 }
 
+export interface AgentCaps {
+  available?: boolean;
+  unavailable_reason?: string;
+  exec_model?: string;
+  native_session_ids?: boolean;
+  [key: string]: unknown;
+}
+
+export function parseAgentCaps(
+  agent: Pick<AgentInfo, "caps"> | undefined,
+): AgentCaps {
+  if (!agent) return {};
+  try {
+    return typeof agent.caps === "string"
+      ? (JSON.parse(agent.caps || "{}") as AgentCaps)
+      : (agent.caps as unknown as AgentCaps);
+  } catch {
+    return {};
+  }
+}
+
+export function isAgentUsable(
+  agent: Pick<AgentInfo, "online" | "caps"> | undefined,
+): boolean {
+  if (!agent?.online) return false;
+  return parseAgentCaps(agent).available !== false;
+}
+
+export function getAgentUnavailableReason(
+  agent: Pick<AgentInfo, "caps"> | undefined,
+): string | null {
+  const caps = parseAgentCaps(agent);
+  if (
+    caps.available === false &&
+    typeof caps.unavailable_reason === "string" &&
+    caps.unavailable_reason
+  ) {
+    return caps.unavailable_reason;
+  }
+  return null;
+}
+
 export type ConnectionState = "connected" | "disconnected" | "reconnecting";
 
 export interface SessionInfo {

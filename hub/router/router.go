@@ -846,11 +846,12 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 
 func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 	switch env.Type {
-	case protocol.TypeUserMessage:
+	case protocol.TypeUserMessage, protocol.TypeInteractiveInput:
+		interactive := env.Type == protocol.TypeInteractiveInput
 		data, _ := json.Marshal(env.Payload)
 		var msg protocol.UserMessage
 		if err := json.Unmarshal(data, &msg); err != nil {
-			r.logger.Warn("unmarshal user message failed", "error", err)
+			r.logger.Warn("unmarshal client input failed", "type", env.Type, "error", err)
 		}
 
 		ctx := context.Background()
@@ -878,8 +879,21 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 			return
 		}
 
-		// Turn gating: reject if session is responding and turn-based mode is on.
-		if r.turnBased && sess.State == "responding" {
+		if interactive {
+			if sess.State != "responding" {
+				r.sendToClient(cc, protocol.TypeErrorResponse, msg.SessionID, protocol.ErrorResponse{
+					Code: "interactive_input_unavailable", Message: "interactive input is only available while the agent is responding",
+				})
+				return
+			}
+			if !r.sessionSupportsInteractiveInput(ctx, sess) {
+				r.sendToClient(cc, protocol.TypeErrorResponse, msg.SessionID, protocol.ErrorResponse{
+					Code: "interactive_input_unsupported", Message: "this session does not support interactive input",
+				})
+				return
+			}
+		} else if r.turnBased && sess.State == "responding" {
+			// Turn gating: reject if session is responding and turn-based mode is on.
 			r.sendToClient(cc, protocol.TypeErrorResponse, msg.SessionID, protocol.ErrorResponse{
 				Code: "turn_in_progress", Message: "wait for the current turn to complete",
 			})
@@ -911,11 +925,17 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 			return
 		}
 
+		action := "message.sent"
+		runtimeType := protocol.TypeUserMessage
+		if interactive {
+			action = "interactive_input.sent"
+			runtimeType = protocol.TypeInteractiveInput
+		}
 		if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{
-			ID: uuid.New().String(), OrgID: cc.orgID, Action: "message.sent", UserID: cc.userID,
+			ID: uuid.New().String(), OrgID: cc.orgID, Action: action, UserID: cc.userID,
 			SessionID: msg.SessionID, AgentID: sess.AgentID, CreatedAt: time.Now(),
 		}); err != nil {
-			r.logger.Warn("failed to log audit event", "action", "message.sent", "error", err)
+			r.logger.Warn("failed to log audit event", "action", action, "error", err)
 		}
 
 		// Include session metadata so the runtime can lazily recreate the session
@@ -926,7 +946,7 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 
 		// Forward to runtime. Notify the client if delivery fails so
 		// the UI can inform the user instead of silently dropping it.
-		if !r.sendToRuntime(sess.RuntimeID, protocol.TypeUserMessage, msg.SessionID, msg) {
+		if !r.sendToRuntime(sess.RuntimeID, runtimeType, msg.SessionID, msg) {
 			r.sendToClient(cc, protocol.TypeErrorResponse, msg.SessionID, protocol.ErrorResponse{
 				Code: "runtime_unavailable", Message: "agent runtime is temporarily offline, message will be delivered when it reconnects",
 			})
@@ -1099,6 +1119,20 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 	}
 }
 
+func (r *Router) sessionSupportsInteractiveInput(ctx context.Context, sess *store.Session) bool {
+	agent, err := r.store.GetAgent(ctx, sess.AgentID)
+	if err == nil && agent != nil && agent.Caps != "" {
+		var caps protocol.ProfileCaps
+		if err := json.Unmarshal([]byte(agent.Caps), &caps); err == nil && caps.ExecModel != "" {
+			return caps.ExecModel == protocol.ExecInteractive
+		}
+	}
+	if caps, ok := protocol.KnownProfiles[sess.Profile]; ok {
+		return caps.ExecModel == protocol.ExecInteractive
+	}
+	return false
+}
+
 func (cc *clientConn) allowMessage() bool {
 	const rate = 30.0  // messages per second
 	const burst = 50.0 // max burst
@@ -1142,6 +1176,9 @@ func (r *Router) CreateSession(ctx context.Context, userID, agentID string, opts
 	agent, err := r.store.GetAgent(ctx, agentID)
 	if err != nil || agent == nil {
 		return nil, err
+	}
+	if available, reason := store.AgentAvailability(agent); !available {
+		return nil, AgentUnavailableError{AgentID: agentID, Reason: reason}
 	}
 
 	// Enforce max sessions per user.

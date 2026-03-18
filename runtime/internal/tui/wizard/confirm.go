@@ -128,7 +128,11 @@ func (m confirmModel) View() string {
 	s := tui.Subtitle.Render("Configuration Summary") + "\n\n"
 
 	// Summary
-	s += renderRow("Hub", m.data.HubURL)
+	hubDisplay := m.data.HubBaseURL
+	if hubDisplay == "" {
+		hubDisplay = m.data.HubURL
+	}
+	s += renderRow("Hub", hubDisplay)
 	s += renderRow("Auth", m.authSummary())
 
 	s += renderRow("Runtime ID", m.data.RuntimeID)
@@ -177,4 +181,3 @@ func renderRow(label, value string) string {
 		Width(14)
 	return "  " + labelStyle.Render(label) + value + "\n"
 }
-

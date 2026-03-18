@@ -6,7 +6,7 @@ RUN npm ci
 COPY ui/ .
 RUN npm run build
 
-FROM golang:1.24-alpine AS go-build
+FROM golang:1.25.6-alpine AS go-build
 
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -22,7 +22,7 @@ RUN apk add --no-cache ca-certificates \
 COPY --from=go-build /hub /usr/local/bin/amurg-hub
 COPY --from=ui-build /ui/dist /var/lib/amurg/ui
 
-RUN mkdir -p /var/lib/amurg/data && chown -R amurg:amurg /var/lib/amurg
+RUN mkdir -p /var/lib/amurg/data /var/lib/amurg/files && chown -R amurg:amurg /var/lib/amurg
 
 USER amurg
 EXPOSE 8080

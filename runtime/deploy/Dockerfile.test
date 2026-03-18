@@ -1,0 +1,31 @@
+FROM golang:1.25.6-alpine AS build
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /runtime ./runtime/cmd/amurg-runtime
+
+FROM node:22-alpine
+
+# System tools (tmux for TUI testing via screen capture)
+RUN apk add --no-cache ca-certificates bash git curl python3 tmux
+
+# Claude CLI
+RUN npm install -g @anthropic-ai/claude-code
+
+# Codex CLI
+RUN npm install -g @openai/codex
+
+# Create amurg user with home dir
+RUN addgroup -S amurg && adduser -S amurg -G amurg -h /home/amurg
+COPY --from=build /runtime /usr/local/bin/amurg-runtime
+
+# Create work directories
+RUN mkdir -p /tmp/amurg-test-project && chown amurg:amurg /tmp/amurg-test-project
+
+USER amurg
+
+ENTRYPOINT ["amurg-runtime"]
+CMD ["run", "--config", "/etc/amurg/config.json"]

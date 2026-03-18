@@ -10,6 +10,7 @@ vi.mock("@/api/websocket", () => ({
     subscribe: vi.fn(),
     unsubscribe: vi.fn(),
     sendMessage: vi.fn(() => true),
+    sendInteractiveInput: vi.fn(() => true),
     stopSession: vi.fn(),
   },
 }));
@@ -119,6 +120,40 @@ describe("sessionStore", () => {
         "sess-1",
         "test input",
       );
+    });
+
+    it("sends interactive input via WebSocket when the session is already responding and the agent is interactive", () => {
+      useSessionStore.setState({
+        activeSessionId: "sess-1",
+        messages: new Map(),
+        responding: new Set(["sess-1"]),
+        sessions: [{
+          id: "sess-1",
+          user_id: "u1",
+          agent_id: "ep-1",
+          runtime_id: "r1",
+          profile: "claude-code",
+          state: "responding",
+          created_at: "",
+          updated_at: "",
+        }],
+        agents: [{
+          id: "ep-1",
+          runtime_id: "r1",
+          profile: "claude-code",
+          name: "Claude",
+          online: true,
+          caps: JSON.stringify({ exec_model: "interactive" }),
+        }],
+      });
+
+      useSessionStore.getState().sendMessage("y");
+
+      expect(mockedSocket.sendInteractiveInput).toHaveBeenCalledWith(
+        "sess-1",
+        "y",
+      );
+      expect(mockedSocket.sendMessage).not.toHaveBeenCalled();
     });
 
     it("appends to existing messages", () => {

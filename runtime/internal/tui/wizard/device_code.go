@@ -189,7 +189,7 @@ func (m deviceCodeModel) View() string {
 }
 
 func (m deviceCodeModel) requestDeviceCode() tea.Msg {
-	httpBase := wsToHTTP(m.data.HubURL)
+	httpBase := m.data.HubBaseURL
 
 	resp, err := http.Post(httpBase+"/api/runtime/register", "application/json", bytes.NewBufferString("{}"))
 	if err != nil {
@@ -215,7 +215,7 @@ func (m deviceCodeModel) requestDeviceCode() tea.Msg {
 }
 
 func (m deviceCodeModel) pollForApproval() tea.Msg {
-	httpBase := wsToHTTP(m.data.HubURL)
+	httpBase := m.data.HubBaseURL
 
 	body, _ := json.Marshal(map[string]string{"polling_token": m.pollToken})
 	resp, err := http.Post(httpBase+"/api/runtime/register/poll", "application/json", bytes.NewBuffer(body))
@@ -229,18 +229,6 @@ func (m deviceCodeModel) pollForApproval() tea.Msg {
 		return pollResultMsg{err: err}
 	}
 	return pollResultMsg{resp: pr}
-}
-
-// wsToHTTP converts a WebSocket URL to its HTTP equivalent.
-func wsToHTTP(wsURL string) string {
-	u := wsURL
-	if strings.HasPrefix(u, "wss://") {
-		u = "https://" + strings.TrimPrefix(u, "wss://")
-	} else if strings.HasPrefix(u, "ws://") {
-		u = "http://" + strings.TrimPrefix(u, "ws://")
-	}
-	u = strings.TrimSuffix(u, "/ws/runtime")
-	return u
 }
 
 func openBrowser(url string) error {

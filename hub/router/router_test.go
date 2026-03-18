@@ -2,14 +2,21 @@ package router
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/amurg-ai/amurg/hub/auth"
 	"github.com/amurg-ai/amurg/hub/config"
 	"github.com/amurg-ai/amurg/hub/store"
+	"github.com/amurg-ai/amurg/pkg/protocol"
+	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 )
 
 func setupTestRouter(t *testing.T) (*Router, store.Store, *auth.Service) {
@@ -439,5 +446,212 @@ func TestCreateSession_AuditEvent(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected a session.create audit event to be logged")
+	}
+}
+
+func newWSPair(t *testing.T) (*websocket.Conn, *websocket.Conn) {
+	t.Helper()
+
+	serverConnCh := make(chan *websocket.Conn, 1)
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade failed: %v", err)
+			return
+		}
+		serverConnCh <- conn
+	}))
+	t.Cleanup(srv.Close)
+
+	url := "ws" + strings.TrimPrefix(srv.URL, "http")
+	clientConn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	serverConn := <-serverConnCh
+	t.Cleanup(func() {
+		_ = serverConn.Close()
+		_ = clientConn.Close()
+	})
+	return serverConn, clientConn
+}
+
+func TestHandleClientMessage_RejectsUserMessageWhileResponding(t *testing.T) {
+	rt, s, authSvc := setupTestRouter(t)
+	runtimeID := "rt-turn-gate"
+	agentID := "ag-turn-gate"
+	seedRuntimeAndAgent(t, s, runtimeID, agentID)
+	userID := seedUser(t, authSvc, "turngateuser")
+
+	ctx := context.Background()
+	if err := s.CreateSession(ctx, &store.Session{
+		ID:        "sess-turn-gate",
+		OrgID:     "default",
+		UserID:    userID,
+		AgentID:   agentID,
+		RuntimeID: runtimeID,
+		Profile:   protocol.ProfileClaudeCode,
+		State:     "responding",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	serverConn, clientWS := newWSPair(t)
+	cc := &clientConn{id: "cc-1", userID: userID, role: "user", orgID: "default", conn: serverConn}
+	env := protocol.Envelope{
+		Type:    protocol.TypeUserMessage,
+		Payload: protocol.UserMessage{SessionID: "sess-turn-gate", MessageID: "msg-1", Content: "hello"},
+	}
+
+	rt.handleClientMessage(cc, env)
+
+	_ = clientWS.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, data, err := clientWS.ReadMessage()
+	if err != nil {
+		t.Fatalf("read error response: %v", err)
+	}
+
+	var reply protocol.Envelope
+	if err := json.Unmarshal(data, &reply); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	if reply.Type != protocol.TypeErrorResponse {
+		t.Fatalf("expected error response, got %s", reply.Type)
+	}
+	var resp protocol.ErrorResponse
+	payload, _ := json.Marshal(reply.Payload)
+	if err := json.Unmarshal(payload, &resp); err != nil {
+		t.Fatalf("unmarshal error payload: %v", err)
+	}
+	if resp.Code != "turn_in_progress" {
+		t.Fatalf("expected turn_in_progress, got %q", resp.Code)
+	}
+}
+
+func TestHandleClientMessage_ForwardsInteractiveInputWhileResponding(t *testing.T) {
+	rt, s, authSvc := setupTestRouter(t)
+	runtimeID := "rt-interactive"
+	agentID := "ag-interactive"
+	ctx := context.Background()
+	if err := s.UpsertRuntime(ctx, &store.Runtime{
+		ID:       runtimeID,
+		OrgID:    "default",
+		Name:     "test-runtime",
+		Online:   true,
+		LastSeen: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	caps, _ := json.Marshal(protocol.ProfileCaps{ExecModel: protocol.ExecInteractive})
+	if err := s.UpsertAgent(ctx, &store.Agent{
+		ID:        agentID,
+		OrgID:     "default",
+		RuntimeID: runtimeID,
+		Profile:   protocol.ProfileClaudeCode,
+		Name:      "interactive-agent",
+		Tags:      "{}",
+		Caps:      string(caps),
+		Security:  "{}",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	userID := seedUser(t, authSvc, "interactiveuser")
+	if err := s.CreateSession(ctx, &store.Session{
+		ID:        "sess-interactive",
+		OrgID:     "default",
+		UserID:    userID,
+		AgentID:   agentID,
+		RuntimeID: runtimeID,
+		Profile:   protocol.ProfileClaudeCode,
+		State:     "responding",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	runtimeServer, runtimeClient := newWSPair(t)
+	rt.mu.Lock()
+	rt.runtimes[runtimeID] = &runtimeConn{id: runtimeID, orgID: "default", conn: runtimeServer}
+	rt.mu.Unlock()
+
+	clientServer, _ := newWSPair(t)
+	cc := &clientConn{id: "cc-2", userID: userID, role: "user", orgID: "default", conn: clientServer}
+	env := protocol.Envelope{
+		Type:    protocol.TypeInteractiveInput,
+		Payload: protocol.InteractiveInput{SessionID: "sess-interactive", MessageID: "msg-2", Content: "y"},
+	}
+
+	rt.handleClientMessage(cc, env)
+
+	_ = runtimeClient.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, data, err := runtimeClient.ReadMessage()
+	if err != nil {
+		t.Fatalf("read runtime message: %v", err)
+	}
+	var forwarded protocol.Envelope
+	if err := json.Unmarshal(data, &forwarded); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	if forwarded.Type != protocol.TypeInteractiveInput {
+		t.Fatalf("expected interactive.input, got %s", forwarded.Type)
+	}
+	var payload protocol.InteractiveInput
+	raw, _ := json.Marshal(forwarded.Payload)
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload.Content != "y" {
+		t.Fatalf("expected forwarded content y, got %q", payload.Content)
+	}
+
+	messages, err := s.GetMessages(ctx, "sess-interactive", 0, 10)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(messages) != 1 || messages[0].Content != "y" {
+		t.Fatalf("unexpected persisted messages: %#v", messages)
+	}
+}
+
+func TestCreateSession_AgentUnavailable(t *testing.T) {
+	rt, s, authSvc := setupTestRouter(t)
+
+	runtimeID := "rt-unavailable"
+	agentID := "ag-unavailable"
+	ctx := context.Background()
+	if err := s.UpsertRuntime(ctx, &store.Runtime{
+		ID:       runtimeID,
+		OrgID:    "default",
+		Name:     "test-runtime",
+		Online:   true,
+		LastSeen: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertAgent(ctx, &store.Agent{
+		ID:        agentID,
+		OrgID:     "default",
+		RuntimeID: runtimeID,
+		Profile:   protocol.ProfileClaudeCode,
+		Name:      "broken-claude",
+		Tags:      "{}",
+		Caps:      `{"available":false,"unavailable_reason":"command \"claude\" is not on PATH"}`,
+		Security:  "{}",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	userID := seedUser(t, authSvc, "brokenagentuser")
+	_, err := rt.CreateSession(ctx, userID, agentID)
+	var unavailable AgentUnavailableError
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("expected AgentUnavailableError, got %v", err)
+	}
+	if !strings.Contains(unavailable.Reason, "not on PATH") {
+		t.Fatalf("unexpected unavailable reason: %q", unavailable.Reason)
 	}
 }

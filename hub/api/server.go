@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -410,6 +411,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	}
 	result := make([]agentResponse, len(agents))
 	for i, agent := range agents {
+		available, _ := store.AgentAvailability(&agent)
 		result[i] = agentResponse{
 			ID:        agent.ID,
 			OrgID:     agent.OrgID,
@@ -419,7 +421,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 			Tags:      json.RawMessage(agent.Tags),
 			Caps:      json.RawMessage(agent.Caps),
 			Security:  json.RawMessage(agent.Security),
-			Online:    onlineSet[agent.RuntimeID],
+			Online:    onlineSet[agent.RuntimeID] && available,
 		}
 	}
 
@@ -555,6 +557,11 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, err := s.router.CreateSession(r.Context(), identity.UserID, req.AgentID, createOpts...)
 	if err != nil {
+		var unavailable router.AgentUnavailableError
+		if errors.As(err, &unavailable) {
+			writeError(w, http.StatusConflict, unavailable.Error())
+			return
+		}
 		if strings.Contains(err.Error(), "max sessions") {
 			if err := s.store.LogAuditEvent(r.Context(), &store.AuditEvent{
 				ID: uuid.New().String(), OrgID: identity.OrgID, Action: "session.create_denied",
@@ -1008,10 +1015,10 @@ func (s *Server) handleUpdateAgentConfig(w http.ResponseWriter, r *http.Request)
 	// Validate permission_mode if set.
 	if req.Security != nil && req.Security.PermissionMode != "" {
 		switch req.Security.PermissionMode {
-		case "skip", "strict", "auto", "acceptEdits", "bypassPermissions", "plan":
+		case "skip", "strict", "auto", "acceptEdits", "bypassPermissions", "dontAsk", "plan":
 			// valid
 		default:
-			writeError(w, http.StatusBadRequest, "permission_mode must be skip, strict, auto, acceptEdits, bypassPermissions, or plan")
+			writeError(w, http.StatusBadRequest, "permission_mode must be skip, strict, auto, acceptEdits, bypassPermissions, dontAsk, or plan")
 			return
 		}
 	}

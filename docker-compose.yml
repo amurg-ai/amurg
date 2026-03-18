@@ -4,9 +4,9 @@ services:
       context: .
       dockerfile: hub/deploy/Dockerfile
     ports:
-      - "8080:8080"
+      - "${AMURG_HUB_PORT:-8080}:8080"
     volumes:
-      - ./hub/deploy/config.example.json:/etc/amurg/config.json:ro
+      - ./hub/deploy/config.compose.json:/etc/amurg/config.json:ro
       - hub-data:/var/lib/amurg/data
     restart: unless-stopped
     healthcheck:
@@ -22,24 +22,6 @@ services:
           cpus: "1.0"
     networks:
       - frontend
-      - backend
-
-  runtime:
-    build:
-      context: .
-      dockerfile: runtime/deploy/Dockerfile
-    volumes:
-      - ./runtime/deploy/config.example.json:/etc/amurg/config.json:ro
-    depends_on:
-      hub:
-        condition: service_healthy
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-          cpus: "2.0"
-    networks:
       - backend
 
   # Optional: local Whisper server for voice-to-text.

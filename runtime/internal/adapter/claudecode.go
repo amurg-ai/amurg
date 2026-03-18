@@ -45,12 +45,18 @@ func (a *ClaudeCodeAdapter) Start(ctx context.Context, cfg config.AgentConfig) (
 // The process is spawned lazily on the first Send() and maintained
 // across multiple messages via --input-format stream-json.
 type claudeCodeSession struct {
-	ctx         context.Context
-	cfg         config.ClaudeCodeConfig
-	security    *config.SecurityConfig
-	sessionID   string // Claude Code's native session ID
-	resumeExplicit bool // true only when SetResumeSessionID was called (explicit resume)
-	permHandler func(tool, description, resource string) bool
+	ctx            context.Context
+	cfg            config.ClaudeCodeConfig
+	security       *config.SecurityConfig
+	sessionID      string // Claude Code's native session ID
+	resumeExplicit bool   // true only when SetResumeSessionID was called (explicit resume)
+	permHandler    func(tool, description, resource string) bool
+	lastInput      []byte
+	retryCount     int
+
+	tempAllowedTools         map[string]struct{}
+	processUsesTempAllowlist bool
+	restartInProgress        bool
 
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
@@ -93,70 +99,11 @@ func (s *claudeCodeSession) startProcess() error {
 
 	s.turnComplete.Store(false)
 
-	args := []string{
-		"-p",
-		"--input-format", "stream-json",
-		"--output-format", "stream-json",
-		"--verbose",
-	}
+	s.mu.Lock()
+	extraAllowedTools := claudeToolSetKeys(s.tempAllowedTools)
+	s.mu.Unlock()
 
-	// Permission mode - security config takes precedence.
-	skipPerms := false
-	permMode := s.cfg.PermissionMode
-	if s.security != nil && s.security.PermissionMode != "" {
-		permMode = s.security.PermissionMode
-	}
-	switch permMode {
-	case "dangerously-skip-permissions", "skip", "bypassPermissions":
-		args = append(args, "--dangerously-skip-permissions")
-		skipPerms = true
-	case "acceptEdits":
-		args = append(args, "--permission-mode", "acceptEdits")
-	case "plan":
-		args = append(args, "--permission-mode", "plan")
-	case "default", "auto", "":
-		// No flag — Claude Code uses its default behavior in -p mode.
-	case "strict":
-		// No flag — strict is the most restrictive, Claude Code default in -p mode.
-	}
-
-	// Model.
-	if s.cfg.Model != "" {
-		args = append(args, "--model", s.cfg.Model)
-	}
-
-	// Max turns.
-	if s.cfg.MaxTurns > 0 {
-		args = append(args, "--max-turns", strconv.Itoa(s.cfg.MaxTurns))
-	}
-
-	// Allowed tools - security config takes precedence.
-	allowedTools := s.cfg.AllowedTools
-	if s.security != nil && len(s.security.AllowedTools) > 0 {
-		allowedTools = s.security.AllowedTools
-	}
-	for _, tool := range allowedTools {
-		args = append(args, "--allowedTools", tool)
-	}
-
-	// Disallowed tools - security config takes precedence.
-	disallowedTools := s.cfg.DisallowedTools
-	if s.security != nil && len(s.security.DisallowedTools) > 0 {
-		disallowedTools = s.security.DisallowedTools
-	}
-	for _, tool := range disallowedTools {
-		args = append(args, "--disallowedTools", tool)
-	}
-
-	// System prompt.
-	if s.cfg.SystemPrompt != "" {
-		args = append(args, "--system-prompt", s.cfg.SystemPrompt)
-	}
-
-	// Resume with native session ID — only for explicit resumes.
-	if sid != "" {
-		args = append(args, "--resume", sid)
-	}
+	args, skipPerms := buildClaudeArgs(s.cfg, s.security, sid, extraAllowedTools)
 
 	cmd := exec.CommandContext(s.ctx, s.cfg.Command, args...)
 
@@ -206,6 +153,7 @@ func (s *claudeCodeSession) startProcess() error {
 	s.stdin = stdin
 	s.done = done
 	s.started = true
+	s.processUsesTempAllowlist = len(extraAllowedTools) > 0
 	s.mu.Unlock()
 
 	// Read stderr in background.
@@ -231,10 +179,24 @@ func (s *claudeCodeSession) startProcess() error {
 	}()
 
 	// Wait for process exit. Emit ExitCode only if no result event already did.
-	go func() {
+	go func(cmd *exec.Cmd, done chan struct{}) {
 		_ = cmd.Wait()
 
-		if !s.turnComplete.Load() {
+		suppressFinal := false
+		s.mu.Lock()
+		if s.cmd == cmd {
+			s.started = false
+			s.cmd = nil
+			s.stdin = nil
+			s.done = nil
+		}
+		if s.restartInProgress {
+			suppressFinal = true
+			s.restartInProgress = false
+		}
+		s.mu.Unlock()
+
+		if !s.turnComplete.Load() && !suppressFinal {
 			var exitCode *int
 			if cmd.ProcessState != nil {
 				code := cmd.ProcessState.ExitCode()
@@ -248,12 +210,18 @@ func (s *claudeCodeSession) startProcess() error {
 		}
 
 		close(done)
-	}()
+	}(cmd, done)
 
 	return nil
 }
 
 func (s *claudeCodeSession) Send(ctx context.Context, input []byte) error {
+	var (
+		cleanupTempAllowlist bool
+		restartCmd           *exec.Cmd
+		restartDone          chan struct{}
+	)
+
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -268,7 +236,35 @@ func (s *claudeCodeSession) Send(ctx context.Context, input []byte) error {
 		default:
 		}
 	}
+	if s.processUsesTempAllowlist {
+		cleanupTempAllowlist = true
+		needsStart = true
+		if s.started && s.done != nil {
+			select {
+			case <-s.done:
+			default:
+				restartCmd = s.cmd
+				restartDone = s.done
+				s.restartInProgress = true
+			}
+		}
+	}
+	s.lastInput = append(s.lastInput[:0], input...)
+	s.retryCount = 0
 	s.mu.Unlock()
+
+	if restartCmd != nil && restartCmd.Process != nil {
+		_ = restartCmd.Process.Signal(os.Interrupt)
+	}
+	if restartDone != nil {
+		<-restartDone
+	}
+	if cleanupTempAllowlist {
+		s.mu.Lock()
+		s.tempAllowedTools = nil
+		s.processUsesTempAllowlist = false
+		s.mu.Unlock()
+	}
 
 	s.turnComplete.Store(false)
 
@@ -278,7 +274,10 @@ func (s *claudeCodeSession) Send(ctx context.Context, input []byte) error {
 		}
 	}
 
-	// Build the stream-json input message.
+	return s.writeInput(input)
+}
+
+func (s *claudeCodeSession) writeInput(input []byte) error {
 	msg := map[string]any{
 		"type": "user",
 		"message": map[string]any{
@@ -301,6 +300,53 @@ func (s *claudeCodeSession) Send(ctx context.Context, input []byte) error {
 	return err
 }
 
+func (s *claudeCodeSession) retryWithTemporaryToolAccess(tools []string) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	if s.tempAllowedTools == nil {
+		s.tempAllowedTools = make(map[string]struct{}, len(tools))
+	}
+	for _, tool := range tools {
+		if tool = strings.TrimSpace(tool); tool != "" {
+			s.tempAllowedTools[tool] = struct{}{}
+		}
+	}
+	s.retryCount++
+	input := append([]byte(nil), s.lastInput...)
+	cmd := s.cmd
+	done := s.done
+	if cmd != nil && cmd.Process != nil {
+		s.restartInProgress = true
+	}
+	s.mu.Unlock()
+
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Signal(os.Interrupt)
+	}
+	if done != nil {
+		<-done
+	}
+
+	if err := s.startProcess(); err != nil {
+		s.emitRetryFailure(fmt.Errorf("restart claude after permission approval: %w", err))
+		return
+	}
+	if err := s.writeInput(input); err != nil {
+		s.emitRetryFailure(fmt.Errorf("resend claude input after permission approval: %w", err))
+	}
+}
+
+func (s *claudeCodeSession) emitRetryFailure(err error) {
+	msg := err.Error()
+	code := 1
+	s.turnComplete.Store(true)
+	s.output <- Output{Channel: "stderr", Data: []byte(msg)}
+	s.output <- Output{Channel: "system", Data: nil, ExitCode: &code}
+}
+
 // truncateStr limits s to maxLen characters, appending "..." if truncated.
 func truncateStr(s string, maxLen int) string {
 	if len(s) <= maxLen {
@@ -309,17 +355,216 @@ func truncateStr(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
+func buildClaudeArgs(cfg config.ClaudeCodeConfig, security *config.SecurityConfig, resumeID string, extraAllowedTools []string) ([]string, bool) {
+	args := []string{
+		"-p",
+		"--input-format", "stream-json",
+		"--output-format", "stream-json",
+		"--verbose",
+	}
+
+	skipPerms := false
+	permMode := cfg.PermissionMode
+	if security != nil && security.PermissionMode != "" {
+		permMode = security.PermissionMode
+	}
+	switch permMode {
+	case "dangerously-skip-permissions", "skip", "bypassPermissions":
+		args = append(args, "--dangerously-skip-permissions")
+		skipPerms = true
+	case "acceptEdits", "auto", "default", "dontAsk", "plan":
+		args = append(args, "--permission-mode", permMode)
+	case "", "strict":
+		// Claude Code's default print-mode behavior is the conservative path.
+	}
+
+	if cfg.Model != "" {
+		args = append(args, "--model", cfg.Model)
+	}
+	if cfg.MaxTurns > 0 {
+		args = append(args, "--max-turns", strconv.Itoa(cfg.MaxTurns))
+	}
+
+	allowedTools := claudeMergeUnique(cfg.AllowedTools, extraAllowedTools)
+	if security != nil && len(security.AllowedTools) > 0 {
+		allowedTools = claudeMergeUnique(security.AllowedTools, extraAllowedTools)
+	}
+	for _, tool := range allowedTools {
+		args = append(args, "--allowedTools", tool)
+	}
+
+	disallowedTools := cfg.DisallowedTools
+	if security != nil && len(security.DisallowedTools) > 0 {
+		disallowedTools = security.DisallowedTools
+	}
+	disallowedTools = claudeFilterExcludedTools(disallowedTools, allowedTools)
+	for _, tool := range disallowedTools {
+		args = append(args, "--disallowedTools", tool)
+	}
+
+	if security != nil {
+		for _, dir := range claudeMergeUnique(security.AllowedPaths) {
+			args = append(args, "--add-dir", dir)
+		}
+	}
+
+	if cfg.SystemPrompt != "" {
+		args = append(args, "--system-prompt", cfg.SystemPrompt)
+	}
+	if resumeID != "" {
+		args = append(args, "--resume", resumeID)
+	}
+
+	return args, skipPerms
+}
+
+func claudeMergeUnique(groups ...[]string) []string {
+	seen := make(map[string]struct{})
+	var merged []string
+	for _, group := range groups {
+		for _, value := range group {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				continue
+			}
+			if _, ok := seen[value]; ok {
+				continue
+			}
+			seen[value] = struct{}{}
+			merged = append(merged, value)
+		}
+	}
+	return merged
+}
+
+func claudeFilterExcludedTools(disallowed, allowed []string) []string {
+	if len(disallowed) == 0 {
+		return nil
+	}
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, tool := range allowed {
+		allowedSet[tool] = struct{}{}
+	}
+
+	filtered := make([]string, 0, len(disallowed))
+	for _, tool := range claudeMergeUnique(disallowed) {
+		if _, ok := allowedSet[tool]; ok {
+			continue
+		}
+		filtered = append(filtered, tool)
+	}
+	return filtered
+}
+
+func claudeToolSetKeys(values map[string]struct{}) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+type claudePermissionDenial struct {
+	Tool        string
+	Description string
+	Resource    string
+}
+
+func parseClaudePermissionDenials(raw json.RawMessage) []claudePermissionDenial {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+
+	var objects []map[string]any
+	if err := json.Unmarshal(raw, &objects); err == nil {
+		return parseClaudePermissionDenialObjects(objects)
+	}
+
+	var stringsOnly []string
+	if err := json.Unmarshal(raw, &stringsOnly); err == nil {
+		out := make([]claudePermissionDenial, 0, len(stringsOnly))
+		for _, tool := range stringsOnly {
+			tool = strings.TrimSpace(tool)
+			if tool == "" {
+				continue
+			}
+			out = append(out, claudePermissionDenial{
+				Tool:        tool,
+				Description: fmt.Sprintf("Claude requested permission to use %s.", tool),
+			})
+		}
+		return out
+	}
+
+	return nil
+}
+
+func parseClaudePermissionDenialObjects(objects []map[string]any) []claudePermissionDenial {
+	var denials []claudePermissionDenial
+	for _, obj := range objects {
+		tool := claudeFirstString(obj,
+			"tool",
+			"tool_name",
+			"name",
+			"toolName",
+		)
+		description := claudeFirstString(obj,
+			"description",
+			"message",
+			"reason",
+		)
+		resource := claudeFirstString(obj,
+			"resource",
+			"path",
+			"target",
+		)
+		if description == "" && tool != "" {
+			description = fmt.Sprintf("Claude requested permission to use %s.", tool)
+		}
+		if tool == "" && description == "" && resource == "" {
+			continue
+		}
+		denials = append(denials, claudePermissionDenial{
+			Tool:        tool,
+			Description: description,
+			Resource:    resource,
+		})
+	}
+	return denials
+}
+
+func claudeFirstString(values map[string]any, keys ...string) string {
+	for _, key := range keys {
+		value, ok := values[key]
+		if !ok {
+			continue
+		}
+		if s, ok := value.(string); ok {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
 // maxToolResultLen limits stored tool result content to prevent DB bloat.
 const maxToolResultLen = 50000
 
 // handleStreamEvent parses a single NDJSON line from claude stream-json output.
 func (s *claudeCodeSession) handleStreamEvent(line []byte) {
 	var event struct {
-		Type      string          `json:"type"`
-		Subtype   string          `json:"subtype"`
-		SessionID string          `json:"session_id"`
-		Result    string          `json:"result"`
-		Message   json.RawMessage `json:"message"`
+		Type              string          `json:"type"`
+		Subtype           string          `json:"subtype"`
+		SessionID         string          `json:"session_id"`
+		Result            string          `json:"result"`
+		Message           json.RawMessage `json:"message"`
+		PermissionDenials json.RawMessage `json:"permission_denials"`
 	}
 	if err := json.Unmarshal(line, &event); err != nil {
 		// Not valid JSON — emit as raw stdout.
@@ -352,6 +597,13 @@ func (s *claudeCodeSession) handleStreamEvent(line []byte) {
 			s.mu.Lock()
 			s.sessionID = event.SessionID
 			s.mu.Unlock()
+		}
+		denials := parseClaudePermissionDenials(event.PermissionDenials)
+		if len(denials) > 0 && s.maybeRetryWithPermissions(denials) {
+			return
+		}
+		if len(denials) > 0 && event.Result != "" {
+			s.output <- Output{Channel: "stdout", Data: []byte(event.Result)}
 		}
 		// Signal turn completion — process stays alive for next message.
 		s.turnComplete.Store(true)
@@ -396,7 +648,7 @@ func (s *claudeCodeSession) handleStreamEvent(line []byte) {
 					if c.Text != "" {
 						s.output <- Output{Channel: "stdout", Data: []byte("*" + truncateStr(c.Text, 500) + "*")}
 					}
-				// server_tool_use, etc. — skip silently
+					// server_tool_use, etc. — skip silently
 				}
 			}
 		}
@@ -443,6 +695,53 @@ func (s *claudeCodeSession) handleStreamEvent(line []byte) {
 		// Unknown event types (content_block_start, content_block_delta, etc.)
 		// are intermediate streaming events. Skip silently.
 	}
+}
+
+func (s *claudeCodeSession) maybeRetryWithPermissions(denials []claudePermissionDenial) bool {
+	s.mu.Lock()
+	handler := s.permHandler
+	retryCount := s.retryCount
+	s.mu.Unlock()
+
+	if handler == nil || retryCount > 0 {
+		return false
+	}
+
+	uniq := make([]claudePermissionDenial, 0, len(denials))
+	seen := make(map[string]struct{}, len(denials))
+	for _, denial := range denials {
+		tool := strings.TrimSpace(denial.Tool)
+		if tool == "" {
+			return false
+		}
+		key := tool + "\x00" + strings.TrimSpace(denial.Resource)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		if denial.Description == "" {
+			denial.Description = fmt.Sprintf("Claude requested permission to use %s.", tool)
+		}
+		uniq = append(uniq, denial)
+	}
+	if len(uniq) == 0 {
+		return false
+	}
+
+	approvedTools := make([]string, 0, len(uniq))
+	for _, denial := range uniq {
+		if !handler(denial.Tool, denial.Description, denial.Resource) {
+			return false
+		}
+		approvedTools = append(approvedTools, denial.Tool)
+	}
+
+	s.output <- Output{
+		Channel: "system",
+		Data:    []byte("Permission approved. Retrying with temporary tool access."),
+	}
+	go s.retryWithTemporaryToolAccess(approvedTools)
+	return true
 }
 
 // extractToolResultText extracts plain text from a tool_result content field,

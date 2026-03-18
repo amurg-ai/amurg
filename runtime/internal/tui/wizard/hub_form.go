@@ -5,6 +5,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/amurg-ai/amurg/runtime/internal/huburl"
 	"github.com/amurg-ai/amurg/runtime/internal/tui"
 )
 
@@ -14,11 +15,12 @@ type hubFormModel struct {
 	cursor   int
 	urlInput textinput.Model
 	editing  bool // true when typing custom URL
+	errMsg   string
 }
 
 func newHubForm(data *WizardData) hubFormModel {
 	ti := textinput.New()
-	ti.Placeholder = "ws://localhost:8080/ws/runtime"
+	ti.Placeholder = huburl.DefaultSelfHosted
 	ti.CharLimit = 256
 	ti.Width = 50
 
@@ -51,13 +53,23 @@ func (m hubFormModel) Update(msg tea.Msg) (hubFormModel, tea.Cmd) {
 			}
 		case "enter":
 			if m.cursor == 0 {
-				// Amurg Cloud
+				endpoints := huburl.Cloud()
 				m.data.HubChoice = "cloud"
-				m.data.HubURL = "wss://hub.amurg.ai/ws/runtime"
+				m.data.HubURL = endpoints.WSURL
+				m.data.HubBaseURL = endpoints.HTTPBase
+				m.errMsg = ""
 				return m, func() tea.Msg { return stepCompleteMsg{} }
 			}
 			// Self-hosted: show URL input
 			m.editing = true
+			m.errMsg = ""
+			if m.urlInput.Value() == "" {
+				if m.data.HubBaseURL != "" {
+					m.urlInput.SetValue(m.data.HubBaseURL)
+				} else {
+					m.urlInput.SetValue(huburl.DefaultSelfHosted)
+				}
+			}
 			m.urlInput.Focus()
 			return m, textinput.Blink
 		}
@@ -70,15 +82,23 @@ func (m hubFormModel) updateEditing(msg tea.Msg) (hubFormModel, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "enter":
-			url := m.urlInput.Value()
-			if url == "" {
-				url = "ws://localhost:8080/ws/runtime"
+			input := m.urlInput.Value()
+			if input == "" {
+				input = huburl.DefaultSelfHosted
+			}
+			endpoints, err := huburl.Parse(input)
+			if err != nil {
+				m.errMsg = err.Error()
+				return m, nil
 			}
 			m.data.HubChoice = "self-hosted"
-			m.data.HubURL = url
+			m.data.HubURL = endpoints.WSURL
+			m.data.HubBaseURL = endpoints.HTTPBase
+			m.errMsg = ""
 			return m, func() tea.Msg { return stepCompleteMsg{} }
 		case "esc":
 			m.editing = false
+			m.errMsg = ""
 			m.urlInput.Blur()
 			return m, nil
 		}
@@ -104,8 +124,11 @@ func (m hubFormModel) View() string {
 	}
 
 	if m.editing {
-		s += "\n  " + tui.Description.Render("Hub WebSocket URL:") + "\n"
+		s += "\n  " + tui.Description.Render("Hub URL:") + "\n"
 		s += "  " + m.urlInput.View() + "\n"
+		if m.errMsg != "" {
+			s += "\n  " + tui.ErrorStyle.Render("✗ "+m.errMsg) + "\n"
+		}
 	}
 
 	s += "\n" + lipgloss.NewStyle().Foreground(tui.ColorMuted).Render("  ↑/↓ navigate • enter select")

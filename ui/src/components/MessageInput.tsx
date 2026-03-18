@@ -11,10 +11,12 @@ export function MessageInput() {
   const inputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { sendMessage, uploadFile, activeSessionId, responding, addToast } =
+  const { sendMessage, uploadFile, activeSessionId, responding, addToast, canSendInteractiveInput } =
     useSessionStore();
 
   const isResponding = activeSessionId ? responding.has(activeSessionId) : false;
+  const canReplyWhileResponding = activeSessionId ? (isResponding && canSendInteractiveInput(activeSessionId)) : false;
+  const inputLocked = isResponding && !canReplyWhileResponding;
 
   // Auto-resize textarea in multiline mode
   useEffect(() => {
@@ -27,7 +29,7 @@ export function MessageInput() {
 
   const handleSubmit = () => {
     const trimmed = text.trim();
-    if (!trimmed || isResponding) return;
+    if (!trimmed || inputLocked) return;
 
     sendMessage(trimmed);
     setText("");
@@ -160,8 +162,8 @@ export function MessageInput() {
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder={isResponding ? "Waiting..." : ""}
-                disabled={isResponding}
+                placeholder={inputLocked ? "Waiting..." : (canReplyWhileResponding ? "Reply to the running prompt..." : "")}
+                disabled={inputLocked}
                 rows={3}
                 className={`w-full px-3 py-2 bg-slate-700/50 border rounded-lg
                            text-slate-100 placeholder-slate-500 resize-none font-mono text-sm
@@ -179,8 +181,8 @@ export function MessageInput() {
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={isResponding ? "Waiting..." : "Enter command... (or drop a file)"}
-              disabled={isResponding}
+              placeholder={inputLocked ? "Waiting..." : (canReplyWhileResponding ? "Reply to the running prompt..." : "Enter command... (or drop a file)")}
+              disabled={inputLocked}
               className={`w-full px-3 py-2 bg-transparent border-none
                          text-slate-100 placeholder-slate-500 font-mono text-sm
                          focus:outline-none
@@ -196,7 +198,7 @@ export function MessageInput() {
             onResult={handleVoiceResult}
             onInterim={setInterimText}
             onError={(msg) => addToast(msg, "error")}
-            disabled={isResponding}
+            disabled={inputLocked}
           />
         </div>
       </div>

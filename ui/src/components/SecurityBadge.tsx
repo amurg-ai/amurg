@@ -1,4 +1,5 @@
 import type { SecurityProfile } from "@/types";
+import { getPermissionModeOption } from "@/lib/permissionModes";
 
 export function SecurityBadge({ security }: { security?: string | SecurityProfile }) {
   if (!security) return null;
@@ -16,27 +17,26 @@ export function SecurityBadge({ security }: { security?: string | SecurityProfil
 
   if (!parsed.permission_mode && !parsed.allowed_tools?.length) return null;
 
-  const mode = parsed.permission_mode || "auto";
+  const mode = parsed.permission_mode || "";
+  const option = getPermissionModeOption(parsed.permission_mode);
 
   let icon: string;
   let color: string;
-  let label: string;
 
   switch (mode) {
     case "strict":
       icon = "\uD83D\uDD12";
       color = "text-amber-400";
-      label = "Strict permissions";
       break;
     case "skip":
-      icon = "\u26A1";
-      color = "text-amber-400";
-      label = "Auto-approve enabled";
+    case "bypassPermissions":
+    case "dontAsk":
+      icon = "\u26A0\uFE0F";
+      color = "text-red-400";
       break;
     default:
       icon = "\uD83D\uDEE1\uFE0F";
       color = "text-teal-400";
-      label = "Auto permissions";
   }
 
   const details: string[] = [];
@@ -44,7 +44,7 @@ export function SecurityBadge({ security }: { security?: string | SecurityProfil
   if (parsed.allowed_paths?.length) details.push(`Paths: ${parsed.allowed_paths.join(", ")}`);
   if (parsed.cwd) details.push(`CWD: ${parsed.cwd}`);
 
-  const tooltip = `${label}${details.length ? "\n" + details.join("\n") : ""}`;
+  const tooltip = `${option.label} - ${option.summary}${details.length ? "\n" + details.join("\n") : ""}`;
 
   return (
     <span className={`${color} text-xs`} title={tooltip}>
