@@ -119,7 +119,9 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		// The web UI uses getUserMedia for voice input, so microphone access must
+		// remain available to same-origin pages while other sensitive features stay off.
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(self), geolocation=()")
 		next.ServeHTTP(w, r)
 	})
 }

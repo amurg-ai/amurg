@@ -53,6 +53,28 @@ function getSR(): SpeechRecognitionCtor | null {
   return w.SpeechRecognition || w.webkitSpeechRecognition || null;
 }
 
+function getMicrophoneErrorMessage(error: unknown): string {
+  if (typeof window !== "undefined" && !window.isSecureContext) {
+    return "Microphone access requires HTTPS or localhost";
+  }
+  if (error && typeof error === "object" && "name" in error) {
+    const name = String(error.name);
+    switch (name) {
+      case "NotAllowedError":
+      case "SecurityError":
+        return "Microphone access blocked. Check browser site permissions and reload.";
+      case "NotFoundError":
+        return "No microphone was found on this device";
+      case "NotReadableError":
+      case "AbortError":
+        return "The microphone is busy or unavailable right now";
+      default:
+        break;
+    }
+  }
+  return "Microphone access failed";
+}
+
 // --- Component ---
 
 export function VoiceInput({
@@ -194,6 +216,10 @@ export function VoiceInput({
 
   const start = useCallback(async () => {
     if (recRef.current || disabled) return;
+    if (!hasMic) {
+      onError?.(getMicrophoneErrorMessage(null));
+      return;
+    }
     setRec(true);
     setShowSettings(false);
 
@@ -202,8 +228,8 @@ export function VoiceInput({
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
-    } catch {
-      onError?.("Microphone access denied");
+    } catch (error) {
+      onError?.(getMicrophoneErrorMessage(error));
       setRec(false);
       return;
     }
@@ -357,6 +383,7 @@ export function VoiceInput({
     disabled,
     config,
     SR,
+    hasMic,
     startMonitor,
     stopMonitor,
     stop,
