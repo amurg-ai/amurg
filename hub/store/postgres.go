@@ -243,6 +243,20 @@ func (s *PostgresStore) migrate() error {
 		}
 	}
 
+	// Fix partial rename state: agent_permissions may still have endpoint_id
+	// column if the table was renamed but the column rename failed.
+	if pgTableExists(s.db, "agent_permissions") {
+		var hasEndpointID bool
+		_ = s.db.QueryRow(
+			`SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='agent_permissions' AND column_name='endpoint_id')`,
+		).Scan(&hasEndpointID)
+		if hasEndpointID {
+			if _, err := s.db.Exec(`ALTER TABLE agent_permissions RENAME COLUMN endpoint_id TO agent_id`); err != nil {
+				return fmt.Errorf("fix agent_permissions column: %w", err)
+			}
+		}
+	}
+
 	// Drop sessions_user_id_fkey if it exists: sessions.user_id stores external
 	// IDs (e.g. Clerk user IDs), not the internal UUID from users(id).
 	_, _ = s.db.Exec(`ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_user_id_fkey`)
