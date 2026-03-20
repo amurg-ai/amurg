@@ -302,6 +302,31 @@ func (s *SQLiteStore) migrate() error {
 		}
 	}
 
+	// Fix partial rename state: agent_permissions may still have endpoint_id
+	// column if the table was renamed but the column rename failed.
+	if tableExists(s.db, "agent_permissions") {
+		rows, err := s.db.Query(`PRAGMA table_info(agent_permissions)`)
+		if err == nil {
+			hasEndpointID := false
+			for rows.Next() {
+				var cid int
+				var name, typ string
+				var notnull int
+				var dflt *string
+				var pk int
+				if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err == nil && name == "endpoint_id" {
+					hasEndpointID = true
+				}
+			}
+			_ = rows.Close()
+			if hasEndpointID {
+				if _, err := s.db.Exec(`ALTER TABLE agent_permissions RENAME COLUMN endpoint_id TO agent_id`); err != nil {
+					return fmt.Errorf("fix agent_permissions column: %w", err)
+				}
+			}
+		}
+	}
+
 	if err := s.normalizeExternalUserIDs(); err != nil {
 		return fmt.Errorf("normalize external user ids: %w", err)
 	}
