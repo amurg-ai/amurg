@@ -53,6 +53,47 @@ function getSR(): SpeechRecognitionCtor | null {
   return w.SpeechRecognition || w.webkitSpeechRecognition || null;
 }
 
+// --- Legacy PCM fallback (for browsers without AudioWorklet) ---
+
+function startPCMLegacy(
+  audioCtx: AudioContext,
+  source: MediaStreamAudioSourceNode,
+  nativeRate: number,
+  targetRate: number,
+  ws: WebSocket,
+) {
+  // eslint-disable-next-line deprecation/deprecation
+  const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+  processor.onaudioprocess = (e: AudioProcessingEvent) => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    const input = e.inputBuffer.getChannelData(0);
+    let floats: Float32Array;
+    if (nativeRate === targetRate) {
+      floats = input;
+    } else {
+      const ratio = nativeRate / targetRate;
+      const outLen = Math.floor(input.length / ratio);
+      floats = new Float32Array(outLen);
+      for (let i = 0; i < outLen; i++) {
+        const srcIdx = i * ratio;
+        const lo = Math.floor(srcIdx);
+        const hi = Math.min(lo + 1, input.length - 1);
+        const frac = srcIdx - lo;
+        floats[i] = input[lo] * (1 - frac) + input[hi] * frac;
+      }
+    }
+    const buf = new ArrayBuffer(floats.length * 2);
+    const view = new DataView(buf);
+    for (let i = 0; i < floats.length; i++) {
+      const s = Math.max(-1, Math.min(1, floats[i]));
+      view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    }
+    ws.send(buf);
+  };
+  source.connect(processor);
+  processor.connect(audioCtx.destination);
+}
+
 // --- Component ---
 
 export function VoiceInput({
@@ -115,6 +156,8 @@ export function VoiceInput({
   const startMonitor = useCallback((stream: MediaStream) => {
     try {
       const ctx = new AudioContext();
+      // Mobile browsers start AudioContext in suspended state — resume on user gesture.
+      if (ctx.state === "suspended") ctx.resume();
       ctxRef.current = ctx;
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 256;
@@ -258,27 +301,53 @@ export function VoiceInput({
         }
       };
 
-      ws.onopen = () => {
+      ws.onopen = async () => {
         if (!recRef.current) {
           ws.close();
           return;
         }
         // WhisperLiveKit with --pcm-input expects int16 PCM (s16le) at 16kHz.
-        // We capture at the native rate and resample + convert in the processor.
+        // We capture at the native rate and resample + convert via AudioWorklet
+        // (createScriptProcessor is deprecated and broken on mobile browsers).
         const audioCtx = new AudioContext();
+        if (audioCtx.state === "suspended") await audioCtx.resume();
         pcmCtxRef.current = audioCtx;
         const nativeRate = audioCtx.sampleRate;
         const targetRate = 16000;
         const source = audioCtx.createMediaStreamSource(stream);
-        const processor = audioCtx.createScriptProcessor(4096, 1, 1);
-        processor.onaudioprocess = (e) => {
+
+        // Inline AudioWorklet processor — avoids a separate file.
+        const workletCode = `
+          class PCMProcessor extends AudioWorkletProcessor {
+            constructor() { super(); }
+            process(inputs) {
+              const input = inputs[0]?.[0];
+              if (input) this.port.postMessage(input);
+              return true;
+            }
+          }
+          registerProcessor('pcm-processor', PCMProcessor);
+        `;
+        const blob = new Blob([workletCode], { type: "application/javascript" });
+        const workletUrl = URL.createObjectURL(blob);
+        try {
+          await audioCtx.audioWorklet.addModule(workletUrl);
+        } catch {
+          // AudioWorklet not supported — fall back to createScriptProcessor.
+          URL.revokeObjectURL(workletUrl);
+          startPCMLegacy(audioCtx, source, nativeRate, targetRate, ws);
+          return;
+        }
+        URL.revokeObjectURL(workletUrl);
+
+        const workletNode = new AudioWorkletNode(audioCtx, "pcm-processor");
+        workletNode.port.onmessage = (e) => {
           if (ws.readyState !== WebSocket.OPEN) return;
-          const input = e.inputBuffer.getChannelData(0);
+          const input: Float32Array = e.data;
           let floats: Float32Array;
           if (nativeRate === targetRate) {
             floats = input;
           } else {
-            // Linear interpolation resample to 16kHz.
             const ratio = nativeRate / targetRate;
             const outLen = Math.floor(input.length / ratio);
             floats = new Float32Array(outLen);
@@ -290,7 +359,6 @@ export function VoiceInput({
               floats[i] = input[lo] * (1 - frac) + input[hi] * frac;
             }
           }
-          // Convert float32 [-1,1] to int16 (s16le) for WhisperLiveKit.
           const buf = new ArrayBuffer(floats.length * 2);
           const view = new DataView(buf);
           for (let i = 0; i < floats.length; i++) {
@@ -299,8 +367,8 @@ export function VoiceInput({
           }
           ws.send(buf);
         };
-        source.connect(processor);
-        processor.connect(audioCtx.destination);
+        source.connect(workletNode);
+        workletNode.connect(audioCtx.destination);
       };
 
       ws.onerror = () => {
