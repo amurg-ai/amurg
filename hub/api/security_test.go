@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -756,5 +757,21 @@ func TestCreateSession_NullBody(t *testing.T) {
 	}
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for null body, got %d; body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSecurityHeaders_MicrophoneAllowed(t *testing.T) {
+	env := setupSecurityTest(t)
+	req := httptest.NewRequest("GET", "/api/me", nil)
+	req.Header.Set("Authorization", "Bearer "+env.userToken)
+	w := httptest.NewRecorder()
+	env.srv.mux.ServeHTTP(w, req)
+
+	pp := w.Header().Get("Permissions-Policy")
+	if pp == "" {
+		t.Fatal("Permissions-Policy header missing")
+	}
+	if !strings.Contains(pp, "microphone=(self)") {
+		t.Errorf("Permissions-Policy must allow microphone=(self) for voice input, got: %s", pp)
 	}
 }
