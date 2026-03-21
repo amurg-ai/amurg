@@ -1,4 +1,4 @@
-.PHONY: all build build-runtime build-hub build-ui build-site clean test test-ui test-all lint dev-hub dev-runtime dev-ui dev-site release-snapshot
+.PHONY: all build build-runtime build-hub build-cli build-ui build-site clean test test-ui test-all lint dev-hub dev-runtime dev-ui dev-site release-snapshot
 
 GO := go
 GOFLAGS := -trimpath
@@ -9,13 +9,16 @@ BIN_DIR := bin
 
 all: build
 
-build: build-runtime build-hub build-ui
+build: build-runtime build-hub build-cli build-ui
 
 build-runtime:
 	$(GO) build $(GOFLAGS) $(LDFLAGS) -o $(BIN_DIR)/amurg-runtime ./runtime/cmd/amurg-runtime
 
 build-hub:
 	$(GO) build $(GOFLAGS) $(LDFLAGS) -o $(BIN_DIR)/amurg-hub ./hub/cmd/amurg-hub
+
+build-cli:
+	$(GO) build $(GOFLAGS) $(LDFLAGS) -o $(BIN_DIR)/amurg ./runtime/cmd/amurg
 
 build-ui:
 	cd ui && npm install && npm run build

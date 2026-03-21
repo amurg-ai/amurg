@@ -169,6 +169,7 @@ type Session struct {
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	AgentName    string    `json:"agent_name,omitempty"`
+	MessageCount int       `json:"message_count"`
 }
 
 // Message represents a stored message in a transcript.

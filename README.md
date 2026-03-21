@@ -54,6 +54,23 @@ amurg-runtime run
 
 That's it. Your runtime connects to the hub and you can chat with your agents from any device.
 
+### Optional: List Resumable Claude Sessions
+
+Install the user CLI:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/amurg-ai/amurg/main/scripts/install.sh | sh -s -- --binary=amurg
+```
+
+Then list recent Claude Code sessions from the hub and resume one directly with Claude:
+
+```bash
+amurg sessions list --hub-url http://localhost:8080 --token "$AMURG_TOKEN"
+claude --resume <native_handle>
+```
+
+Use `--json` for machine-readable output.
+
 ---
 
 ## Self-Host the Hub

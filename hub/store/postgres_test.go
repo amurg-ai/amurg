@@ -101,6 +101,19 @@ func TestPostgresFullFlow(t *testing.T) {
 		t.Errorf("session org_id = %q, want %q", sess.OrgID, orgID)
 	}
 
+	for i := 0; i < 2; i++ {
+		if _, err := s.AppendMessage(ctx, &Message{
+			ID:        uuid.New().String(),
+			SessionID: sessID,
+			Direction: "user",
+			Channel:   "stdin",
+			Content:   "hello",
+			CreatedAt: time.Now(),
+		}); err != nil {
+			t.Fatalf("AppendMessage: %v", err)
+		}
+	}
+
 	// 6. List sessions by user (uses external ID)
 	sessions, err := s.ListSessionsByUser(ctx, userExternalID)
 	if err != nil {
@@ -108,6 +121,9 @@ func TestPostgresFullFlow(t *testing.T) {
 	}
 	if len(sessions) != 1 {
 		t.Errorf("got %d sessions, want 1", len(sessions))
+	}
+	if sessions[0].MessageCount != 2 {
+		t.Errorf("message_count = %d, want 2", sessions[0].MessageCount)
 	}
 
 	// 7. Agent config override (was failing with wrong column name)

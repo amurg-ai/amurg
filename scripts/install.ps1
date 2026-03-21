@@ -3,6 +3,7 @@
 # Usage (PowerShell):
 #   irm https://raw.githubusercontent.com/amurg-ai/amurg/main/scripts/install.ps1 | iex
 #   irm https://raw.githubusercontent.com/amurg-ai/amurg/main/scripts/install.ps1 | iex -Binary amurg-hub
+#   irm https://raw.githubusercontent.com/amurg-ai/amurg/main/scripts/install.ps1 | iex -Binary amurg
 #
 # Or save and run with parameters:
 #   .\install.ps1 -Binary amurg-runtime -Version 0.1.0
@@ -132,8 +133,13 @@ function Do-Install {
     Ok "$Binary v$ver installed to $dest"
     Write-Host ""
     Info "Next steps:"
-    Write-Host "    $Binary init      # interactive setup wizard"
-    Write-Host "    $Binary run       # start with generated config"
+    if ($Binary -eq "amurg") {
+        Write-Host "    amurg sessions list --help"
+    }
+    else {
+        Write-Host "    $Binary init      # interactive setup wizard"
+        Write-Host "    $Binary run       # start with generated config"
+    }
     Write-Host ""
 }
 
