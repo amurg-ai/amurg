@@ -339,6 +339,7 @@ func (m *Manager) UpdateAgentConfig(agentID string, security *protocol.SecurityP
 
 	// Propagate security config to running sessions for this agent.
 	if security != nil && agentCfg.Security != nil {
+		resumeOnRestart := security.PermissionMode != ""
 		for _, sess := range m.sessions {
 			if sess.AgentID != agentID {
 				continue
@@ -346,6 +347,13 @@ func (m *Manager) UpdateAgentConfig(agentID string, security *protocol.SecurityP
 			if su, ok := sess.agent.(adapter.SecurityUpdater); ok {
 				restart := su.UpdateSecurity(agentCfg.Security)
 				if restart {
+					if resumeOnRestart {
+						if rs, ok := sess.agent.(adapter.ResumeSeeder); ok {
+							if nativeHandle := sess.NativeHandle(); nativeHandle != "" {
+								rs.SetResumeSessionID(nativeHandle)
+							}
+						}
+					}
 					// Stop the process — it auto-restarts with new flags on next Send().
 					m.logger.Info("stopping session for security config restart",
 						"session_id", sess.ID, "agent_id", agentID)
