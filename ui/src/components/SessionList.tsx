@@ -8,7 +8,10 @@ interface SessionListProps {
 export function SessionList({ onSelect }: SessionListProps) {
   const { sessions, activeSessionId, selectSession, unreadCounts, previewSessionIds } = useSessionStore();
 
-  const visibleSessions = sessions.filter(s => !previewSessionIds.has(s.id));
+  // CGR-20: sort by most recently updated first.
+  const visibleSessions = sessions
+    .filter(s => !previewSessionIds.has(s.id))
+    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
 
   if (visibleSessions.length === 0) {
     return (

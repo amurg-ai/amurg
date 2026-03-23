@@ -878,6 +878,14 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 			return
 		}
 
+		// CGR-26: reject messages to closed sessions.
+		if sess.State == "closed" {
+			r.sendToClient(cc, protocol.TypeErrorResponse, msg.SessionID, protocol.ErrorResponse{
+				Code: "session_closed", Message: "cannot send messages to a closed session",
+			})
+			return
+		}
+
 		// Turn gating: reject if session is responding and turn-based mode is on.
 		if r.turnBased && sess.State == "responding" {
 			r.sendToClient(cc, protocol.TypeErrorResponse, msg.SessionID, protocol.ErrorResponse{

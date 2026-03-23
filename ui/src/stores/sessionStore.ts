@@ -189,8 +189,14 @@ export const useSessionStore = create<SessionState>((set, get) => {
       // are not accidentally sent on the next reconnect.
       socket.purgePending(payload.session_id);
 
-      // Cleanup messages and turns for the closed session
-      get().cleanupSession(payload.session_id);
+      // CGR-24: only clean up transient state (permissions, allowlists).
+      // Preserve messages and turns so users can still view chat history.
+      const { pendingPermissions, sessionToolAllowlist } = get();
+      const updatedPerms = new Map(pendingPermissions);
+      updatedPerms.delete(payload.session_id);
+      const updatedAllowlist = new Map(sessionToolAllowlist);
+      updatedAllowlist.delete(payload.session_id);
+      set({ pendingPermissions: updatedPerms, sessionToolAllowlist: updatedAllowlist });
     });
 
     socket.on("native.sessions.response", (env: Envelope) => {
@@ -408,21 +414,30 @@ export const useSessionStore = create<SessionState>((set, get) => {
     },
 
     deselectSession: () => {
-      const { activeSessionId, previewSessionIds, sessions } = get();
+      const { activeSessionId, previewSessionIds, sessions, messages } = get();
       if (activeSessionId) {
         socket.unsubscribe(activeSessionId);
-        // Clean up preview sessions (resumed native sessions where no message was sent)
+        // CGR-36/38: Only close preview sessions if no messages were sent.
+        // Previously this closed all preview sessions on deselect, which
+        // could kill sessions before the agent had time to respond.
         if (previewSessionIds.has(activeSessionId)) {
+          const sessionMessages = messages.get(activeSessionId) || [];
+          const hasSentMessage = sessionMessages.some((m) => m.direction === "user");
+          if (!hasSentMessage) {
+            const updatedPreview = new Set(previewSessionIds);
+            updatedPreview.delete(activeSessionId);
+            api.closeSession(activeSessionId).catch(() => {});
+            set({
+              activeSessionId: null,
+              previewSessionIds: updatedPreview,
+              sessions: sessions.filter(s => s.id !== activeSessionId),
+            });
+            return;
+          }
+          // Has messages — promote to permanent, don't close.
           const updatedPreview = new Set(previewSessionIds);
           updatedPreview.delete(activeSessionId);
-          api.closeSession(activeSessionId).catch(() => {});
-          set({
-            activeSessionId: null,
-            previewSessionIds: updatedPreview,
-            sessions: sessions.filter(s => s.id !== activeSessionId),
-          });
-          get().cleanupSession(activeSessionId);
-          return;
+          set({ previewSessionIds: updatedPreview });
         }
       }
       set({ activeSessionId: null });

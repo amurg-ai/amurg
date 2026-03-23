@@ -454,6 +454,18 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	if sessions == nil {
 		sessions = []store.Session{}
 	}
+
+	// CGR-32: filter by state query parameter if provided.
+	if stateFilter := r.URL.Query().Get("state"); stateFilter != "" {
+		filtered := sessions[:0]
+		for _, sess := range sessions {
+			if sess.State == stateFilter {
+				filtered = append(filtered, sess)
+			}
+		}
+		sessions = filtered
+	}
+
 	writeJSON(w, http.StatusOK, sessions)
 }
 
