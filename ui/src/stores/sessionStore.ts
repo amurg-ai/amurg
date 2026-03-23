@@ -14,6 +14,7 @@ import type {
 } from "@/types";
 import { api } from "@/api/client";
 import { socket } from "@/api/websocket";
+import { uuid } from "@/lib/uuid";
 
 function assignSequenceNumbers(sessions: SessionInfo[]): SessionInfo[] {
   const byAgent = new Map<string, SessionInfo[]>();
@@ -87,7 +88,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
       const sessionMessages = messages.get(output.session_id) || [];
 
       const newMessage: StoredMessage = {
-        id: output.message_id || crypto.randomUUID(),
+        id: output.message_id || uuid(),
         session_id: output.session_id,
         seq: output.seq,
         direction: "agent",
@@ -184,6 +185,10 @@ export const useSessionStore = create<SessionState>((set, get) => {
         ),
       });
 
+      // CGR-28: drop any queued outbound messages for this session so they
+      // are not accidentally sent on the next reconnect.
+      socket.purgePending(payload.session_id);
+
       // Cleanup messages and turns for the closed session
       get().cleanupSession(payload.session_id);
     });
@@ -267,7 +272,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
     toasts: [],
 
     addToast: (message, type) => {
-      const id = crypto.randomUUID();
+      const id = uuid();
       set({ toasts: [...get().toasts, { id, message, type }] });
       setTimeout(() => {
         set({ toasts: get().toasts.filter(t => t.id !== id) });
@@ -424,8 +429,15 @@ export const useSessionStore = create<SessionState>((set, get) => {
     },
 
     sendMessage: (content: string) => {
-      const { activeSessionId, messages, previewSessionIds } = get();
+      const { activeSessionId, messages, sessions, previewSessionIds } = get();
       if (!activeSessionId) return;
+
+      // CGR-28: refuse to send a message to a closed session
+      const session = sessions.find((s) => s.id === activeSessionId);
+      if (session?.state === "closed") {
+        get().addToast("Cannot send — session is closed.", "error");
+        return;
+      }
 
       // Promote preview session to permanent on first message
       if (previewSessionIds.has(activeSessionId)) {
@@ -434,7 +446,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
         set({ previewSessionIds: updated });
       }
 
-      const messageId = crypto.randomUUID();
+      const messageId = uuid();
       const userMessage: StoredMessage = {
         id: messageId,
         session_id: activeSessionId,
@@ -478,6 +490,8 @@ export const useSessionStore = create<SessionState>((set, get) => {
       set({
         sessions: sessions.map(s => s.id === sessionId ? { ...s, state: "closed" } : s),
       });
+      // CGR-28: purge any queued outbound messages for this session
+      socket.purgePending(sessionId);
       get().addToast("Session closed", "success");
     },
 
@@ -485,7 +499,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
       const { messages } = get();
 
       // Optimistic message — insert a placeholder file message.
-      const tempId = crypto.randomUUID();
+      const tempId = uuid();
       const tempMeta = JSON.stringify({
         file_id: tempId,
         name: file.name,
@@ -552,7 +566,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
 
     loadNativeSessions: (agentId: string) => {
       set({ nativeSessionsLoading: true, _nativePendingCount: 1 });
-      const requestId = crypto.randomUUID();
+      const requestId = uuid();
       socket.requestNativeSessions(agentId, requestId);
     },
 
@@ -570,7 +584,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
       if (capable.length === 0) return;
       set({ nativeSessionsLoading: true, _nativePendingCount: capable.length });
       for (const agent of capable) {
-        const requestId = crypto.randomUUID();
+        const requestId = uuid();
         socket.requestNativeSessions(agent.id, requestId);
       }
     },

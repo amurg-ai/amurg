@@ -1,5 +1,6 @@
 import type { ConnectionState, Envelope } from "@/types";
 import { tokenGetter } from "@/api/client";
+import { uuid } from "@/lib/uuid";
 
 export type MessageHandler = (env: Envelope) => void;
 export type StateChangeHandler = (state: ConnectionState) => void;
@@ -150,7 +151,7 @@ export class AmurgSocket {
   }
 
   sendMessage(sessionId: string, content: string): boolean {
-    const messageId = crypto.randomUUID();
+    const messageId = uuid();
     return this.send(
       "user.message",
       {
@@ -190,6 +191,13 @@ export class AmurgSocket {
 
   requestNativeSessions(agentId: string, requestId: string): void {
     this.send("native.sessions.list", { agent_id: agentId, request_id: requestId });
+  }
+
+  /** Remove any pending queued messages targeting the given session. */
+  purgePending(sessionId: string): void {
+    this.pendingQueue = this.pendingQueue.filter(
+      (m) => m.sessionId !== sessionId,
+    );
   }
 
   get connected(): boolean {
