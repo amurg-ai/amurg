@@ -214,6 +214,17 @@ export function AgentHomeScreen() {
     } else {
       // Native session — resume via agent
       if (!session.agentId || resumingId) return;
+
+      // CGR-39: check if we already have an active hub session for this native
+      // session before creating another one (avoids orphaned duplicates).
+      const existing = sessions.find(
+        (s) => s.state !== "closed" && previewSessionIds.has(s.id) && s.agent_id === session.agentId,
+      );
+      if (existing) {
+        await selectSession(existing.id);
+        return;
+      }
+
       setResumingId(session.id);
       try {
         await createSessionWithResume(session.agentId, session.id);

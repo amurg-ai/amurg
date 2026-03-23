@@ -132,15 +132,16 @@ function StateIndicator({ state, isResponding }: { state: string; isResponding: 
   }
 }
 
-function SessionTimer({ createdAt }: { createdAt: string }) {
+function SessionTimer({ createdAt, stopped }: { createdAt: string; stopped?: boolean }) {
   const [elapsed, setElapsed] = useState(() => Date.now() - new Date(createdAt).getTime());
 
   useEffect(() => {
     const start = new Date(createdAt).getTime();
     setElapsed(Date.now() - start);
+    if (stopped) return;
     const id = setInterval(() => setElapsed(Date.now() - start), 1000);
     return () => clearInterval(id);
-  }, [createdAt]);
+  }, [createdAt, stopped]);
 
   return <span className="text-xs text-slate-500 font-mono">{formatDuration(elapsed)}</span>;
 }
@@ -309,7 +310,7 @@ export function Chat() {
               {/* Right: timer + session ID (hidden on mobile) + actions */}
               <div className="flex items-center gap-2 flex-shrink-0">
                 <span className="hidden md:inline-block">
-                  <SessionTimer createdAt={activeSession.created_at} />
+                  <SessionTimer createdAt={activeSession.created_at} stopped={activeSession.state === "closed"} />
                 </span>
                 <span className="hidden md:inline-block">
                   <CopyableSessionId id={activeSession.id} />
@@ -363,8 +364,8 @@ export function Chat() {
         {/* Permission banner */}
         {activeSessionId && <PermissionBanner />}
 
-        {/* Input */}
-        {activeSessionId && <MessageInput />}
+        {/* Input — hidden for closed sessions (CGR-25) */}
+        {activeSessionId && activeSession?.state !== "closed" && <MessageInput />}
       </div>
 
       {/* Agent picker modal */}

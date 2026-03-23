@@ -15,8 +15,13 @@ export function Login() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    setLoading(true);
 
+    if (!username.trim() || !password.trim()) {
+      setError("Please enter both username and password");
+      return;
+    }
+
+    setLoading(true);
     try {
       await login(username, password);
       navigate(returnTo, { replace: true });
