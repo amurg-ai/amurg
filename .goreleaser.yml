@@ -41,6 +41,23 @@ builds:
     flags:
       - -trimpath
 
+  - id: amurg
+    main: ./runtime/cmd/amurg
+    binary: amurg
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    flags:
+      - -trimpath
+
 archives:
   - id: amurg-hub
     ids:
@@ -57,6 +74,17 @@ archives:
     ids:
       - amurg-runtime
     name_template: "amurg-runtime_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+  - id: amurg
+    ids:
+      - amurg
+    name_template: "amurg_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats:
       - tar.gz
     format_overrides:

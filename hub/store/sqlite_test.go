@@ -520,9 +520,22 @@ func TestListSessionsByUser(t *testing.T) {
 	rt := createTestRuntime(t, s, "runtime-1")
 	agent := createTestAgent(t, s, rt.ID, "agent-1")
 
-	createTestSession(t, s, user1.ID, agent.ID, rt.ID, "active")
+	sess1 := createTestSession(t, s, user1.ID, agent.ID, rt.ID, "active")
 	createTestSession(t, s, user1.ID, agent.ID, rt.ID, "active")
 	createTestSession(t, s, user2.ID, agent.ID, rt.ID, "active")
+
+	for i := 0; i < 2; i++ {
+		if _, err := s.AppendMessage(ctx, &Message{
+			ID:        uuid.New().String(),
+			SessionID: sess1.ID,
+			Direction: "user",
+			Channel:   "stdin",
+			Content:   "hello",
+			CreatedAt: time.Now(),
+		}); err != nil {
+			t.Fatalf("AppendMessage: %v", err)
+		}
+	}
 
 	sessions, err := s.ListSessionsByUser(ctx, user1.ID)
 	if err != nil {
@@ -530,6 +543,21 @@ func TestListSessionsByUser(t *testing.T) {
 	}
 	if len(sessions) != 2 {
 		t.Fatalf("ListSessionsByUser(alice): got %d, want 2", len(sessions))
+	}
+	if sessions[0].AgentName != agent.Name && sessions[1].AgentName != agent.Name {
+		t.Fatalf("expected agent name %q in listed sessions", agent.Name)
+	}
+	foundCount := false
+	for _, sess := range sessions {
+		if sess.ID == sess1.ID {
+			foundCount = true
+			if sess.MessageCount != 2 {
+				t.Fatalf("session message_count = %d, want 2", sess.MessageCount)
+			}
+		}
+	}
+	if !foundCount {
+		t.Fatalf("did not find seeded session %q in results", sess1.ID)
 	}
 
 	sessions2, err := s.ListSessionsByUser(ctx, user2.ID)
