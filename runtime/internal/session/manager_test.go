@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/amurg-ai/amurg/pkg/protocol"
 	"github.com/amurg-ai/amurg/runtime/internal/adapter"
 	"github.com/amurg-ai/amurg/runtime/internal/config"
 )
@@ -43,6 +44,46 @@ func (s *historyAgentSession) LoadNativeHistory() []adapter.Output {
 	return []adapter.Output{
 		{Channel: "history_user", Data: []byte("remember this")},
 	}
+}
+
+type restartOnSecurityAdapter struct {
+	session *restartOnSecuritySession
+}
+
+func (a *restartOnSecurityAdapter) Start(_ context.Context, _ config.AgentConfig) (adapter.AgentSession, error) {
+	a.session = &restartOnSecuritySession{
+		mockAgentSession: newMockAgent(),
+		nativeHandle:     "native-123",
+	}
+	return a.session, nil
+}
+
+type restartOnSecuritySession struct {
+	*mockAgentSession
+	nativeHandle    string
+	resumeID        string
+	stopCalls       int
+	updatedSecurity *config.SecurityConfig
+}
+
+func (s *restartOnSecuritySession) UpdateSecurity(security *config.SecurityConfig) (restartRequired bool) {
+	s.updatedSecurity = security
+	return true
+}
+
+func (s *restartOnSecuritySession) NativeHandle() string {
+	return s.nativeHandle
+}
+
+func (s *restartOnSecuritySession) SetResumeSessionID(id string) {
+	s.resumeID = id
+}
+
+func (s *restartOnSecuritySession) Stop() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stopCalls++
+	return s.stopErr
 }
 
 func testManagerConfig() config.RuntimeConfig {
@@ -331,5 +372,45 @@ func TestManager_CreateWithResume_HistoryReplayDoesNotEmitFinal(t *testing.T) {
 	}
 	if outputs[1].Channel != "system" {
 		t.Fatalf("expected final replay message on system channel, got %q", outputs[1].Channel)
+	}
+}
+
+func TestManager_UpdateAgentConfig_PermissionChangeSeedsResumeSessionID(t *testing.T) {
+	registry := adapter.NewRegistry()
+	adp := &restartOnSecurityAdapter{}
+	registry.Register("restart-profile", adp)
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	m := NewManager(config.RuntimeConfig{ID: "test-runtime", MaxSessions: 3}, []config.AgentConfig{
+		{
+			ID:       "restart-1",
+			Name:     "Restart Agent",
+			Profile:  "restart-profile",
+			Security: &config.SecurityConfig{PermissionMode: "auto"},
+		},
+	}, registry, func(string, adapter.Output, bool) {}, nil, logger)
+
+	if err := m.Create(context.Background(), "sess-1", "restart-1", "user-1"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if adp.session == nil {
+		t.Fatal("expected adapter session to be created")
+	}
+
+	if err := m.UpdateAgentConfig("restart-1", &protocol.SecurityProfile{PermissionMode: "plan"}, nil); err != nil {
+		t.Fatalf("UpdateAgentConfig: %v", err)
+	}
+
+	if adp.session.updatedSecurity == nil {
+		t.Fatal("expected updated security config")
+	}
+	if adp.session.updatedSecurity.PermissionMode != "plan" {
+		t.Fatalf("expected permission mode plan, got %q", adp.session.updatedSecurity.PermissionMode)
+	}
+	if adp.session.resumeID != adp.session.nativeHandle {
+		t.Fatalf("expected resume ID %q, got %q", adp.session.nativeHandle, adp.session.resumeID)
+	}
+	if adp.session.stopCalls != 1 {
+		t.Fatalf("expected 1 stop call, got %d", adp.session.stopCalls)
 	}
 }
