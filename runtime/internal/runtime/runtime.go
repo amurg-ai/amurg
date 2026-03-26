@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/amurg-ai/amurg/pkg/protocol"
 	"github.com/amurg-ai/amurg/runtime/internal/adapter"
 	"github.com/amurg-ai/amurg/runtime/internal/config"
@@ -21,6 +20,7 @@ import (
 	"github.com/amurg-ai/amurg/runtime/internal/hub"
 	"github.com/amurg-ai/amurg/runtime/internal/ipc"
 	"github.com/amurg-ai/amurg/runtime/internal/session"
+	"github.com/google/uuid"
 )
 
 // Runtime is the main runtime process.
@@ -237,9 +237,9 @@ func (r *Runtime) handleSessionCreate(env protocol.Envelope) error {
 	ctx := context.Background()
 	var err error
 	if req.ResumeSessionID != "" {
-		err = r.sessions.CreateWithResume(ctx, req.SessionID, req.AgentID, req.UserID, req.ResumeSessionID)
+		err = r.sessions.CreateWithResume(ctx, req.SessionID, req.AgentID, req.UserID, req.ResumeSessionID, req.PromptProfile)
 	} else {
-		err = r.sessions.Create(ctx, req.SessionID, req.AgentID, req.UserID)
+		err = r.sessions.Create(ctx, req.SessionID, req.AgentID, req.UserID, req.PromptProfile)
 	}
 
 	resp := protocol.SessionCreated{
@@ -300,7 +300,7 @@ func (r *Runtime) handleUserMessage(env protocol.Envelope) error {
 		r.logger.Info("attempting lazy session recreation",
 			"session_id", msg.SessionID, "agent_id", msg.AgentID,
 			"native_handle", msg.NativeHandle)
-		if createErr := r.sessions.CreateWithResume(ctx, msg.SessionID, msg.AgentID, msg.UserID, msg.NativeHandle); createErr == nil {
+		if createErr := r.sessions.CreateWithResume(ctx, msg.SessionID, msg.AgentID, msg.UserID, msg.NativeHandle, msg.PromptProfile); createErr == nil {
 			err = r.sessions.Send(ctx, msg.SessionID, []byte(msg.Content))
 		} else {
 			r.logger.Warn("lazy session recreation failed", "session_id", msg.SessionID, "error", createErr)

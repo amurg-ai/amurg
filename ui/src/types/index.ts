@@ -36,11 +36,18 @@ export interface SessionInfo {
   agent_id: string;
   runtime_id: string;
   profile: string;
+  prompt_profile?: string;
   state: string;
   created_at: string;
   updated_at: string;
   agent_name?: string;
   seq?: number;
+}
+
+export interface PromptProfileInfo {
+  id: string;
+  display_name: string;
+  description: string;
 }
 
 export interface StoredMessage {
@@ -240,5 +247,27 @@ export const PROFILE_DISPLAY: Record<
     label: "Kilo Code",
     color: "bg-indigo-700",
     icon: "K",
+  },
+};
+
+export const PROMPT_PROFILE_DISPLAY: Record<
+  string,
+  { label: string; description: string }
+> = {
+  standard: {
+    label: "Standard",
+    description: "Balanced framing for general tasks.",
+  },
+  deep_debug: {
+    label: "Deep Debug",
+    description: "Thorough root-cause analysis and deeper investigation.",
+  },
+  careful: {
+    label: "Careful",
+    description: "Constraint-aware for sensitive production or security work.",
+  },
+  fast: {
+    label: "Fast",
+    description: "Minimal framing for quick, well-scoped tasks.",
   },
 };

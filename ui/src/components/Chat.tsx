@@ -8,7 +8,7 @@ import { AdminPanel } from "@/components/AdminPanel";
 import { ToastContainer } from "@/components/Toast";
 import { PermissionBanner } from "@/components/PermissionBanner";
 import { AgentHomeScreen } from "@/components/AgentHomeScreen";
-import { PROFILE_DISPLAY } from "@/types";
+import { PROFILE_DISPLAY, PROMPT_PROFILE_DISPLAY } from "@/types";
 
 function ConnectionBanner() {
   const connectionState = useSessionStore((s) => s.connectionState);
@@ -298,6 +298,9 @@ export function Chat() {
                 <span className="text-sm text-slate-200 font-medium truncate">
                   {activeSession.agent_name || PROFILE_DISPLAY[activeSession.profile]?.label || activeSession.profile}
                   {activeSession.seq != null && <span className="text-slate-500"> #{activeSession.seq}</span>}
+                </span>
+                <span className="hidden sm:inline-flex items-center rounded-full bg-slate-700 px-2 py-0.5 text-[11px] font-medium text-slate-300">
+                  {PROMPT_PROFILE_DISPLAY[activeSession.prompt_profile || "standard"]?.label || "Standard"}
                 </span>
                 <StateIndicator state={activeSession.state} isResponding={isResponding} />
                 {pendingCount > 0 && (

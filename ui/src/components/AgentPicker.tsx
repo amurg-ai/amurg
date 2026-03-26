@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useSessionStore } from "@/stores/sessionStore";
-import { PROFILE_DISPLAY } from "@/types";
+import { api } from "@/api/client";
+import { PROFILE_DISPLAY, PROMPT_PROFILE_DISPLAY } from "@/types";
+import type { PromptProfileInfo } from "@/types";
 import { SecurityBadge } from "@/components/SecurityBadge";
 
 interface AgentPickerProps {
@@ -10,6 +12,14 @@ interface AgentPickerProps {
 export function AgentPicker({ onClose }: AgentPickerProps) {
   const { agents, createSession, loadAgents } = useSessionStore();
   const [creating, setCreating] = useState<string | null>(null);
+  const [profiles, setProfiles] = useState<PromptProfileInfo[]>(() =>
+    Object.entries(PROMPT_PROFILE_DISPLAY).map(([id, profile]) => ({
+      id,
+      display_name: profile.label,
+      description: profile.description,
+    })),
+  );
+  const [selectedProfile, setSelectedProfile] = useState("standard");
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -19,11 +29,29 @@ export function AgentPicker({ onClose }: AgentPickerProps) {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    api.listPromptProfiles()
+      .then((nextProfiles) => {
+        if (!cancelled && nextProfiles.length > 0) {
+          setProfiles(nextProfiles);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load prompt profiles:", err);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const handleSelect = async (agentId: string) => {
     if (creating) return;
     setCreating(agentId);
     try {
-      await createSession(agentId);
+      await createSession(agentId, selectedProfile);
       onClose();
     } catch (err) {
       console.error("Failed to create session:", err);
@@ -74,8 +102,46 @@ export function AgentPicker({ onClose }: AgentPickerProps) {
           </div>
         </div>
 
+        <div className="px-4 pt-4 pb-2 border-b border-slate-700/70">
+          <div className="mb-2">
+            <h3 className="text-sm font-medium text-slate-100">Prompt Profile</h3>
+            <p className="text-xs text-slate-400 mt-1">
+              Choose how the agent should frame the session before it starts.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {profiles.map((profile) => {
+              const selected = selectedProfile === profile.id;
+              return (
+                <button
+                  key={profile.id}
+                  type="button"
+                  onClick={() => setSelectedProfile(profile.id)}
+                  className={`rounded-xl border px-3 py-3 text-left transition-colors ${
+                    selected
+                      ? "border-teal-500 bg-teal-500/10 text-slate-100"
+                      : "border-slate-700 bg-slate-800/50 text-slate-300 hover:border-slate-600 hover:bg-slate-700/60"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-medium">{profile.display_name}</span>
+                    {selected && (
+                      <span className="rounded-full bg-teal-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-teal-300">
+                        selected
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                    {profile.description}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         {/* Agent list */}
-        <div className="p-3 max-h-96 overflow-y-auto">
+        <div className="p-3 max-h-80 overflow-y-auto">
           {(!agents || agents.length === 0) ? (
             <div className="text-center py-8 text-slate-500">
               <p className="mb-2">No agents online</p>

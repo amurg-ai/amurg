@@ -30,6 +30,15 @@ func (a *historyAdapter) Start(_ context.Context, _ config.AgentConfig) (adapter
 	return &historyAgentSession{mockAgentSession: newMockAgent()}, nil
 }
 
+type capturePromptAdapter struct {
+	lastConfig config.AgentConfig
+}
+
+func (a *capturePromptAdapter) Start(_ context.Context, cfg config.AgentConfig) (adapter.AgentSession, error) {
+	a.lastConfig = cfg
+	return newMockAgent(), nil
+}
+
 type historyAgentSession struct {
 	*mockAgentSession
 	resumeID string
@@ -83,7 +92,7 @@ func newTestManager(t *testing.T) *Manager {
 func TestManager_Create(t *testing.T) {
 	m := newTestManager(t)
 
-	err := m.Create(context.Background(), "sess-1", "ep-1", "user-1")
+	err := m.Create(context.Background(), "sess-1", "ep-1", "user-1", "standard")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -96,12 +105,12 @@ func TestManager_Create(t *testing.T) {
 func TestManager_Create_DuplicateSession(t *testing.T) {
 	m := newTestManager(t)
 
-	err := m.Create(context.Background(), "sess-1", "ep-1", "user-1")
+	err := m.Create(context.Background(), "sess-1", "ep-1", "user-1", "standard")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	err = m.Create(context.Background(), "sess-1", "ep-1", "user-1")
+	err = m.Create(context.Background(), "sess-1", "ep-1", "user-1", "standard")
 	if err == nil {
 		t.Fatal("expected error for duplicate session, got nil")
 	}
@@ -110,7 +119,7 @@ func TestManager_Create_DuplicateSession(t *testing.T) {
 func TestManager_Create_UnknownAgent(t *testing.T) {
 	m := newTestManager(t)
 
-	err := m.Create(context.Background(), "sess-1", "unknown-ep", "user-1")
+	err := m.Create(context.Background(), "sess-1", "unknown-ep", "user-1", "standard")
 	if err == nil {
 		t.Fatal("expected error for unknown agent, got nil")
 	}
@@ -121,14 +130,14 @@ func TestManager_Create_MaxSessionsEnforced(t *testing.T) {
 
 	// Config allows max 3 sessions.
 	for i := 0; i < 3; i++ {
-		err := m.Create(context.Background(), "sess-"+string(rune('a'+i)), "ep-1", "user-1")
+		err := m.Create(context.Background(), "sess-"+string(rune('a'+i)), "ep-1", "user-1", "standard")
 		if err != nil {
 			t.Fatalf("unexpected error creating session %d: %v", i, err)
 		}
 	}
 
 	// Fourth should fail.
-	err := m.Create(context.Background(), "sess-x", "ep-1", "user-1")
+	err := m.Create(context.Background(), "sess-x", "ep-1", "user-1", "standard")
 	if err == nil {
 		t.Fatal("expected error when max sessions exceeded, got nil")
 	}
@@ -137,7 +146,7 @@ func TestManager_Create_MaxSessionsEnforced(t *testing.T) {
 func TestManager_Get(t *testing.T) {
 	m := newTestManager(t)
 
-	err := m.Create(context.Background(), "sess-1", "ep-1", "user-1")
+	err := m.Create(context.Background(), "sess-1", "ep-1", "user-1", "standard")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -159,7 +168,7 @@ func TestManager_Get(t *testing.T) {
 func TestManager_Close(t *testing.T) {
 	m := newTestManager(t)
 
-	err := m.Create(context.Background(), "sess-1", "ep-1", "user-1")
+	err := m.Create(context.Background(), "sess-1", "ep-1", "user-1", "standard")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -191,7 +200,7 @@ func TestManager_Close_NotFound(t *testing.T) {
 func TestManager_Stop(t *testing.T) {
 	m := newTestManager(t)
 
-	err := m.Create(context.Background(), "sess-1", "ep-1", "user-1")
+	err := m.Create(context.Background(), "sess-1", "ep-1", "user-1", "standard")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -215,7 +224,7 @@ func TestManager_CloseAll(t *testing.T) {
 	m := newTestManager(t)
 
 	for i := 0; i < 3; i++ {
-		err := m.Create(context.Background(), "sess-"+string(rune('a'+i)), "ep-1", "user-1")
+		err := m.Create(context.Background(), "sess-"+string(rune('a'+i)), "ep-1", "user-1", "standard")
 		if err != nil {
 			t.Fatalf("unexpected error creating session %d: %v", i, err)
 		}
@@ -239,12 +248,12 @@ func TestManager_ActiveCount(t *testing.T) {
 		t.Errorf("expected 0 initially, got %d", m.ActiveCount())
 	}
 
-	_ = m.Create(context.Background(), "s1", "ep-1", "user-1")
+	_ = m.Create(context.Background(), "s1", "ep-1", "user-1", "standard")
 	if m.ActiveCount() != 1 {
 		t.Errorf("expected 1, got %d", m.ActiveCount())
 	}
 
-	_ = m.Create(context.Background(), "s2", "ep-2", "user-1")
+	_ = m.Create(context.Background(), "s2", "ep-2", "user-1", "standard")
 	if m.ActiveCount() != 2 {
 		t.Errorf("expected 2, got %d", m.ActiveCount())
 	}
@@ -258,7 +267,7 @@ func TestManager_ActiveCount(t *testing.T) {
 func TestManager_Send(t *testing.T) {
 	m := newTestManager(t)
 
-	err := m.Create(context.Background(), "sess-1", "ep-1", "user-1")
+	err := m.Create(context.Background(), "sess-1", "ep-1", "user-1", "standard")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -313,7 +322,7 @@ func TestManager_CreateWithResume_HistoryReplayDoesNotEmitFinal(t *testing.T) {
 		{ID: "hist-1", Name: "History Agent", Profile: "history-profile"},
 	}, registry, handler, nil, logger)
 
-	if err := m.CreateWithResume(context.Background(), "sess-1", "hist-1", "user-1", "native-1"); err != nil {
+	if err := m.CreateWithResume(context.Background(), "sess-1", "hist-1", "user-1", "native-1", "deep_debug"); err != nil {
 		t.Fatalf("CreateWithResume: %v", err)
 	}
 
@@ -331,5 +340,25 @@ func TestManager_CreateWithResume_HistoryReplayDoesNotEmitFinal(t *testing.T) {
 	}
 	if outputs[1].Channel != "system" {
 		t.Fatalf("expected final replay message on system channel, got %q", outputs[1].Channel)
+	}
+}
+
+func TestManager_Create_PassesPromptProfileToAdapter(t *testing.T) {
+	registry := adapter.NewRegistry()
+	capture := &capturePromptAdapter{}
+	registry.Register("capture-profile", capture)
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	handler := func(string, adapter.Output, bool) {}
+	m := NewManager(testManagerConfig(), []config.AgentConfig{
+		{ID: "ep-1", Name: "Capture Agent", Profile: "capture-profile"},
+	}, registry, handler, nil, logger)
+
+	if err := m.Create(context.Background(), "sess-1", "ep-1", "user-1", "deep_debug"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if capture.lastConfig.PromptProfile != "deep_debug" {
+		t.Fatalf("expected prompt profile deep_debug, got %q", capture.lastConfig.PromptProfile)
 	}
 }

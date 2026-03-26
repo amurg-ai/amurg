@@ -19,6 +19,7 @@ import (
 
 	"github.com/amurg-ai/amurg/hub/auth"
 	"github.com/amurg-ai/amurg/hub/store"
+	"github.com/amurg-ai/amurg/pkg/promptprofile"
 	"github.com/amurg-ai/amurg/pkg/protocol"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -930,6 +931,7 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 		// if it was lost (e.g. after a runtime restart).
 		msg.AgentID = sess.AgentID
 		msg.UserID = sess.UserID
+		msg.PromptProfile = promptprofile.Normalize(sess.PromptProfile)
 		msg.NativeHandle = sess.NativeHandle
 
 		// Forward to runtime. Notify the client if delivery fails so
@@ -1138,6 +1140,7 @@ func (cc *clientConn) allowMessage() bool {
 type CreateSessionOption struct {
 	ResumeSessionID    string
 	ResumeNativeHandle string
+	PromptProfile      string
 }
 
 // CreateSession creates a new session and sends the create request to the runtime.
@@ -1164,16 +1167,17 @@ func (r *Router) CreateSession(ctx context.Context, userID, agentID string, opts
 	}
 
 	sess := &store.Session{
-		ID:          uuid.New().String(),
-		OrgID:       agent.OrgID,
-		UserID:      userID,
-		AgentID:     agentID,
-		RuntimeID:   agent.RuntimeID,
-		Profile:     agent.Profile,
-		State:       "creating",
-		ResumedFrom: opt.ResumeSessionID,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		ID:            uuid.New().String(),
+		OrgID:         agent.OrgID,
+		UserID:        userID,
+		AgentID:       agentID,
+		RuntimeID:     agent.RuntimeID,
+		Profile:       agent.Profile,
+		PromptProfile: promptprofile.Normalize(opt.PromptProfile),
+		State:         "creating",
+		ResumedFrom:   opt.ResumeSessionID,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
 	}
 
 	if err := r.store.CreateSession(ctx, sess); err != nil {
@@ -1186,6 +1190,7 @@ func (r *Router) CreateSession(ctx context.Context, userID, agentID string, opts
 		AgentID:         agentID,
 		UserID:          userID,
 		ResumeSessionID: opt.ResumeNativeHandle,
+		PromptProfile:   sess.PromptProfile,
 	})
 
 	if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{

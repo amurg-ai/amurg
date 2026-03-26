@@ -32,6 +32,7 @@ func NewRootCmd(v string) *cobra.Command {
 	root.AddCommand(newAgentsCmd())
 	root.AddCommand(newConfigCmd())
 	root.AddCommand(newAttachCmd())
+	root.AddCommand(newUpdateCmd())
 
 	root.PersistentFlags().StringP("config", "c", "", "path to config file")
 

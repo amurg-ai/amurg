@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from "react";
 import { useSessionStore } from "@/stores/sessionStore";
-import { PROFILE_DISPLAY } from "@/types";
-import type { UnifiedSession } from "@/types";
+import { api } from "@/api/client";
+import { PROFILE_DISPLAY, PROMPT_PROFILE_DISPLAY } from "@/types";
+import type { PromptProfileInfo, UnifiedSession } from "@/types";
 import { SecurityBadge } from "@/components/SecurityBadge";
 import { OnboardingGuide } from "@/components/OnboardingGuide";
 
@@ -85,8 +86,34 @@ export function AgentHomeScreen() {
   const [resumingId, setResumingId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [selectedPromptProfile, setSelectedPromptProfile] = useState("standard");
+  const [promptProfiles, setPromptProfiles] = useState<PromptProfileInfo[]>(() =>
+    Object.entries(PROMPT_PROFILE_DISPLAY).map(([id, profile]) => ({
+      id,
+      display_name: profile.label,
+      description: profile.description,
+    })),
+  );
 
   useEffect(() => { loadAgents(); }, [loadAgents]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    api.listPromptProfiles()
+      .then((profiles) => {
+        if (!cancelled && profiles.length > 0) {
+          setPromptProfiles(profiles);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load prompt profiles:", err);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Load native sessions from all capable agents once agents are available
   useEffect(() => {
@@ -200,7 +227,7 @@ export function AgentHomeScreen() {
     if (creating) return;
     setCreating(agentId);
     try {
-      await createSession(agentId);
+      await createSession(agentId, selectedPromptProfile);
     } catch (err) {
       addToast(err instanceof Error ? err.message : "Failed to create session", "error");
     } finally {
@@ -227,7 +254,7 @@ export function AgentHomeScreen() {
 
       setResumingId(session.id);
       try {
-        await createSessionWithResume(session.agentId, session.id);
+        await createSessionWithResume(session.agentId, session.id, selectedPromptProfile);
       } catch (err) {
         addToast(err instanceof Error ? err.message : "Failed to resume session", "error");
       } finally {
@@ -261,6 +288,26 @@ export function AgentHomeScreen() {
         <div className="mb-8">
           <h2 className="text-lg font-semibold text-slate-200 mb-1">Agents</h2>
           <p className="text-sm text-slate-500">Select an agent to start a new session</p>
+          <div className="mt-4 max-w-sm">
+            <label htmlFor="prompt-profile" className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">
+              Prompt Profile
+            </label>
+            <select
+              id="prompt-profile"
+              value={selectedPromptProfile}
+              onChange={(e) => setSelectedPromptProfile(e.target.value)}
+              className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200 focus:border-teal-500 focus:outline-none"
+            >
+              {promptProfiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.display_name}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-slate-500">
+              {promptProfiles.find((profile) => profile.id === selectedPromptProfile)?.description}
+            </p>
+          </div>
         </div>
 
         {/* Agent cards */}

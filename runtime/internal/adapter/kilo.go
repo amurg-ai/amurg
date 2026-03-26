@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/amurg-ai/amurg/pkg/promptprofile"
 	"github.com/amurg-ai/amurg/runtime/internal/config"
 )
 
@@ -26,13 +27,15 @@ func (a *KiloAdapter) Start(ctx context.Context, cfg config.AgentConfig) (AgentS
 	if kiloCfg == nil {
 		kiloCfg = &config.KiloConfig{}
 	}
-	if kiloCfg.Command == "" {
-		kiloCfg.Command = "kilo"
+	resolvedCfg := *kiloCfg
+	if resolvedCfg.Command == "" {
+		resolvedCfg.Command = "kilo"
 	}
+	resolvedCfg.SystemPrompt = promptprofile.Append(resolvedCfg.SystemPrompt, cfg.PromptProfile)
 
 	sess := &kiloSession{
 		ctx:      ctx,
-		cfg:      *kiloCfg,
+		cfg:      resolvedCfg,
 		security: cfg.Security,
 		output:   make(chan Output, 64),
 	}
@@ -62,8 +65,8 @@ func listKiloSessionsFromCLI() ([]NativeSessionEntry, error) {
 	var sessions []struct {
 		ID        string `json:"id"`
 		Title     string `json:"title"`
-		Created   int64  `json:"created"`   // unix millis
-		Updated   int64  `json:"updated"`   // unix millis
+		Created   int64  `json:"created"` // unix millis
+		Updated   int64  `json:"updated"` // unix millis
 		Directory string `json:"directory"`
 	}
 	if err := json.Unmarshal(out, &sessions); err != nil {
@@ -208,6 +211,10 @@ func (s *kiloSession) Send(ctx context.Context, input []byte) error {
 	// Session continuity: use --session with session ID, fallback to --continue.
 	if sid != "" {
 		args = append(args, "--session", sid)
+	}
+
+	if s.cfg.SystemPrompt != "" {
+		args = append(args, "--append-system-prompt", s.cfg.SystemPrompt)
 	}
 
 	// The prompt text is the final argument.
@@ -375,10 +382,10 @@ func (s *kiloSession) handleKiloMessage(line []byte) {
 // The state field contains status, input, output, title, and metadata.
 func (s *kiloSession) handleKiloToolEvent(callID, toolName string, state, metadata json.RawMessage) {
 	var toolState struct {
-		Status string          `json:"status"` // "running", "completed", "error"
-		Input  json.RawMessage `json:"input,omitempty"`
-		Output string          `json:"output,omitempty"`
-		Title  string          `json:"title,omitempty"`
+		Status   string          `json:"status"` // "running", "completed", "error"
+		Input    json.RawMessage `json:"input,omitempty"`
+		Output   string          `json:"output,omitempty"`
+		Title    string          `json:"title,omitempty"`
 		Metadata struct {
 			Output      string `json:"output,omitempty"`
 			Exit        int    `json:"exit"`

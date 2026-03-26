@@ -588,7 +588,8 @@ func TestCreateSession(t *testing.T) {
 	_, agentID := seedAgentAndRuntime(t, s)
 
 	body, _ := json.Marshal(map[string]string{
-		"agent_id": agentID,
+		"agent_id":       agentID,
+		"prompt_profile": "deep_debug",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -611,6 +612,53 @@ func TestCreateSession(t *testing.T) {
 	}
 	if sess.State != "creating" {
 		t.Errorf("expected state 'creating', got %q", sess.State)
+	}
+	if sess.PromptProfile != "deep_debug" {
+		t.Errorf("expected prompt_profile 'deep_debug', got %q", sess.PromptProfile)
+	}
+}
+
+func TestCreateSession_InvalidPromptProfile(t *testing.T) {
+	srv, authSvc, s := setupTestServer(t)
+	token := createTestUserAndGetToken(t, authSvc, s)
+	_, agentID := seedAgentAndRuntime(t, s)
+
+	body, _ := json.Marshal(map[string]string{
+		"agent_id":       agentID,
+		"prompt_profile": "unknown",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestListPromptProfiles(t *testing.T) {
+	srv, authSvc, s := setupTestServer(t)
+	token := createTestUserAndGetToken(t, authSvc, s)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/prompt-profiles", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	srv.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+
+	var profiles []map[string]string
+	parseJSONResponse(t, w, &profiles)
+
+	if len(profiles) != 4 {
+		t.Fatalf("expected 4 prompt profiles, got %d", len(profiles))
+	}
+	if profiles[0]["id"] == "" {
+		t.Fatal("expected prompt profiles to include an id")
 	}
 }
 

@@ -10,7 +10,7 @@ import "time"
 // Envelope is the top-level wire format for all messages.
 type Envelope struct {
 	Type      string    `json:"type"`
-	ID        string    `json:"id,omitempty"`        // message ID for idempotency
+	ID        string    `json:"id,omitempty"` // message ID for idempotency
 	SessionID string    `json:"session_id,omitempty"`
 	Timestamp time.Time `json:"ts"`
 	Payload   any       `json:"payload,omitempty"`
@@ -20,10 +20,10 @@ type Envelope struct {
 
 // RuntimeHello is sent by the runtime immediately after connecting.
 type RuntimeHello struct {
-	RuntimeID string                 `json:"runtime_id"`
-	Token     string                 `json:"token"`
-	OrgID     string                 `json:"org_id,omitempty"` // empty defaults to "default"
-	Agents []AgentRegistration `json:"agents"`
+	RuntimeID string              `json:"runtime_id"`
+	Token     string              `json:"token"`
+	OrgID     string              `json:"org_id,omitempty"` // empty defaults to "default"
+	Agents    []AgentRegistration `json:"agents"`
 }
 
 // SecurityProfile defines security constraints for an agent.
@@ -59,9 +59,9 @@ type ProfileCaps struct {
 type ExecutionModel string
 
 const (
-	ExecInteractive      ExecutionModel = "interactive"
-	ExecRequestResponse  ExecutionModel = "request-response"
-	ExecRunToCompletion  ExecutionModel = "run-to-completion"
+	ExecInteractive     ExecutionModel = "interactive"
+	ExecRequestResponse ExecutionModel = "request-response"
+	ExecRunToCompletion ExecutionModel = "run-to-completion"
 )
 
 // HelloAck is the hub's response to RuntimeHello.
@@ -78,6 +78,7 @@ type SessionCreate struct {
 	AgentID         string `json:"agent_id"`
 	UserID          string `json:"user_id"`
 	ResumeSessionID string `json:"resume_session_id,omitempty"` // native session ID for resume
+	PromptProfile   string `json:"prompt_profile,omitempty"`
 }
 
 // SessionCreated is the runtime's response to SessionCreate.
@@ -98,12 +99,13 @@ type SessionClose struct {
 
 // UserMessage carries user input to the agent (hub → runtime).
 type UserMessage struct {
-	SessionID    string `json:"session_id"`
-	MessageID    string `json:"message_id"` // client-generated UUID for idempotency
-	Content      string `json:"content"`
-	AgentID      string `json:"agent_id,omitempty"`      // for lazy session recreation
-	UserID       string `json:"user_id,omitempty"`       // for lazy session recreation
-	NativeHandle string `json:"native_handle,omitempty"` // for lazy session recreation
+	SessionID     string `json:"session_id"`
+	MessageID     string `json:"message_id"` // client-generated UUID for idempotency
+	Content       string `json:"content"`
+	AgentID       string `json:"agent_id,omitempty"`       // for lazy session recreation
+	UserID        string `json:"user_id,omitempty"`        // for lazy session recreation
+	PromptProfile string `json:"prompt_profile,omitempty"` // for lazy session recreation
+	NativeHandle  string `json:"native_handle,omitempty"`  // for lazy session recreation
 }
 
 // AgentOutput carries agent output back (runtime → hub → UI).
@@ -120,15 +122,15 @@ type AgentOutput struct {
 
 // TurnStarted signals the beginning of an agent response.
 type TurnStarted struct {
-	SessionID     string `json:"session_id"`
-	InResponseTo  string `json:"in_response_to"` // message_id of the user message
+	SessionID    string `json:"session_id"`
+	InResponseTo string `json:"in_response_to"` // message_id of the user message
 }
 
 // TurnCompleted signals the end of an agent response.
 type TurnCompleted struct {
 	SessionID    string `json:"session_id"`
 	InResponseTo string `json:"in_response_to"`
-	ExitCode     *int   `json:"exit_code,omitempty"`  // for run-to-completion profiles
+	ExitCode     *int   `json:"exit_code,omitempty"`     // for run-to-completion profiles
 	NativeHandle string `json:"native_handle,omitempty"` // agent's native session ID
 }
 
@@ -156,19 +158,19 @@ type Pong struct{}
 
 const (
 	// Runtime ↔ Hub
-	TypeRuntimeHello  = "runtime.hello"
-	TypeHelloAck      = "hello.ack"
-	TypeSessionCreate = "session.create"
+	TypeRuntimeHello   = "runtime.hello"
+	TypeHelloAck       = "hello.ack"
+	TypeSessionCreate  = "session.create"
 	TypeSessionCreated = "session.created"
-	TypeSessionClose  = "session.close"
-	TypeUserMessage   = "user.message"
-	TypeAgentOutput   = "agent.output"
-	TypeTurnStarted   = "turn.started"
-	TypeTurnCompleted = "turn.completed"
-	TypeStopRequest   = "stop.request"
-	TypeStopAck       = "stop.ack"
-	TypePing          = "ping"
-	TypePong          = "pong"
+	TypeSessionClose   = "session.close"
+	TypeUserMessage    = "user.message"
+	TypeAgentOutput    = "agent.output"
+	TypeTurnStarted    = "turn.started"
+	TypeTurnCompleted  = "turn.completed"
+	TypeStopRequest    = "stop.request"
+	TypeStopAck        = "stop.ack"
+	TypePing           = "ping"
+	TypePong           = "pong"
 
 	// Token refresh
 	TypeRuntimeTokenRefresh = "runtime.token_refresh"
@@ -195,7 +197,7 @@ const (
 	TypeAgentConfigAck    = "agent.config_ack"    // runtime → hub: acknowledge config update
 
 	// Native sessions (client → hub → runtime → hub → client)
-	TypeNativeSessionsList    = "native.sessions.list"     // client → hub → runtime
+	TypeNativeSessionsList     = "native.sessions.list"     // client → hub → runtime
 	TypeNativeSessionsResponse = "native.sessions.response" // runtime → hub → client
 )
 
@@ -214,7 +216,7 @@ type ClientUnsubscribe struct {
 
 // HistoryResponse returns stored messages for a session.
 type HistoryResponse struct {
-	SessionID string        `json:"session_id"`
+	SessionID string          `json:"session_id"`
 	Messages  []StoredMessage `json:"messages"`
 }
 
@@ -244,12 +246,12 @@ type AgentInfo struct {
 
 // SessionInfo describes a session visible to a user.
 type SessionInfo struct {
-	ID         string    `json:"id"`
-	AgentID string    `json:"agent_id"`
-	Profile string    `json:"profile"`
-	State   string    `json:"state"` // "active", "idle", "closed"
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID        string    `json:"id"`
+	AgentID   string    `json:"agent_id"`
+	Profile   string    `json:"profile"`
+	State     string    `json:"state"` // "active", "idle", "closed"
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // ErrorResponse carries an error from hub to client.
@@ -338,14 +340,14 @@ type NativeSessionsList struct {
 
 // NativeSession describes a native session discovered on the runtime.
 type NativeSession struct {
-	SessionID   string `json:"session_id"`
-	Summary     string `json:"summary,omitempty"`
-	FirstPrompt string `json:"first_prompt,omitempty"`
-	MessageCount int   `json:"message_count"`
-	ProjectPath string `json:"project_path,omitempty"`
-	GitBranch   string `json:"git_branch,omitempty"`
-	Created     string `json:"created,omitempty"`
-	Modified    string `json:"modified,omitempty"`
+	SessionID    string `json:"session_id"`
+	Summary      string `json:"summary,omitempty"`
+	FirstPrompt  string `json:"first_prompt,omitempty"`
+	MessageCount int    `json:"message_count"`
+	ProjectPath  string `json:"project_path,omitempty"`
+	GitBranch    string `json:"git_branch,omitempty"`
+	Created      string `json:"created,omitempty"`
+	Modified     string `json:"modified,omitempty"`
 }
 
 // NativeSessionsResponse carries discovered native sessions back.
