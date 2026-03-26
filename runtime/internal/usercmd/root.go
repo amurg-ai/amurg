@@ -2,12 +2,8 @@ package usercmd
 
 import "github.com/spf13/cobra"
 
-var version = "dev"
-
 // NewRootCmd creates the root cobra command for the user-facing amurg CLI.
 func NewRootCmd(v string) *cobra.Command {
-	version = v
-
 	root := &cobra.Command{
 		Use:           "amurg",
 		Short:         "Amurg user CLI",
@@ -17,7 +13,7 @@ func NewRootCmd(v string) *cobra.Command {
 	}
 
 	root.AddCommand(newSessionsCmd())
-	root.AddCommand(newVersionCmd())
+	root.AddCommand(newVersionCmd(v))
 
 	return root
 }
