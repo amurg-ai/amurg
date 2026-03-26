@@ -15,6 +15,12 @@ interface VoiceConfig {
   whisperUrl: string;
 }
 
+interface ParsedWhisperMessage {
+  error?: string;
+  ignore?: boolean;
+  text?: string;
+}
+
 function defaultWhisperUrl(): string {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${location.host}/asr`;
@@ -51,6 +57,61 @@ function getSR(): SpeechRecognitionCtor | null {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const w = window as any;
   return w.SpeechRecognition || w.webkitSpeechRecognition || null;
+}
+
+function extractTranscriptEntry(entry: unknown): string {
+  if (typeof entry === "string") return entry.trim();
+  if (!entry || typeof entry !== "object") return "";
+  const text = (entry as { text?: unknown }).text;
+  return typeof text === "string" ? text.trim() : "";
+}
+
+function firstTranscriptField(payload: Record<string, unknown>, fields: string[]): string {
+  for (const field of fields) {
+    const value = payload[field];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+export function parseWhisperMessage(data: unknown): ParsedWhisperMessage {
+  if (typeof data !== "string") return {};
+  const raw = data.trim();
+  if (!raw) return {};
+
+  try {
+    const payload = JSON.parse(raw);
+    if (!payload || typeof payload !== "object") return { text: raw };
+
+    const message = payload as Record<string, unknown>;
+    if (typeof message.error === "string" && message.error.trim()) {
+      return { error: message.error.trim() };
+    }
+
+    const messageType = typeof message.type === "string" ? message.type : "";
+    if (messageType === "config" || messageType === "ready_to_stop") {
+      return { ignore: true };
+    }
+
+    const lines = Array.isArray(message.lines)
+      ? message.lines.map(extractTranscriptEntry).filter(Boolean).join(" ")
+      : "";
+    const segments = Array.isArray(message.segments)
+      ? message.segments.map(extractTranscriptEntry).filter(Boolean).join(" ")
+      : "";
+    const partial = firstTranscriptField(message, [
+      "buffer_transcription",
+      "partial",
+      "partial_transcript",
+    ]);
+    const direct = firstTranscriptField(message, ["text", "transcript"]);
+
+    const text = [lines || segments, partial || direct].filter(Boolean).join(" ").trim()
+      || direct;
+    return text ? { text } : {};
+  } catch {
+    return { text: raw };
+  }
 }
 
 // --- Legacy PCM fallback (for browsers without AudioWorklet) ---
@@ -116,8 +177,10 @@ export function VoiceInput({
   const wsRef = useRef<WebSocket | null>(null);
   const mrRef = useRef<MediaRecorder | null>(null);
   const pcmCtxRef = useRef<AudioContext | null>(null);
+  const closeRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const holdRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isHoldRef = useRef(false);
+  const browserStopPendingRef = useRef(false);
   const interimRef = useRef("");
   const settingsRef = useRef<HTMLDivElement | null>(null);
 
@@ -142,14 +205,17 @@ export function VoiceInput({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    recRef.current = recording;
-  }, [recording]);
+  const setRec = useCallback((v: boolean) => {
+    recRef.current = v;
+    setRecording(v);
+  }, []);
 
-  const setRec = useCallback(
-    (v: boolean) => setRecording(v),
-    [],
-  );
+  const finalizeInterim = useCallback(() => {
+    if (!interimRef.current) return;
+    onResult(interimRef.current);
+    interimRef.current = "";
+    onInterim?.("");
+  }, [onResult, onInterim]);
 
   // ── Audio level monitor ──────────────────────────────────
 
@@ -190,9 +256,25 @@ export function VoiceInput({
   // ── Stop recording ───────────────────────────────────────
 
   const stop = useCallback(() => {
+    setRec(false);
+    browserStopPendingRef.current = false;
+    if (closeRef.current) {
+      clearTimeout(closeRef.current);
+      closeRef.current = null;
+    }
+
     // Web Speech API
-    srRef.current?.stop();
+    const recognition = srRef.current;
     srRef.current = null;
+    if (recognition) {
+      browserStopPendingRef.current = true;
+      try {
+        recognition.stop();
+      } catch {
+        browserStopPendingRef.current = false;
+        finalizeInterim();
+      }
+    }
 
     // MediaRecorder
     if (mrRef.current && mrRef.current.state !== "inactive") {
@@ -212,32 +294,28 @@ export function VoiceInput({
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(new ArrayBuffer(0));
       }
-      setTimeout(() => {
-        if (interimRef.current) {
-          onResult(interimRef.current);
-          interimRef.current = "";
-          onInterim?.("");
-        }
+      closeRef.current = setTimeout(() => {
+        closeRef.current = null;
+        finalizeInterim();
         ws.close();
       }, 1200);
-    } else {
-      // Browser mode: promote remaining interim immediately.
-      if (interimRef.current) {
-        onResult(interimRef.current);
-        interimRef.current = "";
-        onInterim?.("");
-      }
+    } else if (!browserStopPendingRef.current) {
+      finalizeInterim();
     }
 
     stopMonitor();
-    setRec(false);
-  }, [stopMonitor, setRec, onResult, onInterim]);
+  }, [finalizeInterim, setRec, stopMonitor]);
 
   // ── Start recording ──────────────────────────────────────
 
   const start = useCallback(async () => {
     if (recRef.current || disabled) return;
     setRec(true);
+    browserStopPendingRef.current = false;
+    if (closeRef.current) {
+      clearTimeout(closeRef.current);
+      closeRef.current = null;
+    }
     setShowSettings(false);
 
     // Get microphone access for audio level monitoring (both modes).
@@ -275,104 +353,110 @@ export function VoiceInput({
         return;
       }
       wsRef.current = ws;
+      ws.binaryType = "arraybuffer";
 
       ws.onmessage = (ev) => {
-        try {
-          const d = JSON.parse(ev.data);
-
-          // Skip config messages from WhisperLiveKit.
-          if (d.type === "config" || d.type === "ready_to_stop") return;
-
-          // Extract text from WhisperLiveKit format.
-          // `lines` is cumulative (all finalized segments), `buffer_transcription` is the current partial.
-          const lines = Array.isArray(d.lines)
-            ? d.lines.map((l: { text: string }) => l.text).filter(Boolean).join(" ")
-            : "";
-          const buf = typeof d.buffer_transcription === "string" ? d.buffer_transcription : "";
-          const text = (lines + " " + buf).trim();
-
-          // Always treat as interim — WhisperLiveKit `lines` is cumulative,
-          // so calling onResult (which appends) would duplicate text.
-          // The final text is promoted to onResult in stop() when recording ends.
-          interimRef.current = text;
-          onInterim?.(text || "");
-        } catch {
-          /* ignore bad JSON */
+        const parsed = parseWhisperMessage(ev.data);
+        if (parsed.ignore) return;
+        if (parsed.error) {
+          onError?.(parsed.error);
+          stop();
+          return;
         }
+        if (!parsed.text) return;
+
+        // Always treat ASR text as interim because some Whisper backends
+        // stream cumulative finalized text and some stream partials only.
+        // We promote once on stop() to avoid duplicated input.
+        interimRef.current = parsed.text;
+        onInterim?.(parsed.text);
       };
 
       ws.onopen = async () => {
-        if (!recRef.current) {
-          ws.close();
-          return;
-        }
-        // WhisperLiveKit with --pcm-input expects int16 PCM (s16le) at 16kHz.
-        // We capture at the native rate and resample + convert via AudioWorklet
-        // (createScriptProcessor is deprecated and broken on mobile browsers).
-        const audioCtx = new AudioContext();
-        if (audioCtx.state === "suspended") await audioCtx.resume();
-        pcmCtxRef.current = audioCtx;
-        const nativeRate = audioCtx.sampleRate;
-        const targetRate = 16000;
-        const source = audioCtx.createMediaStreamSource(stream);
-
-        // Inline AudioWorklet processor — avoids a separate file.
-        const workletCode = `
-          class PCMProcessor extends AudioWorkletProcessor {
-            constructor() { super(); }
-            process(inputs) {
-              const input = inputs[0]?.[0];
-              if (input) this.port.postMessage(input);
-              return true;
-            }
-          }
-          registerProcessor('pcm-processor', PCMProcessor);
-        `;
-        const blob = new Blob([workletCode], { type: "application/javascript" });
-        const workletUrl = URL.createObjectURL(blob);
         try {
-          await audioCtx.audioWorklet.addModule(workletUrl);
-        } catch {
-          // AudioWorklet not supported — fall back to createScriptProcessor.
-          URL.revokeObjectURL(workletUrl);
-          startPCMLegacy(audioCtx, source, nativeRate, targetRate, ws);
-          return;
-        }
-        URL.revokeObjectURL(workletUrl);
+          if (!recRef.current) {
+            ws.close();
+            return;
+          }
+          // WhisperLiveKit with --pcm-input expects int16 PCM (s16le) at 16kHz.
+          // We capture at the native rate and resample + convert via AudioWorklet
+          // (createScriptProcessor is deprecated and broken on mobile browsers).
+          const audioCtx = new AudioContext();
+          if (audioCtx.state === "suspended") await audioCtx.resume();
+          pcmCtxRef.current = audioCtx;
+          const nativeRate = audioCtx.sampleRate;
+          const targetRate = 16000;
+          const source = audioCtx.createMediaStreamSource(stream);
 
-        const workletNode = new AudioWorkletNode(audioCtx, "pcm-processor");
-        workletNode.port.onmessage = (e) => {
-          if (ws.readyState !== WebSocket.OPEN) return;
-          const input: Float32Array = e.data;
-          let floats: Float32Array;
-          if (nativeRate === targetRate) {
-            floats = input;
-          } else {
-            const ratio = nativeRate / targetRate;
-            const outLen = Math.floor(input.length / ratio);
-            floats = new Float32Array(outLen);
-            for (let i = 0; i < outLen; i++) {
-              const srcIdx = i * ratio;
-              const lo = Math.floor(srcIdx);
-              const hi = Math.min(lo + 1, input.length - 1);
-              const frac = srcIdx - lo;
-              floats[i] = input[lo] * (1 - frac) + input[hi] * frac;
+          // Inline AudioWorklet processor — avoids a separate file.
+          const workletCode = `
+            class PCMProcessor extends AudioWorkletProcessor {
+              constructor() { super(); }
+              process(inputs) {
+                const input = inputs[0]?.[0];
+                if (input) this.port.postMessage(input);
+                return true;
+              }
             }
+            registerProcessor('pcm-processor', PCMProcessor);
+          `;
+          const blob = new Blob([workletCode], { type: "application/javascript" });
+          const workletUrl = URL.createObjectURL(blob);
+          try {
+            await audioCtx.audioWorklet.addModule(workletUrl);
+          } catch {
+            // AudioWorklet not supported — fall back to createScriptProcessor.
+            URL.revokeObjectURL(workletUrl);
+            startPCMLegacy(audioCtx, source, nativeRate, targetRate, ws);
+            return;
           }
-          const buf = new ArrayBuffer(floats.length * 2);
-          const view = new DataView(buf);
-          for (let i = 0; i < floats.length; i++) {
-            const s = Math.max(-1, Math.min(1, floats[i]));
-            view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-          }
-          ws.send(buf);
-        };
-        source.connect(workletNode);
-        workletNode.connect(audioCtx.destination);
+          URL.revokeObjectURL(workletUrl);
+
+          const workletNode = new AudioWorkletNode(audioCtx, "pcm-processor");
+          workletNode.port.onmessage = (e) => {
+            if (ws.readyState !== WebSocket.OPEN) return;
+            const input: Float32Array = e.data;
+            let floats: Float32Array;
+            if (nativeRate === targetRate) {
+              floats = input;
+            } else {
+              const ratio = nativeRate / targetRate;
+              const outLen = Math.floor(input.length / ratio);
+              floats = new Float32Array(outLen);
+              for (let i = 0; i < outLen; i++) {
+                const srcIdx = i * ratio;
+                const lo = Math.floor(srcIdx);
+                const hi = Math.min(lo + 1, input.length - 1);
+                const frac = srcIdx - lo;
+                floats[i] = input[lo] * (1 - frac) + input[hi] * frac;
+              }
+            }
+            const buf = new ArrayBuffer(floats.length * 2);
+            const view = new DataView(buf);
+            for (let i = 0; i < floats.length; i++) {
+              const s = Math.max(-1, Math.min(1, floats[i]));
+              view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+            }
+            ws.send(buf);
+          };
+          source.connect(workletNode);
+          workletNode.connect(audioCtx.destination);
+        } catch {
+          onError?.("Failed to start microphone capture");
+          stop();
+        }
       };
 
       ws.onerror = () => {
         onError?.("Whisper server connection failed");
+        stop();
+      };
+      ws.onclose = (ev) => {
+        if (!recRef.current) return;
+        const reason =
+          ev.reason.trim() ||
+          (ev.wasClean ? "Whisper server closed the connection" : "Whisper server disconnected");
+        onError?.(reason);
         stop();
       };
     } else if (SR) {
@@ -410,12 +494,22 @@ export function VoiceInput({
           } catch {
             stop();
           }
+          return;
+        }
+        if (browserStopPendingRef.current) {
+          browserStopPendingRef.current = false;
+          finalizeInterim();
         }
       };
 
       recognition.onerror = () => stop();
       srRef.current = recognition;
-      recognition.start();
+      try {
+        recognition.start();
+      } catch {
+        onError?.("Failed to start speech recognition");
+        stop();
+      }
     } else {
       onError?.("No speech recognition available");
       stopMonitor();
@@ -429,6 +523,7 @@ export function VoiceInput({
     stopMonitor,
     stop,
     setRec,
+    finalizeInterim,
     onResult,
     onInterim,
     onError,
@@ -439,7 +534,7 @@ export function VoiceInput({
   const handlePointerDown = useCallback(
     (e: React.PointerEvent) => {
       e.preventDefault();
-      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      e.currentTarget.setPointerCapture(e.pointerId);
       if (recording) return; // will stop on pointer up
 
       isHoldRef.current = false;
@@ -489,6 +584,7 @@ export function VoiceInput({
 
   useEffect(
     () => () => {
+      if (closeRef.current) clearTimeout(closeRef.current);
       if (holdRef.current) clearTimeout(holdRef.current);
       srRef.current?.stop();
       if (mrRef.current?.state !== "inactive") mrRef.current?.stop();

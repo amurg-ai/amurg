@@ -15,7 +15,7 @@ npm install
 npm run dev
 ```
 
-Opens on http://localhost:3000. The Vite dev server proxies `/api` and `/ws` to the Hub at `localhost:8090`.
+Opens on http://localhost:3000. The Vite dev server proxies `/api`, `/ws`, and `/asr` to the Hub at `localhost:8090`.
 
 ## Build
 
@@ -36,7 +36,7 @@ The UI is static files. Two deployment options:
 Set `server.ui_static_dir` in the Hub config to point to `ui/dist/`. The Hub Dockerfile does this automatically.
 
 **Standalone** (behind a reverse proxy):
-Serve `ui/dist/` from nginx/caddy and proxy `/api/*` and `/ws` to the Hub.
+Serve `ui/dist/` from nginx/caddy and proxy `/api/*`, `/ws`, and `/asr` to the Hub.
 
 Example nginx config:
 ```nginx
@@ -58,14 +58,21 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
     }
+
+    location /asr {
+        proxy_pass http://hub:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
 }
 ```
 
 ## Tests
 
 ```bash
-npm run test        # Watch mode
-npx vitest run      # Single run (57 tests)
+npx vitest          # Watch mode
+npx vitest run      # Single run (63 tests)
 ```
 
 ## Voice Input
@@ -79,7 +86,7 @@ The UI supports two speech-to-text backends, configurable via the gear icon on t
 - [whisper_streaming](https://github.com/E-Sensia/whisper_streaming)
 - Any server accepting audio via WebSocket at `/asr`
 
-Configure the URL (e.g. `ws://localhost:8000/asr`) in the voice settings popover.
+By default the UI connects to the Hub's same-origin `/asr` proxy. Configure a custom URL (for example `ws://localhost:8000/asr`) in the voice settings popover if you want to talk to Whisper directly.
 
 ## Tech Stack
 

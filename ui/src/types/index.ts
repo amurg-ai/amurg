@@ -38,9 +38,12 @@ export interface SessionInfo {
   profile: string;
   prompt_profile?: string;
   state: string;
+  native_handle?: string;
+  resumed_from?: string;
   created_at: string;
   updated_at: string;
   agent_name?: string;
+  message_count?: number;
   seq?: number;
 }
 

@@ -865,6 +865,70 @@ func TestListSessions_Empty(t *testing.T) {
 	}
 }
 
+func TestListSessions_IncludesNativeHandleAndMessageCount(t *testing.T) {
+	srv, authSvc, s := setupTestServer(t)
+	token := createTestUserAndGetToken(t, authSvc, s)
+	runtimeID, agentID := seedAgentAndRuntime(t, s)
+
+	ctx := context.Background()
+	user, err := s.GetUser(ctx, "default", "testuser")
+	if err != nil {
+		t.Fatalf("GetUser: %v", err)
+	}
+
+	sessID := uuid.New().String()
+	now := time.Now()
+	if err := s.CreateSession(ctx, &store.Session{
+		ID:           sessID,
+		OrgID:        "default",
+		UserID:       user.ID,
+		AgentID:      agentID,
+		RuntimeID:    runtimeID,
+		Profile:      "claude-code",
+		State:        "idle",
+		NativeHandle: "claude-session-123",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		if _, err := s.AppendMessage(ctx, &store.Message{
+			ID:        uuid.New().String(),
+			SessionID: sessID,
+			Direction: "user",
+			Channel:   "stdin",
+			Content:   "hello",
+			CreatedAt: time.Now(),
+		}); err != nil {
+			t.Fatalf("AppendMessage: %v", err)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	srv.mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d; body: %s", w.Code, w.Body.String())
+	}
+
+	var sessions []store.Session
+	parseJSONResponse(t, w, &sessions)
+
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	if sessions[0].NativeHandle != "claude-session-123" {
+		t.Fatalf("native_handle = %q, want %q", sessions[0].NativeHandle, "claude-session-123")
+	}
+	if sessions[0].MessageCount != 2 {
+		t.Fatalf("message_count = %d, want 2", sessions[0].MessageCount)
+	}
+}
+
 func TestGetMessages_SessionNotFound(t *testing.T) {
 	srv, authSvc, s := setupTestServer(t)
 	token := createTestUserAndGetToken(t, authSvc, s)

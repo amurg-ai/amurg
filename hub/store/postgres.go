@@ -591,9 +591,14 @@ func (s *PostgresStore) GetSession(ctx context.Context, id string) (*Session, er
 func (s *PostgresStore) ListSessionsByUser(ctx context.Context, userID string) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT s.id, s.org_id, s.user_id, s.agent_id, s.runtime_id, s.profile, s.prompt_profile, s.state, s.native_handle, s.resumed_from,
-		        s.created_at, s.updated_at, COALESCE(a.name, '') as agent_name
-		 FROM sessions s LEFT JOIN agents a ON s.agent_id = a.id
-		 WHERE s.user_id = $1 ORDER BY s.updated_at DESC`, userID,
+		        s.created_at, s.updated_at, COALESCE(a.name, '') as agent_name, COUNT(m.id) as message_count
+		 FROM sessions s
+		 LEFT JOIN agents a ON s.agent_id = a.id
+		 LEFT JOIN messages m ON m.session_id = s.id
+		 WHERE s.user_id = $1
+		 GROUP BY s.id, s.org_id, s.user_id, s.agent_id, s.runtime_id, s.profile, s.prompt_profile, s.state, s.native_handle, s.resumed_from,
+		          s.created_at, s.updated_at, a.name
+		 ORDER BY s.updated_at DESC`, userID,
 	)
 	if err != nil {
 		return nil, err
@@ -604,7 +609,7 @@ func (s *PostgresStore) ListSessionsByUser(ctx context.Context, userID string) (
 	for rows.Next() {
 		var sess Session
 		if err := rows.Scan(&sess.ID, &sess.OrgID, &sess.UserID, &sess.AgentID, &sess.RuntimeID, &sess.Profile,
-			&sess.PromptProfile, &sess.State, &sess.NativeHandle, &sess.ResumedFrom, &sess.CreatedAt, &sess.UpdatedAt, &sess.AgentName); err != nil {
+			&sess.PromptProfile, &sess.State, &sess.NativeHandle, &sess.ResumedFrom, &sess.CreatedAt, &sess.UpdatedAt, &sess.AgentName, &sess.MessageCount); err != nil {
 			return nil, err
 		}
 		sessions = append(sessions, sess)
@@ -870,9 +875,13 @@ func (s *PostgresStore) ListAuditEventsFiltered(ctx context.Context, orgID strin
 func (s *PostgresStore) ListAllSessions(ctx context.Context, orgID string) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT s.id, s.org_id, s.user_id, s.agent_id, s.runtime_id, s.profile, s.prompt_profile, s.state, s.native_handle, s.resumed_from,
-		        s.created_at, s.updated_at, COALESCE(a.name, '') as agent_name
-		 FROM sessions s LEFT JOIN agents a ON s.agent_id = a.id
+		        s.created_at, s.updated_at, COALESCE(a.name, '') as agent_name, COUNT(m.id) as message_count
+		 FROM sessions s
+		 LEFT JOIN agents a ON s.agent_id = a.id
+		 LEFT JOIN messages m ON m.session_id = s.id
 		 WHERE s.org_id = $1
+		 GROUP BY s.id, s.org_id, s.user_id, s.agent_id, s.runtime_id, s.profile, s.prompt_profile, s.state, s.native_handle, s.resumed_from,
+		          s.created_at, s.updated_at, a.name
 		 ORDER BY s.updated_at DESC`,
 		orgID,
 	)
@@ -885,7 +894,7 @@ func (s *PostgresStore) ListAllSessions(ctx context.Context, orgID string) ([]Se
 	for rows.Next() {
 		var sess Session
 		if err := rows.Scan(&sess.ID, &sess.OrgID, &sess.UserID, &sess.AgentID, &sess.RuntimeID, &sess.Profile,
-			&sess.PromptProfile, &sess.State, &sess.NativeHandle, &sess.ResumedFrom, &sess.CreatedAt, &sess.UpdatedAt, &sess.AgentName); err != nil {
+			&sess.PromptProfile, &sess.State, &sess.NativeHandle, &sess.ResumedFrom, &sess.CreatedAt, &sess.UpdatedAt, &sess.AgentName, &sess.MessageCount); err != nil {
 			return nil, err
 		}
 		sessions = append(sessions, sess)

@@ -4,6 +4,7 @@
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/amurg-ai/amurg/main/scripts/install.sh | sh
 #   curl -fsSL https://raw.githubusercontent.com/amurg-ai/amurg/main/scripts/install.sh | sh -s -- --binary=amurg-hub
+#   curl -fsSL https://raw.githubusercontent.com/amurg-ai/amurg/main/scripts/install.sh | sh -s -- --binary=amurg
 #   curl -fsSL https://raw.githubusercontent.com/amurg-ai/amurg/main/scripts/install.sh | sh -s -- --version=0.1.0
 #
 set -eu
@@ -150,8 +151,15 @@ do_install() {
     ok "${BINARY} v${VERSION} installed to ${INSTALL_DIR}/${BINARY}"
     echo ""
     info "Next steps:"
-    echo "    ${BINARY} init      # interactive setup wizard"
-    echo "    ${BINARY} run       # start with generated config"
+    case "${BINARY}" in
+        amurg)
+            echo "    amurg sessions list --help"
+            ;;
+        *)
+            echo "    ${BINARY} init      # interactive setup wizard"
+            echo "    ${BINARY} run       # start with generated config"
+            ;;
+    esac
     echo ""
 }
 
@@ -164,7 +172,7 @@ parse_args() {
             --version=*)  VERSION="${arg#*=}" ;;
             --dir=*)      INSTALL_DIR="${arg#*=}" ;;
             --help|-h)
-                echo "Usage: install.sh [--binary=amurg-runtime|amurg-hub] [--version=X.Y.Z] [--dir=/path]"
+                echo "Usage: install.sh [--binary=amurg-runtime|amurg-hub|amurg] [--version=X.Y.Z] [--dir=/path]"
                 exit 0
                 ;;
             *)
