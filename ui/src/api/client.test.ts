@@ -161,6 +161,29 @@ describe("api client", () => {
       expect(JSON.parse(options.body)).toEqual({ agent_id: "ep-1" });
       expect(result.id).toBe("sess-1");
     });
+
+    it("includes prompt_profile when provided", async () => {
+      localStorage.setItem("amurg_token", "tok");
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            id: "sess-2",
+            agent_id: "ep-1",
+            state: "active",
+            prompt_profile: "deep_debug",
+          }),
+      });
+
+      await api.createSession("ep-1", undefined, "deep_debug");
+
+      const [, options] = (globalThis.fetch as ReturnType<typeof vi.fn>)
+        .mock.calls[0];
+      expect(JSON.parse(options.body)).toEqual({
+        agent_id: "ep-1",
+        prompt_profile: "deep_debug",
+      });
+    });
   });
 
   describe("getMessages", () => {

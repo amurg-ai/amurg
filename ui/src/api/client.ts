@@ -1,4 +1,4 @@
-import type { AgentInfo, SessionInfo, StoredMessage, UserInfo, AuditEvent, RuntimeInfo, AdminAgentInfo, AgentConfigOverride, SecurityProfile, AgentLimitsWire } from "@/types";
+import type { AgentInfo, SessionInfo, StoredMessage, UserInfo, AuditEvent, RuntimeInfo, AdminAgentInfo, AgentConfigOverride, SecurityProfile, AgentLimitsWire, PromptProfileInfo } from "@/types";
 
 const BASE = "";
 
@@ -84,12 +84,18 @@ export const api = {
 
   listAgents: () => request<AgentInfo[]>("/api/agents"),
 
+  listPromptProfiles: () => request<PromptProfileInfo[]>("/api/prompt-profiles"),
+
   listSessions: () => request<SessionInfo[]>("/api/sessions"),
 
-  createSession: (agentId: string, resumeSessionId?: string) =>
+  createSession: (agentId: string, resumeSessionId?: string, promptProfile?: string) =>
     request<SessionInfo>("/api/sessions", {
       method: "POST",
-      body: JSON.stringify({ agent_id: agentId, ...(resumeSessionId ? { resume_session_id: resumeSessionId } : {}) }),
+      body: JSON.stringify({
+        agent_id: agentId,
+        ...(resumeSessionId ? { resume_session_id: resumeSessionId } : {}),
+        ...(promptProfile ? { prompt_profile: promptProfile } : {}),
+      }),
     }),
 
   getMessages: (sessionId: string) =>

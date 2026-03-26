@@ -22,6 +22,7 @@ vi.mock("@/api/client", () => ({
     logout: vi.fn(),
     getMe: vi.fn(),
     listAgents: vi.fn(() => Promise.resolve([])),
+    listPromptProfiles: vi.fn(() => Promise.resolve([])),
     listSessions: vi.fn(() => Promise.resolve([])),
     createSession: vi.fn(),
     getMessages: vi.fn(() => Promise.resolve([])),

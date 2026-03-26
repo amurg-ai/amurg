@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/amurg-ai/amurg/hub/auth"
 	"github.com/amurg-ai/amurg/hub/config"
 	"github.com/amurg-ai/amurg/hub/store"
+	"github.com/google/uuid"
 )
 
 func setupTestRouter(t *testing.T) (*Router, store.Store, *auth.Service) {
@@ -87,7 +87,7 @@ func TestCreateSession_Success(t *testing.T) {
 	userID := seedUser(t, authSvc, "sessionuser")
 
 	ctx := context.Background()
-	sess, err := rt.CreateSession(ctx, userID, agentID)
+	sess, err := rt.CreateSession(ctx, userID, agentID, CreateSessionOption{PromptProfile: "careful"})
 	if err != nil {
 		t.Fatalf("CreateSession failed: %v", err)
 	}
@@ -110,6 +110,9 @@ func TestCreateSession_Success(t *testing.T) {
 	if sess.State != "creating" {
 		t.Errorf("expected state 'creating', got %q", sess.State)
 	}
+	if sess.PromptProfile != "careful" {
+		t.Errorf("expected prompt_profile 'careful', got %q", sess.PromptProfile)
+	}
 
 	// Verify session is persisted in the store.
 	stored, err := s.GetSession(ctx, sess.ID)
@@ -121,6 +124,9 @@ func TestCreateSession_Success(t *testing.T) {
 	}
 	if stored.UserID != userID {
 		t.Errorf("stored session user_id mismatch: got %q, want %q", stored.UserID, userID)
+	}
+	if stored.PromptProfile != "careful" {
+		t.Errorf("stored session prompt_profile mismatch: got %q, want %q", stored.PromptProfile, "careful")
 	}
 }
 

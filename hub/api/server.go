@@ -22,6 +22,7 @@ import (
 	"github.com/amurg-ai/amurg/hub/config"
 	"github.com/amurg-ai/amurg/hub/router"
 	"github.com/amurg-ai/amurg/hub/store"
+	"github.com/amurg-ai/amurg/pkg/promptprofile"
 	"github.com/amurg-ai/amurg/pkg/protocol"
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -147,6 +148,7 @@ func NewServer(s store.Store, ap auth.Provider, lp auth.LoginProvider, ra auth.R
 		r.Use(rateLimitMiddleware(srv.rl))
 
 		r.Get("/api/agents", srv.handleListAgents)
+		r.Get("/api/prompt-profiles", srv.handleListPromptProfiles)
 		r.Get("/api/sessions", srv.handleListSessions)
 		r.Post("/api/sessions", srv.handleCreateSession)
 		r.Get("/api/sessions/{sessionID}", srv.handleGetSession)
@@ -476,9 +478,16 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		AgentID         string `json:"agent_id"`
 		ResumeSessionID string `json:"resume_session_id,omitempty"`
+		PromptProfile   string `json:"prompt_profile,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	resolvedPromptProfile := promptprofile.Normalize(req.PromptProfile)
+	if _, ok := promptprofile.Lookup(resolvedPromptProfile); !ok {
+		writeError(w, http.StatusBadRequest, "invalid prompt_profile")
 		return
 	}
 
@@ -563,6 +572,11 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		createOpts = append(createOpts, router.CreateSessionOption{
 			ResumeSessionID:    resumedFrom,
 			ResumeNativeHandle: resumeNativeHandle,
+			PromptProfile:      resolvedPromptProfile,
+		})
+	} else {
+		createOpts = append(createOpts, router.CreateSessionOption{
+			PromptProfile: resolvedPromptProfile,
 		})
 	}
 	sess, err := s.router.CreateSession(r.Context(), identity.UserID, req.AgentID, createOpts...)
@@ -583,6 +597,10 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, sess)
+}
+
+func (s *Server) handleListPromptProfiles(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, promptprofile.ListMetadata())
 }
 
 func (s *Server) handleGetMessages(w http.ResponseWriter, r *http.Request) {

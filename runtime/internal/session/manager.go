@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/amurg-ai/amurg/pkg/promptprofile"
 	"github.com/amurg-ai/amurg/pkg/protocol"
 	"github.com/amurg-ai/amurg/runtime/internal/adapter"
 	"github.com/amurg-ai/amurg/runtime/internal/config"
@@ -55,12 +56,12 @@ func NewManager(
 }
 
 // Create creates a new session for the given agent.
-func (m *Manager) Create(ctx context.Context, sessionID, agentID, userID string) error {
-	return m.CreateWithResume(ctx, sessionID, agentID, userID, "")
+func (m *Manager) Create(ctx context.Context, sessionID, agentID, userID, profileID string) error {
+	return m.CreateWithResume(ctx, sessionID, agentID, userID, "", profileID)
 }
 
 // CreateWithResume creates a new session, optionally resuming a native session.
-func (m *Manager) CreateWithResume(ctx context.Context, sessionID, agentID, userID, resumeSessionID string) error {
+func (m *Manager) CreateWithResume(ctx context.Context, sessionID, agentID, userID, resumeSessionID, profileID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -76,6 +77,7 @@ func (m *Manager) CreateWithResume(ctx context.Context, sessionID, agentID, user
 	if !ok {
 		return fmt.Errorf("unknown agent: %s", agentID)
 	}
+	agentCfg.PromptProfile = promptprofile.Normalize(profileID)
 
 	adp, err := m.registry.Get(agentCfg.Profile)
 	if err != nil {
@@ -127,7 +129,7 @@ func (m *Manager) CreateWithResume(ctx context.Context, sessionID, agentID, user
 	}
 
 	m.logger.Info("session created", "session_id", sessionID, "agent_id", agentID, "user_id", userID,
-		"resume_session_id", resumeSessionID)
+		"resume_session_id", resumeSessionID, "prompt_profile", agentCfg.PromptProfile)
 	return nil
 }
 

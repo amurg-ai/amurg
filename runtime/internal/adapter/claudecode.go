@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/amurg-ai/amurg/pkg/promptprofile"
 	"github.com/amurg-ai/amurg/runtime/internal/config"
 )
 
@@ -28,13 +29,15 @@ func (a *ClaudeCodeAdapter) Start(ctx context.Context, cfg config.AgentConfig) (
 	if ccCfg == nil {
 		ccCfg = &config.ClaudeCodeConfig{}
 	}
-	if ccCfg.Command == "" {
-		ccCfg.Command = "claude"
+	resolvedCfg := *ccCfg
+	if resolvedCfg.Command == "" {
+		resolvedCfg.Command = "claude"
 	}
+	resolvedCfg.SystemPrompt = promptprofile.Append(resolvedCfg.SystemPrompt, cfg.PromptProfile)
 
 	sess := &claudeCodeSession{
 		ctx:      ctx,
-		cfg:      *ccCfg,
+		cfg:      resolvedCfg,
 		security: cfg.Security,
 		output:   make(chan Output, 64),
 	}
@@ -45,12 +48,12 @@ func (a *ClaudeCodeAdapter) Start(ctx context.Context, cfg config.AgentConfig) (
 // The process is spawned lazily on the first Send() and maintained
 // across multiple messages via --input-format stream-json.
 type claudeCodeSession struct {
-	ctx         context.Context
-	cfg         config.ClaudeCodeConfig
-	security    *config.SecurityConfig
-	sessionID   string // Claude Code's native session ID
-	resumeExplicit bool // true only when SetResumeSessionID was called (explicit resume)
-	permHandler func(tool, description, resource string) bool
+	ctx            context.Context
+	cfg            config.ClaudeCodeConfig
+	security       *config.SecurityConfig
+	sessionID      string // Claude Code's native session ID
+	resumeExplicit bool   // true only when SetResumeSessionID was called (explicit resume)
+	permHandler    func(tool, description, resource string) bool
 
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
@@ -396,7 +399,7 @@ func (s *claudeCodeSession) handleStreamEvent(line []byte) {
 					if c.Text != "" {
 						s.output <- Output{Channel: "stdout", Data: []byte("*" + truncateStr(c.Text, 500) + "*")}
 					}
-				// server_tool_use, etc. — skip silently
+					// server_tool_use, etc. — skip silently
 				}
 			}
 		}

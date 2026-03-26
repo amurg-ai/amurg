@@ -10,33 +10,33 @@ import (
 
 // Config is the top-level runtime configuration.
 type Config struct {
-	Hub       HubConfig       `json:"hub"`
-	Runtime   RuntimeConfig   `json:"runtime"`
-	Agents []AgentConfig `json:"agents"`
+	Hub     HubConfig     `json:"hub"`
+	Runtime RuntimeConfig `json:"runtime"`
+	Agents  []AgentConfig `json:"agents"`
 }
 
 // HubConfig defines how the runtime connects to the hub.
 type HubConfig struct {
-	URL               string        `json:"url"`
-	Token             string        `json:"token"`
-	TLSSkipVerify     bool          `json:"tls_skip_verify,omitempty"` // dev only
-	ReconnectInterval Duration      `json:"reconnect_interval,omitempty"`
-	MaxReconnectDelay Duration      `json:"max_reconnect_delay,omitempty"`
-	SendBufferSize    int           `json:"send_buffer_size,omitempty"` // messages buffered during disconnect; default 256
+	URL               string   `json:"url"`
+	Token             string   `json:"token"`
+	TLSSkipVerify     bool     `json:"tls_skip_verify,omitempty"` // dev only
+	ReconnectInterval Duration `json:"reconnect_interval,omitempty"`
+	MaxReconnectDelay Duration `json:"max_reconnect_delay,omitempty"`
+	SendBufferSize    int      `json:"send_buffer_size,omitempty"` // messages buffered during disconnect; default 256
 }
 
 // RuntimeConfig defines global runtime limits.
 type RuntimeConfig struct {
-	ID              string   `json:"id"`
-	OrgID           string   `json:"org_id,omitempty"` // optional, defaults to "default"
-	MaxSessions     int      `json:"max_sessions"`
-	DefaultTimeout  Duration `json:"default_timeout"`
-	MaxOutputBytes  int64    `json:"max_output_bytes"`
-	IdleTimeout     Duration `json:"idle_timeout"`
-	LogLevel        string   `json:"log_level"`
-	FileStoragePath         string   `json:"file_storage_path,omitempty"`         // path for file storage; default "./amurg-files"
-	MaxFileBytes            int64    `json:"max_file_bytes,omitempty"`            // max file size; default 10MB
-	AllowRemotePermissionSkip bool  `json:"allow_remote_permission_skip,omitempty"`
+	ID                        string   `json:"id"`
+	OrgID                     string   `json:"org_id,omitempty"` // optional, defaults to "default"
+	MaxSessions               int      `json:"max_sessions"`
+	DefaultTimeout            Duration `json:"default_timeout"`
+	MaxOutputBytes            int64    `json:"max_output_bytes"`
+	IdleTimeout               Duration `json:"idle_timeout"`
+	LogLevel                  string   `json:"log_level"`
+	FileStoragePath           string   `json:"file_storage_path,omitempty"` // path for file storage; default "./amurg-files"
+	MaxFileBytes              int64    `json:"max_file_bytes,omitempty"`    // max file size; default 10MB
+	AllowRemotePermissionSkip bool     `json:"allow_remote_permission_skip,omitempty"`
 }
 
 // SecurityConfig defines security constraints for an agent.
@@ -52,12 +52,13 @@ type SecurityConfig struct {
 
 // AgentConfig defines a single agent configuration.
 type AgentConfig struct {
-	ID       string            `json:"id"`
-	Name     string            `json:"name"`
-	Profile  string            `json:"profile"`
-	Tags     map[string]string `json:"tags,omitempty"`
-	Limits   *AgentLimits      `json:"limits,omitempty"`
-	Security *SecurityConfig   `json:"security,omitempty"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	Profile       string            `json:"profile"`
+	Tags          map[string]string `json:"tags,omitempty"`
+	Limits        *AgentLimits      `json:"limits,omitempty"`
+	Security      *SecurityConfig   `json:"security,omitempty"`
+	PromptProfile string            `json:"-"`
 
 	// Profile-specific settings (parsed by the adapter)
 	CLI        *CLIConfig        `json:"cli,omitempty"`
@@ -105,20 +106,20 @@ type AgentLimits struct {
 
 // CLIConfig is config for generic-cli and github-copilot profiles.
 type CLIConfig struct {
-	Command    string            `json:"command"`
-	Args       []string          `json:"args,omitempty"`
-	WorkDir    string            `json:"work_dir,omitempty"`
-	Env        map[string]string `json:"env,omitempty"`
-	SpawnPolicy string           `json:"spawn_policy,omitempty"` // "per-session" (default) or "persistent"
+	Command     string            `json:"command"`
+	Args        []string          `json:"args,omitempty"`
+	WorkDir     string            `json:"work_dir,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+	SpawnPolicy string            `json:"spawn_policy,omitempty"` // "per-session" (default) or "persistent"
 }
 
 // ClaudeCodeConfig is config for the claude-code profile.
 type ClaudeCodeConfig struct {
-	Command         string            `json:"command,omitempty"`          // default: "claude"
+	Command         string            `json:"command,omitempty"` // default: "claude"
 	WorkDir         string            `json:"work_dir,omitempty"`
 	Env             map[string]string `json:"env,omitempty"`
-	Model           string            `json:"model,omitempty"`            // e.g. "sonnet"
-	PermissionMode  string            `json:"permission_mode,omitempty"`  // e.g. "dangerously-skip-permissions"
+	Model           string            `json:"model,omitempty"`           // e.g. "sonnet"
+	PermissionMode  string            `json:"permission_mode,omitempty"` // e.g. "dangerously-skip-permissions"
 	MaxTurns        int               `json:"max_turns,omitempty"`
 	AllowedTools    []string          `json:"allowed_tools,omitempty"`
 	DisallowedTools []string          `json:"disallowed_tools,omitempty"` // --disallowedTools flags
@@ -127,18 +128,18 @@ type ClaudeCodeConfig struct {
 
 // CopilotConfig is config for the github-copilot profile.
 type CopilotConfig struct {
-	Command                string            `json:"command,omitempty"`                  // default: "copilot"
-	WorkDir                string            `json:"work_dir,omitempty"`
-	Env                    map[string]string `json:"env,omitempty"`
-	Model                  string            `json:"model,omitempty"`                    // e.g. "claude-sonnet-4.5"
-	AllowedTools           []string          `json:"allowed_tools,omitempty"`            // --allow-tool glob patterns
-	DeniedTools            []string          `json:"denied_tools,omitempty"`             // --deny-tool glob patterns
-	MaxAutopilotContinues  int               `json:"max_autopilot_continues,omitempty"`  // --max-autopilot-continues N (implies --autopilot)
+	Command               string            `json:"command,omitempty"` // default: "copilot"
+	WorkDir               string            `json:"work_dir,omitempty"`
+	Env                   map[string]string `json:"env,omitempty"`
+	Model                 string            `json:"model,omitempty"`                   // e.g. "claude-sonnet-4.5"
+	AllowedTools          []string          `json:"allowed_tools,omitempty"`           // --allow-tool glob patterns
+	DeniedTools           []string          `json:"denied_tools,omitempty"`            // --deny-tool glob patterns
+	MaxAutopilotContinues int               `json:"max_autopilot_continues,omitempty"` // --max-autopilot-continues N (implies --autopilot)
 }
 
 // CodexConfig is config for the codex profile.
 type CodexConfig struct {
-	Command        string            `json:"command,omitempty"`         // default: "codex"
+	Command        string            `json:"command,omitempty"` // default: "codex"
 	WorkDir        string            `json:"work_dir,omitempty"`
 	Env            map[string]string `json:"env,omitempty"`
 	Model          string            `json:"model,omitempty"`           // e.g. "gpt-5.3-codex"
@@ -151,7 +152,7 @@ type CodexConfig struct {
 
 // KiloConfig is config for the kilo-code profile.
 type KiloConfig struct {
-	Command      string            `json:"command,omitempty"`       // default: "kilo"
+	Command      string            `json:"command,omitempty"` // default: "kilo"
 	WorkDir      string            `json:"work_dir,omitempty"`
 	Env          map[string]string `json:"env,omitempty"`
 	Model        string            `json:"model,omitempty"`         // e.g. "anthropic/claude-sonnet-4"
@@ -163,7 +164,7 @@ type KiloConfig struct {
 
 // GeminiCLIConfig is config for the gemini-cli profile.
 type GeminiCLIConfig struct {
-	Command          string            `json:"command,omitempty"`            // default: "gemini"
+	Command          string            `json:"command,omitempty"` // default: "gemini"
 	WorkDir          string            `json:"work_dir,omitempty"`
 	Env              map[string]string `json:"env,omitempty"`
 	Model            string            `json:"model,omitempty"`              // e.g. "gemini-2.5-pro", "gemini-2.5-flash"

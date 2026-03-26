@@ -63,7 +63,7 @@ interface SessionState {
   logout: () => void;
   loadAgents: () => Promise<void>;
   loadSessions: () => Promise<void>;
-  createSession: (agentId: string) => Promise<SessionInfo>;
+  createSession: (agentId: string, promptProfile?: string) => Promise<SessionInfo>;
   selectSession: (sessionId: string) => Promise<void>;
   deselectSession: () => void;
   sendMessage: (content: string) => void;
@@ -74,7 +74,7 @@ interface SessionState {
   uploadFile: (sessionId: string, file: File) => Promise<void>;
   loadNativeSessions: (agentId: string) => void;
   loadAllNativeSessions: () => void;
-  createSessionWithResume: (agentId: string, resumeSessionId: string) => Promise<SessionInfo>;
+  createSessionWithResume: (agentId: string, resumeSessionId: string, promptProfile?: string) => Promise<SessionInfo>;
 }
 
 export const useSessionStore = create<SessionState>((set, get) => {
@@ -367,8 +367,8 @@ export const useSessionStore = create<SessionState>((set, get) => {
       set({ sessions: assignSequenceNumbers(sessions || []) });
     },
 
-    createSession: async (agentId: string) => {
-      const session = await api.createSession(agentId);
+    createSession: async (agentId: string, promptProfile?: string) => {
+      const session = await api.createSession(agentId, undefined, promptProfile);
       const { sessions } = get();
       set({ sessions: assignSequenceNumbers([session, ...sessions]) });
       await get().selectSession(session.id);
@@ -604,8 +604,8 @@ export const useSessionStore = create<SessionState>((set, get) => {
       }
     },
 
-    createSessionWithResume: async (agentId: string, resumeSessionId: string) => {
-      const session = await api.createSession(agentId, resumeSessionId);
+    createSessionWithResume: async (agentId: string, resumeSessionId: string, promptProfile?: string) => {
+      const session = await api.createSession(agentId, resumeSessionId, promptProfile);
       const { sessions, previewSessionIds } = get();
       const updatedPreview = new Set(previewSessionIds);
       updatedPreview.add(session.id);

@@ -157,19 +157,20 @@ type Agent struct {
 
 // Session represents a conversation session.
 type Session struct {
-	ID           string    `json:"id"`
-	OrgID        string    `json:"org_id"`
-	UserID       string    `json:"user_id"`
-	AgentID      string    `json:"agent_id"`
-	RuntimeID    string    `json:"runtime_id"`
-	Profile      string    `json:"profile"`
-	State        string    `json:"state"` // "active", "idle", "closed"
-	NativeHandle string    `json:"native_handle,omitempty"`
-	ResumedFrom  string    `json:"resumed_from,omitempty"` // ID of the hub session this was resumed from, if known
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-	AgentName    string    `json:"agent_name,omitempty"`
-	MessageCount int       `json:"message_count"`
+	ID            string    `json:"id"`
+	OrgID         string    `json:"org_id"`
+	UserID        string    `json:"user_id"`
+	AgentID       string    `json:"agent_id"`
+	RuntimeID     string    `json:"runtime_id"`
+	Profile       string    `json:"profile"`
+	PromptProfile string    `json:"prompt_profile,omitempty"`
+	State         string    `json:"state"` // "active", "idle", "closed"
+	NativeHandle  string    `json:"native_handle,omitempty"`
+	ResumedFrom   string    `json:"resumed_from,omitempty"` // ID of the hub session this was resumed from, if known
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	AgentName     string    `json:"agent_name,omitempty"`
+	MessageCount  int       `json:"message_count"`
 }
 
 // Message represents a stored message in a transcript.

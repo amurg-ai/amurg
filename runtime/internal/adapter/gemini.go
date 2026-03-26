@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/amurg-ai/amurg/pkg/promptprofile"
 	"github.com/amurg-ai/amurg/runtime/internal/config"
 )
 
@@ -26,17 +27,53 @@ func (a *GeminiCLIAdapter) Start(ctx context.Context, cfg config.AgentConfig) (A
 	if gCfg == nil {
 		gCfg = &config.GeminiCLIConfig{}
 	}
-	if gCfg.Command == "" {
-		gCfg.Command = "gemini"
+	resolvedCfg := *gCfg
+	if resolvedCfg.Command == "" {
+		resolvedCfg.Command = "gemini"
+	}
+
+	combinedPrompt, err := buildGeminiSystemPrompt(resolvedCfg.SystemPromptFile, cfg.PromptProfile)
+	if err != nil {
+		return nil, err
 	}
 
 	sess := &geminiSession{
 		ctx:      ctx,
-		cfg:      *gCfg,
+		cfg:      resolvedCfg,
 		security: cfg.Security,
 		output:   make(chan Output, 64),
+		promptMD: combinedPrompt,
 	}
 	return sess, nil
+}
+
+func buildGeminiSystemPrompt(basePath, profileID string) (string, error) {
+	basePrompt := ""
+	if basePath != "" {
+		data, err := os.ReadFile(basePath)
+		if err != nil {
+			return "", fmt.Errorf("read gemini system prompt: %w", err)
+		}
+		basePrompt = string(data)
+	}
+
+	combined := promptprofile.Append(basePrompt, profileID)
+	if combined == "" {
+		return "", nil
+	}
+
+	f, err := os.CreateTemp("", "amurg-gemini-system-*.md")
+	if err != nil {
+		return "", fmt.Errorf("create gemini system prompt file: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if _, err := f.WriteString(combined); err != nil {
+		_ = os.Remove(f.Name())
+		return "", fmt.Errorf("write gemini system prompt file: %w", err)
+	}
+
+	return f.Name(), nil
 }
 
 // ListNativeSessions scans ~/.gemini/tmp/*/chats/ and returns discovered sessions.
@@ -152,6 +189,7 @@ type geminiSession struct {
 	cfg       config.GeminiCLIConfig
 	security  *config.SecurityConfig
 	sessionID string // Gemini session UUID for --resume
+	promptMD  string
 
 	output chan Output
 	mu     sync.Mutex
@@ -223,8 +261,8 @@ func (s *geminiSession) Send(ctx context.Context, input []byte) error {
 	}
 
 	// System prompt file override.
-	if s.cfg.SystemPromptFile != "" {
-		cmd.Env = append(cmd.Env, "GEMINI_SYSTEM_MD="+s.cfg.SystemPromptFile)
+	if s.promptMD != "" {
+		cmd.Env = append(cmd.Env, "GEMINI_SYSTEM_MD="+s.promptMD)
 	}
 
 	stdout, err := cmd.StdoutPipe()
@@ -448,6 +486,9 @@ func (s *geminiSession) Close() error {
 	if done != nil {
 		<-done
 	}
+	if s.promptMD != "" {
+		_ = os.Remove(s.promptMD)
+	}
 	close(s.output)
 	return nil
 }
@@ -511,12 +552,12 @@ func (s *geminiSession) LoadNativeHistory() []Output {
 
 	for scanner.Scan() {
 		var event struct {
-			Type     string          `json:"type"`
-			Role     string          `json:"role,omitempty"`
-			Content  string          `json:"content,omitempty"`
-			Text     string          `json:"text,omitempty"`
-			ToolName string          `json:"tool_name,omitempty"`
-			ToolID   string          `json:"tool_id,omitempty"`
+			Type      string          `json:"type"`
+			Role      string          `json:"role,omitempty"`
+			Content   string          `json:"content,omitempty"`
+			Text      string          `json:"text,omitempty"`
+			ToolName  string          `json:"tool_name,omitempty"`
+			ToolID    string          `json:"tool_id,omitempty"`
 			Arguments json.RawMessage `json:"arguments,omitempty"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
@@ -587,4 +628,3 @@ func findGeminiSessionFile(sessionID string) string {
 	}
 	return ""
 }
-
