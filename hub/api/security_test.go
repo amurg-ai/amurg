@@ -399,16 +399,16 @@ func TestXForwardedProtoInjection(t *testing.T) {
 	}
 }
 
-func TestRuntimeRegister_NonLoopbackHostRequiresBaseURL(t *testing.T) {
+func TestRuntimeRegister_NonLoopbackHostAllowedWithoutBaseURL(t *testing.T) {
 	env := setupSecurityTest(t)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/runtime/register", nil)
-	req.Host = "evil.example"
+	req.Host = "hub.example.com"
 	w := httptest.NewRecorder()
 	env.srv.mux.ServeHTTP(w, req)
 
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 503 for non-loopback host without base_url, got %d; body: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for non-loopback host without base_url, got %d; body: %s", w.Code, w.Body.String())
 	}
 }
 

@@ -1284,9 +1284,7 @@ func (s *Server) handleRuntimeRegister(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !isLoopbackHost(host) {
-			s.logger.Warn("device registration denied because server.base_url is unset for non-loopback host", "host", host)
-			writeError(w, http.StatusServiceUnavailable, "device registration requires server.base_url to be configured")
-			return
+			s.logger.Warn("server.base_url is not configured — deriving verification URL from Host header", "host", host)
 		}
 
 		scheme := "https"

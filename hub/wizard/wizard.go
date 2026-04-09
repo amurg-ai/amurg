@@ -128,6 +128,7 @@ func (w *Wizard) RunDefaults(outputPath string) error {
 
 	// Server settings.
 	cfg.Server.Addr = envOr("AMURG_ADDR", ":8080")
+	cfg.Server.BaseURL = os.Getenv("AMURG_BASE_URL")
 	cfg.Server.UIStaticDir = envOr("AMURG_UI_DIR", "/var/lib/amurg/ui")
 
 	// Admin user.
