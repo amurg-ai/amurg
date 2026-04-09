@@ -25,6 +25,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+
+
 // makeUpgrader creates a WebSocket upgrader with origin checking.
 func makeUpgrader(allowedOrigins []string) websocket.Upgrader {
 	allowAll := len(allowedOrigins) == 0 || (len(allowedOrigins) == 1 && allowedOrigins[0] == "*")
@@ -184,6 +186,11 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 
 	// Set read limit for runtime connections.
 	conn.SetReadLimit(r.maxRuntimeMessageSize)
+
+	// Set up WebSocket-level keepalive (pings every 30s).
+	var rtMu sync.Mutex
+	cancelKeepalive := startWSKeepalive(conn, &rtMu)
+	defer cancelKeepalive()
 
 	// Read the hello message.
 	_, msg, err := conn.ReadMessage()

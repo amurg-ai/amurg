@@ -35,7 +35,6 @@ var bufferableTypes = map[string]bool{
 	protocol.TypeFileAvailable:     true,
 	protocol.TypeSessionCreated:    true,
 }
-
 // MessageHandler processes messages received from the hub.
 type MessageHandler func(env protocol.Envelope) error
 
