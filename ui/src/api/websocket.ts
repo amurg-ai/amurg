@@ -12,6 +12,9 @@ interface PendingMessage {
 }
 
 const MAX_PENDING_QUEUE = 50;
+// Server sends WebSocket pings every 30s; if we receive nothing for 75s the
+// connection is likely dead (proxy killed it silently). Force-close and reconnect.
+const STALE_TIMEOUT_MS = 75_000;
 
 export class AmurgSocket {
   private ws: WebSocket | null = null;
@@ -23,6 +26,7 @@ export class AmurgSocket {
   private onStateChange?: StateChangeHandler;
   private subscriptions = new Map<string, number>(); // sessionId → afterSeq
   private pendingQueue: PendingMessage[] = [];
+  private staleTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -43,6 +47,7 @@ export class AmurgSocket {
         this.ws.onopen = () => {
           this.reconnectDelay = 1000;
           this.onStateChange?.("connected");
+          this.resetStaleTimer();
 
           // Re-subscribe to all tracked sessions
           for (const [sessionId, afterSeq] of this.subscriptions) {
@@ -64,6 +69,7 @@ export class AmurgSocket {
         };
 
         this.ws.onmessage = (event) => {
+          this.resetStaleTimer();
           try {
             const env: Envelope = JSON.parse(event.data);
 
@@ -93,6 +99,7 @@ export class AmurgSocket {
         };
 
         this.ws.onclose = () => {
+          this.clearStaleTimer();
           this.onStateChange?.("disconnected");
           if (this.shouldReconnect) {
             this.onStateChange?.("reconnecting");
@@ -114,8 +121,26 @@ export class AmurgSocket {
 
   disconnect(): void {
     this.shouldReconnect = false;
+    this.clearStaleTimer();
     this.ws?.close();
     this.ws = null;
+  }
+
+  private resetStaleTimer(): void {
+    this.clearStaleTimer();
+    this.staleTimer = setTimeout(() => {
+      // No data received within the timeout — connection is likely dead.
+      // Force-close so onclose fires and triggers reconnect.
+      console.warn("[amurg-ws] connection stale, forcing reconnect");
+      this.ws?.close();
+    }, STALE_TIMEOUT_MS);
+  }
+
+  private clearStaleTimer(): void {
+    if (this.staleTimer) {
+      clearTimeout(this.staleTimer);
+      this.staleTimer = null;
+    }
   }
 
   on(type: string, handler: MessageHandler): () => void {
