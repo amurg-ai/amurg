@@ -168,7 +168,7 @@ function CopyableSessionId({ id }: { id: string }) {
 }
 
 export function Chat() {
-  const { activeSessionId, sessions, user, logout, stopSession, closeSession, deselectSession, responding, pendingPermissions } = useSessionStore();
+  const { activeSessionId, sessions, user, logout, stopSession, closeSession, responding, pendingPermissions } = useSessionStore();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
@@ -176,6 +176,40 @@ export function Chat() {
   const activeSession = activeSessionId ? sessions.find((s) => s.id === activeSessionId) : null;
   const isResponding = activeSessionId ? responding.has(activeSessionId) : false;
   const pendingCount = activeSessionId ? (pendingPermissions.get(activeSessionId)?.length || 0) : 0;
+
+  // --- BUG 1 FIX: manage browser history so mobile back returns to session list ---
+  const prevSessionRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (activeSessionId) {
+      if (prevSessionRef.current) {
+        // Switching between sessions — replace so back always returns to list
+        window.history.replaceState({ chatSession: true }, "");
+      } else {
+        // Entering a session from the list — push a new history entry
+        window.history.pushState({ chatSession: true }, "");
+      }
+    }
+    prevSessionRef.current = activeSessionId;
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const { activeSessionId: current } = useSessionStore.getState();
+      if (current) {
+        useSessionStore.getState().deselectSession();
+      }
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  const handleGoHome = useCallback(() => {
+    if (activeSessionId) {
+      window.history.back();
+      // popstate handler above will call deselectSession
+    }
+  }, [activeSessionId]);
 
   const handleCloseSession = () => {
     if (!activeSessionId) return;
@@ -199,7 +233,7 @@ export function Chat() {
           <div className="flex items-center justify-between p-4 border-b border-slate-700">
             <div className="flex flex-col">
               <div className="flex items-center gap-2">
-                <button onClick={deselectSession} className="text-lg font-semibold amurg-logo hover:opacity-80 transition-opacity">Amurg</button>
+                <button onClick={handleGoHome} className="text-lg font-semibold amurg-logo hover:opacity-80 transition-opacity">Amurg</button>
                 {user?.role === "admin" && (
                   <button
                     onClick={() => setAdminOpen(true)}
@@ -284,7 +318,7 @@ export function Chat() {
             <>
               {/* Home button */}
               <button
-                onClick={deselectSession}
+                onClick={handleGoHome}
                 className="p-2 -ml-1 md:ml-0 text-slate-400 hover:text-slate-200 rounded-lg transition-colors"
                 title="Back to agents"
               >

@@ -75,6 +75,7 @@ export function AgentHomeScreen() {
     createSession,
     selectSession,
     loadAgents,
+    loadSessions,
     addToast,
     nativeSessionsByAgent,
     nativeSessionsLoading,
@@ -95,7 +96,7 @@ export function AgentHomeScreen() {
     })),
   );
 
-  useEffect(() => { loadAgents(); }, [loadAgents]);
+  useEffect(() => { loadAgents(); loadSessions(); }, [loadAgents, loadSessions]);
 
   useEffect(() => {
     let cancelled = false;

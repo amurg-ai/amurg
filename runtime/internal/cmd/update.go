@@ -63,20 +63,20 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	latest := normalizeVersion(release.TagName)
 	current := normalizeVersion(version)
 
-	fmt.Fprintf(os.Stdout, "Current version: %s\n", current)
-	fmt.Fprintf(os.Stdout, "Latest version:  %s\n", latest)
+	_, _ = fmt.Fprintf(os.Stdout, "Current version: %s\n", current)
+	_, _ = fmt.Fprintf(os.Stdout, "Latest version:  %s\n", latest)
 
 	if check {
 		if current == latest {
-			fmt.Fprintln(os.Stdout, "You are up to date.")
+			_, _ = fmt.Fprintln(os.Stdout, "You are up to date.")
 		} else {
-			fmt.Fprintln(os.Stdout, "Update available.")
+			_, _ = fmt.Fprintln(os.Stdout, "Update available.")
 		}
 		return nil
 	}
 
 	if current == latest && !force {
-		fmt.Fprintln(os.Stdout, "Already up to date. Use --force to reinstall.")
+		_, _ = fmt.Fprintln(os.Stdout, "Already up to date. Use --force to reinstall.")
 		return nil
 	}
 
@@ -114,7 +114,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	// Download checksums and parse the expected hash.
-	fmt.Fprintln(os.Stdout, "Downloading checksums...")
+	_, _ = fmt.Fprintln(os.Stdout, "Downloading checksums...")
 	checksumsBody, err := httpGet(http.DefaultClient, checksumsURL)
 	if err != nil {
 		return fmt.Errorf("download checksums: %w", err)
@@ -125,7 +125,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	// Download the archive to a temp file.
-	fmt.Fprintf(os.Stdout, "Downloading %s...\n", archiveName)
+	_, _ = fmt.Fprintf(os.Stdout, "Downloading %s...\n", archiveName)
 	archiveData, err := httpGet(http.DefaultClient, archiveURL)
 	if err != nil {
 		return fmt.Errorf("download archive: %w", err)
@@ -136,7 +136,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	if actualHash != expectedHash {
 		return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedHash, actualHash)
 	}
-	fmt.Fprintln(os.Stdout, "Checksum verified.")
+	_, _ = fmt.Fprintln(os.Stdout, "Checksum verified.")
 
 	// Extract the binary from the archive.
 	var newBinary []byte
@@ -154,12 +154,12 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("replace binary: %w", err)
 	}
 
-	fmt.Fprintf(os.Stdout, "Updated amurg-runtime: %s → %s\n", current, latest)
+	_, _ = fmt.Fprintf(os.Stdout, "Updated amurg-runtime: %s → %s\n", current, latest)
 
 	// Warn if daemon is running.
 	if pid, err := daemon.ReadPID(); err == nil && pid != 0 && daemon.IsRunning(pid) {
-		fmt.Fprintf(os.Stdout, "⚠ The runtime daemon (PID %d) is still running the old version.\n", pid)
-		fmt.Fprintln(os.Stdout, "  Run 'amurg-runtime stop && amurg-runtime start' to restart with the new version.")
+		_, _ = fmt.Fprintf(os.Stdout, "⚠ The runtime daemon (PID %d) is still running the old version.\n", pid)
+		_, _ = fmt.Fprintln(os.Stdout, "  Run 'amurg-runtime stop && amurg-runtime start' to restart with the new version.")
 	}
 
 	return nil
@@ -178,7 +178,7 @@ func fetchLatestRelease(client *http.Client, endpoint string) (*githubRelease, e
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, endpoint)
@@ -204,7 +204,7 @@ func httpGet(client *http.Client, url string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
@@ -255,7 +255,7 @@ func extractFromTarGz(data []byte, name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer gr.Close()
+	defer func() { _ = gr.Close() }()
 
 	tr := tar.NewReader(gr)
 	for {
@@ -286,7 +286,7 @@ func extractFromZip(data []byte, name string) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
-			defer rc.Close()
+			defer func() { _ = rc.Close() }()
 			return io.ReadAll(rc)
 		}
 	}
@@ -304,7 +304,10 @@ func checkWritable(path string) error {
 		return err
 	}
 	name := tmp.Name()
-	tmp.Close()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
 	return os.Remove(name)
 }
 
@@ -319,22 +322,22 @@ func replaceBinary(dst string, newBinary []byte) error {
 	tmpPath := tmp.Name()
 
 	if _, err := tmp.Write(newBinary); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("write temp file: %w", err)
 	}
 	if err := tmp.Chmod(0o755); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("chmod temp file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return err
 	}
 
 	if err := os.Rename(tmpPath, dst); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("rename temp file: %w", err)
 	}
 	return nil

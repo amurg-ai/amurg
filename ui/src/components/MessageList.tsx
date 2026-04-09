@@ -35,6 +35,57 @@ function isHistoryChannel(channel: string): boolean {
   return channel === "history_user" || channel === "history_assistant" || channel === "history_tool";
 }
 
+function ToolCallGroup({ messages, sessionId }: { messages: StoredMessage[]; sessionId: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const toolNames = useMemo(() => {
+    const names: string[] = [];
+    for (const msg of messages) {
+      try {
+        const data = JSON.parse(msg.content);
+        if (data.type === "tool_use" && data.name) {
+          names.push(data.name);
+        }
+      } catch { /* skip */ }
+    }
+    return names;
+  }, [messages]);
+
+  const MAX_SHOWN = 3;
+  const shown = toolNames.slice(0, MAX_SHOWN);
+  const remaining = toolNames.length - MAX_SHOWN;
+  const summary = shown.join(", ") + (remaining > 0 ? ` +${remaining} more` : "");
+
+  return (
+    <div className="my-0.5">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 w-full text-left px-3 py-1.5 rounded
+                   bg-slate-800/30 border border-slate-700/30 hover:border-slate-600/50
+                   transition-colors text-xs font-mono"
+      >
+        <span className={`text-slate-500 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`}>
+          &#9654;
+        </span>
+        <span className="text-slate-400">
+          <span className="text-blue-400">Tools:</span> {summary}
+        </span>
+        <span className="ml-auto text-slate-600">
+          {toolNames.length} call{toolNames.length !== 1 ? "s" : ""}
+        </span>
+      </button>
+
+      {expanded && (
+        <div className="pl-4 border-l border-slate-700/30 ml-3 mt-1 space-y-0.5">
+          {messages.map(msg => (
+            <LogEntry key={msg.id} msg={msg} sessionId={sessionId} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function MessageList() {
   const { activeSessionId, messages, responding, turns } = useSessionStore();
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -69,16 +120,33 @@ export function MessageList() {
     return { historyMessages: history, liveMessages: live };
   }, [sessionMessages]);
 
-  // Group messages with turn separators
+  // Group messages with turn separators, collapsing consecutive tool messages
   const elements = useMemo(() => {
     const result: React.ReactNode[] = [];
     let lastTurnNumber = 0;
+    let toolBuffer: StoredMessage[] = [];
+    const sid = activeSessionId || "";
+
+    const flushTools = () => {
+      if (toolBuffer.length === 0) return;
+      if (toolBuffer.length < 3) {
+        for (const msg of toolBuffer) {
+          result.push(<LogEntry key={msg.id} msg={msg} sessionId={sid} />);
+        }
+      } else {
+        result.push(
+          <ToolCallGroup key={`toolgroup-${toolBuffer[0].id}`} messages={[...toolBuffer]} sessionId={sid} />
+        );
+      }
+      toolBuffer = [];
+    };
 
     for (const msg of liveMessages) {
       // Check if this message starts a new turn
       for (const turn of sessionTurns) {
         if (turn.turnNumber > lastTurnNumber && msg.seq > turn.startSeq) {
           if (turn.turnNumber > 0) {
+            flushTools();
             result.push(<TurnSeparator key={`turn-${turn.turnNumber}`} turn={turn} />);
             lastTurnNumber = turn.turnNumber;
           }
@@ -86,8 +154,16 @@ export function MessageList() {
         }
       }
 
-      result.push(<LogEntry key={msg.id} msg={msg} sessionId={activeSessionId || ""} />);
+      const isToolMsg = msg.channel === "tool" || msg.channel === "history_tool";
+      if (isToolMsg) {
+        toolBuffer.push(msg);
+      } else {
+        flushTools();
+        result.push(<LogEntry key={msg.id} msg={msg} sessionId={sid} />);
+      }
     }
+
+    flushTools();
 
     // Show completed turn separator if the last turn just completed
     for (const turn of sessionTurns) {
