@@ -199,6 +199,16 @@ export const useSessionStore = create<SessionState>((set, get) => {
       set({ pendingPermissions: updatedPerms, sessionToolAllowlist: updatedAllowlist });
     });
 
+    socket.on("session.reopened", (env: Envelope) => {
+      const payload = env.payload as { session_id: string };
+      const { sessions } = get();
+      set({
+        sessions: sessions.map(s =>
+          s.id === payload.session_id ? { ...s, state: "active" } : s
+        ),
+      });
+    });
+
     socket.on("native.sessions.response", (env: Envelope) => {
       const resp = env.payload as NativeSessionsResponse;
       const { nativeSessionsByAgent, _nativePendingCount } = get();
@@ -444,15 +454,8 @@ export const useSessionStore = create<SessionState>((set, get) => {
     },
 
     sendMessage: (content: string) => {
-      const { activeSessionId, messages, sessions, previewSessionIds } = get();
+      const { activeSessionId, messages, previewSessionIds } = get();
       if (!activeSessionId) return;
-
-      // CGR-28: refuse to send a message to a closed session
-      const session = sessions.find((s) => s.id === activeSessionId);
-      if (session?.state === "closed") {
-        get().addToast("Cannot send — session is closed.", "error");
-        return;
-      }
 
       // Promote preview session to permanent on first message
       if (previewSessionIds.has(activeSessionId)) {

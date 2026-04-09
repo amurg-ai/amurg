@@ -637,13 +637,29 @@ func (s *PostgresStore) SetSessionNativeHandle(ctx context.Context, id, handle s
 
 func (s *PostgresStore) AppendMessage(ctx context.Context, msg *Message) (int64, error) {
 	var seq int64
-	err := s.db.QueryRowContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err = tx.QueryRowContext(ctx,
 		`INSERT INTO messages (id, session_id, seq, direction, channel, content, created_at)
 		 VALUES ($1, $2, (SELECT COALESCE(MAX(seq),0)+1 FROM messages WHERE session_id = $3), $4, $5, $6, $7)
 		 RETURNING seq`,
 		msg.ID, msg.SessionID, msg.SessionID, msg.Direction, msg.Channel, msg.Content, msg.CreatedAt,
-	).Scan(&seq)
-	return seq, err
+	).Scan(&seq); err != nil {
+		return 0, err
+	}
+
+	if _, err = tx.ExecContext(ctx,
+		"UPDATE sessions SET updated_at = $1 WHERE id = $2",
+		time.Now(), msg.SessionID,
+	); err != nil {
+		return 0, err
+	}
+
+	return seq, tx.Commit()
 }
 
 func (s *PostgresStore) GetMessages(ctx context.Context, sessionID string, afterSeq int64, limit int) ([]Message, error) {
