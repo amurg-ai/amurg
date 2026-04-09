@@ -879,12 +879,26 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 			return
 		}
 
-		// CGR-26: reject messages to closed sessions.
+		// Reopen closed sessions on new user message instead of rejecting.
 		if sess.State == "closed" {
-			r.sendToClient(cc, protocol.TypeErrorResponse, msg.SessionID, protocol.ErrorResponse{
-				Code: "session_closed", Message: "cannot send messages to a closed session",
+			if err := r.store.UpdateSessionState(ctx, sess.ID, "active"); err != nil {
+				r.sendToClient(cc, protocol.TypeErrorResponse, msg.SessionID, protocol.ErrorResponse{
+					Code: "reopen_failed", Message: "failed to reopen closed session",
+				})
+				return
+			}
+			sess.State = "active"
+			if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{
+				ID: uuid.New().String(), OrgID: cc.orgID, Action: "session.reopened",
+				UserID: cc.userID, SessionID: sess.ID, AgentID: sess.AgentID,
+				CreatedAt: time.Now(),
+			}); err != nil {
+				r.logger.Warn("failed to log audit event", "action", "session.reopened", "error", err)
+			}
+			r.broadcastToSession(sess.ID, protocol.TypeSessionReopened, map[string]string{
+				"session_id": sess.ID,
 			})
-			return
+			r.logger.Info("reopened closed session on new message", "session_id", sess.ID, "user_id", cc.userID)
 		}
 
 		// Turn gating: reject if session is responding and turn-based mode is on.

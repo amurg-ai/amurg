@@ -183,6 +183,7 @@ const (
 	TypeSessionList       = "session.list"
 	TypeErrorResponse     = "error"
 	TypeSessionClosed     = "session.closed"
+	TypeSessionReopened   = "session.reopened"
 
 	// Permission flow
 	TypePermissionRequest  = "permission.request"

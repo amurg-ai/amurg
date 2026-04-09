@@ -725,12 +725,31 @@ func (s *SQLiteStore) SetSessionNativeHandle(ctx context.Context, id, handle str
 
 func (s *SQLiteStore) AppendMessage(ctx context.Context, msg *Message) (int64, error) {
 	var seq int64
-	err := s.db.QueryRowContext(ctx,
-		`INSERT INTO messages (id, session_id, seq, direction, channel, content, created_at)
-		 VALUES (?, ?, (SELECT COALESCE(MAX(seq),0)+1 FROM messages WHERE session_id = ?), ?, ?, ?, ?)
-		 RETURNING seq`,
-		msg.ID, msg.SessionID, msg.SessionID, msg.Direction, msg.Channel, msg.Content, msg.CreatedAt,
-	).Scan(&seq)
+	err := sqliteRetry(func() error {
+		tx, txErr := s.db.BeginTx(ctx, nil)
+		if txErr != nil {
+			return txErr
+		}
+		defer func() { _ = tx.Rollback() }()
+
+		if txErr = tx.QueryRowContext(ctx,
+			`INSERT INTO messages (id, session_id, seq, direction, channel, content, created_at)
+			 VALUES (?, ?, (SELECT COALESCE(MAX(seq),0)+1 FROM messages WHERE session_id = ?), ?, ?, ?, ?)
+			 RETURNING seq`,
+			msg.ID, msg.SessionID, msg.SessionID, msg.Direction, msg.Channel, msg.Content, msg.CreatedAt,
+		).Scan(&seq); txErr != nil {
+			return txErr
+		}
+
+		if _, txErr = tx.ExecContext(ctx,
+			"UPDATE sessions SET updated_at = ? WHERE id = ?",
+			time.Now(), msg.SessionID,
+		); txErr != nil {
+			return txErr
+		}
+
+		return tx.Commit()
+	})
 	return seq, err
 }
 

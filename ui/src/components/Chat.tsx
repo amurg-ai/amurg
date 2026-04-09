@@ -401,8 +401,8 @@ export function Chat() {
         {/* Permission banner */}
         {activeSessionId && <PermissionBanner />}
 
-        {/* Input — hidden for closed sessions (CGR-25) */}
-        {activeSessionId && activeSession?.state !== "closed" && <MessageInput />}
+        {/* Input — always shown for closed sessions so users can reopen by sending a message */}
+        {activeSessionId && <MessageInput />}
       </div>
 
       {/* Agent picker modal */}
