@@ -2,14 +2,20 @@ package router
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/amurg-ai/amurg/hub/auth"
 	"github.com/amurg-ai/amurg/hub/config"
 	"github.com/amurg-ai/amurg/hub/store"
+	"github.com/amurg-ai/amurg/pkg/protocol"
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 )
 
 func setupTestRouter(t *testing.T) (*Router, store.Store, *auth.Service) {
@@ -75,6 +81,34 @@ func seedUser(t *testing.T, authSvc *auth.Service, username string) string {
 		t.Fatal(err)
 	}
 	return user.ID
+}
+
+func newWSPair(t *testing.T) (*websocket.Conn, *websocket.Conn) {
+	t.Helper()
+
+	serverConnCh := make(chan *websocket.Conn, 1)
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade failed: %v", err)
+			return
+		}
+		serverConnCh <- conn
+	}))
+	t.Cleanup(srv.Close)
+
+	url := "ws" + strings.TrimPrefix(srv.URL, "http")
+	clientConn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	serverConn := <-serverConnCh
+	t.Cleanup(func() {
+		_ = serverConn.Close()
+		_ = clientConn.Close()
+	})
+	return serverConn, clientConn
 }
 
 func TestCreateSession_Success(t *testing.T) {
@@ -445,5 +479,158 @@ func TestCreateSession_AuditEvent(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected a session.create audit event to be logged")
+	}
+}
+
+func TestHandleRuntimeMessageSessionCreated_ActivatesSessionAndStoresNativeHandle(t *testing.T) {
+	rt, s, authSvc := setupTestRouter(t)
+
+	runtimeID := "rt-created"
+	agentID := "ag-created"
+	seedRuntimeAndAgent(t, s, runtimeID, agentID)
+
+	userID := seedUser(t, authSvc, "createduser")
+	ctx := context.Background()
+
+	sess, err := rt.CreateSession(ctx, userID, agentID)
+	if err != nil {
+		t.Fatalf("CreateSession failed: %v", err)
+	}
+
+	rt.handleRuntimeMessage(runtimeID, protocol.Envelope{
+		Type: protocol.TypeSessionCreated,
+		Payload: protocol.SessionCreated{
+			SessionID:    sess.ID,
+			OK:           true,
+			NativeHandle: "claude-session-123",
+		},
+	})
+
+	stored, err := s.GetSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("GetSession failed: %v", err)
+	}
+	if stored == nil {
+		t.Fatal("expected stored session")
+	}
+	if stored.State != "active" {
+		t.Fatalf("state = %q, want %q", stored.State, "active")
+	}
+	if stored.NativeHandle != "claude-session-123" {
+		t.Fatalf("native_handle = %q, want %q", stored.NativeHandle, "claude-session-123")
+	}
+}
+
+func TestHandleRuntimeMessageSessionCreated_FailureClosesSession(t *testing.T) {
+	rt, s, authSvc := setupTestRouter(t)
+
+	runtimeID := "rt-created-fail"
+	agentID := "ag-created-fail"
+	seedRuntimeAndAgent(t, s, runtimeID, agentID)
+
+	userID := seedUser(t, authSvc, "createdfailuser")
+	ctx := context.Background()
+
+	sess, err := rt.CreateSession(ctx, userID, agentID)
+	if err != nil {
+		t.Fatalf("CreateSession failed: %v", err)
+	}
+
+	rt.handleRuntimeMessage(runtimeID, protocol.Envelope{
+		Type: protocol.TypeSessionCreated,
+		Payload: protocol.SessionCreated{
+			SessionID: sess.ID,
+			OK:        false,
+			Error:     "resume failed",
+		},
+	})
+
+	stored, err := s.GetSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("GetSession failed: %v", err)
+	}
+	if stored == nil {
+		t.Fatal("expected stored session")
+	}
+	if stored.State != "closed" {
+		t.Fatalf("state = %q, want %q", stored.State, "closed")
+	}
+}
+
+func TestHandleClientMessage_ForwardsInteractiveInputWhileResponding(t *testing.T) {
+	rt, s, authSvc := setupTestRouter(t)
+	runtimeID := "rt-interactive"
+	agentID := "ag-interactive"
+	ctx := context.Background()
+
+	if err := s.UpsertRuntime(ctx, &store.Runtime{
+		ID:       runtimeID,
+		OrgID:    "default",
+		Name:     "test-runtime",
+		Online:   true,
+		LastSeen: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	caps, _ := json.Marshal(protocol.ProfileCaps{ExecModel: protocol.ExecInteractive})
+	if err := s.UpsertAgent(ctx, &store.Agent{
+		ID:        agentID,
+		OrgID:     "default",
+		RuntimeID: runtimeID,
+		Profile:   protocol.ProfileClaudeCode,
+		Name:      "interactive-agent",
+		Tags:      "{}",
+		Caps:      string(caps),
+		Security:  "{}",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	userID := seedUser(t, authSvc, "interactiveuser")
+	if err := s.CreateSession(ctx, &store.Session{
+		ID:        "sess-interactive",
+		OrgID:     "default",
+		UserID:    userID,
+		AgentID:   agentID,
+		RuntimeID: runtimeID,
+		Profile:   protocol.ProfileClaudeCode,
+		State:     "responding",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	runtimeServer, runtimeClient := newWSPair(t)
+	rt.mu.Lock()
+	rt.runtimes[runtimeID] = &runtimeConn{id: runtimeID, orgID: "default", conn: runtimeServer}
+	rt.mu.Unlock()
+
+	clientServer, _ := newWSPair(t)
+	cc := &clientConn{id: "cc-1", userID: userID, role: "user", orgID: "default", conn: clientServer}
+	env := protocol.Envelope{
+		Type: protocol.TypeInteractiveInput,
+		Payload: protocol.InteractiveInput{
+			SessionID: "sess-interactive",
+			MessageID: "msg-1",
+			Content:   "y",
+		},
+	}
+
+	rt.handleClientMessage(cc, env)
+
+	_ = runtimeClient.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, data, err := runtimeClient.ReadMessage()
+	if err != nil {
+		t.Fatalf("read runtime message: %v", err)
+	}
+
+	var forwarded protocol.Envelope
+	if err := json.Unmarshal(data, &forwarded); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	if forwarded.Type != protocol.TypeInteractiveInput {
+		t.Fatalf("expected interactive.input, got %s", forwarded.Type)
 	}
 }

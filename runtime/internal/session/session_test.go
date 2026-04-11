@@ -127,6 +127,44 @@ func TestSession_Send_ErrorRestoresActive(t *testing.T) {
 	}
 }
 
+func TestSession_SendInteractive_WhileRespondingUsesExistingDrain(t *testing.T) {
+	agent := newMockAgent()
+	handler := func(string, adapter.Output, bool) {}
+	sess := NewSession("s1", "e1", "u1", agent, handler, testLogger())
+
+	if err := sess.Send(context.Background(), []byte("hello"), 5*time.Second); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := sess.SendInteractive(context.Background(), []byte("y"), 5*time.Second); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	close(agent.outCh)
+	time.Sleep(50 * time.Millisecond)
+
+	if sess.State() != StateActive {
+		t.Errorf("expected state active after drain, got %s", sess.State())
+	}
+}
+
+func TestSession_SendInteractive_FromActiveStartsResponding(t *testing.T) {
+	agent := newMockAgent()
+	handler := func(string, adapter.Output, bool) {}
+	sess := NewSession("s1", "e1", "u1", agent, handler, testLogger())
+
+	if err := sess.SendInteractive(context.Background(), []byte("reply"), 5*time.Second); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if sess.State() != StateResponding {
+		t.Errorf("expected state responding after interactive send, got %s", sess.State())
+	}
+
+	close(agent.outCh)
+	time.Sleep(50 * time.Millisecond)
+}
+
 func TestSession_DrainOutput_ForwardsMessages(t *testing.T) {
 	agent := newMockAgent()
 

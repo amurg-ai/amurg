@@ -194,6 +194,8 @@ func (r *Runtime) handleHubMessage(env protocol.Envelope) error {
 		return r.handleSessionClose(env)
 	case protocol.TypeUserMessage:
 		return r.handleUserMessage(env)
+	case protocol.TypeInteractiveInput:
+		return r.handleInteractiveInput(env)
 	case protocol.TypeStopRequest:
 		return r.handleStop(env)
 	case protocol.TypeFileUpload:
@@ -250,6 +252,9 @@ func (r *Runtime) handleSessionCreate(env protocol.Envelope) error {
 		resp.Error = err.Error()
 		r.logger.Warn("session creation failed", "session_id", req.SessionID, "error", err)
 	} else {
+		// For resumed sessions the native handle is already known at creation
+		// time, which lets the hub surface handoff information immediately.
+		resp.NativeHandle = r.sessions.GetNativeHandle(req.SessionID)
 		r.bus.PublishType(eventbus.SessionCreated, map[string]string{
 			"session_id": req.SessionID,
 			"agent_id":   req.AgentID,
@@ -315,6 +320,34 @@ func (r *Runtime) handleUserMessage(env protocol.Envelope) error {
 			SessionID:    msg.SessionID,
 			InResponseTo: msg.MessageID,
 		})
+	}
+
+	return nil
+}
+
+func (r *Runtime) handleInteractiveInput(env protocol.Envelope) error {
+	data, _ := json.Marshal(env.Payload)
+	var msg protocol.InteractiveInput
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return fmt.Errorf("unmarshal interactive input: %w", err)
+	}
+
+	ctx := context.Background()
+	err := r.sessions.SendInteractive(ctx, msg.SessionID, []byte(msg.Content))
+
+	if err != nil && msg.AgentID != "" {
+		r.logger.Info("attempting lazy interactive session recreation",
+			"session_id", msg.SessionID, "agent_id", msg.AgentID,
+			"native_handle", msg.NativeHandle)
+		if createErr := r.sessions.CreateWithResume(ctx, msg.SessionID, msg.AgentID, msg.UserID, msg.NativeHandle, msg.PromptProfile); createErr == nil {
+			err = r.sessions.SendInteractive(ctx, msg.SessionID, []byte(msg.Content))
+		} else {
+			r.logger.Warn("lazy interactive session recreation failed", "session_id", msg.SessionID, "error", createErr)
+		}
+	}
+
+	if err != nil {
+		r.logger.Warn("send interactive input failed", "session_id", msg.SessionID, "error", err)
 	}
 
 	return nil

@@ -17,8 +17,8 @@ interface AskUserQuestionInput {
 
 /**
  * Renders an AskUserQuestion tool call as interactive cards.
- * When the user selects an option, the answer is sent as a regular
- * user message. Claude Code picks it up on the next --resume turn.
+ * When the user selects an option, the answer is routed through the
+ * active session transport. Interactive sessions can consume it mid-turn.
  */
 export function QuestionRenderer({
   content,

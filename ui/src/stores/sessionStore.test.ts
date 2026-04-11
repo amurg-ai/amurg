@@ -1,16 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+const socketHandlers = vi.hoisted(() => new Map<string, (env: unknown) => void>());
+
 // Mock websocket before importing the store.
 vi.mock("@/api/websocket", () => ({
   socket: {
-    on: vi.fn(),
+    on: vi.fn((type: string, handler: (env: unknown) => void) => {
+      socketHandlers.set(type, handler);
+      return vi.fn();
+    }),
     connect: vi.fn(),
     disconnect: vi.fn(),
     setStateCallback: vi.fn(),
     subscribe: vi.fn(),
     unsubscribe: vi.fn(),
+    send: vi.fn(() => true),
     sendMessage: vi.fn(() => true),
+    sendInteractiveInput: vi.fn(() => true),
     stopSession: vi.fn(),
+    requestNativeSessions: vi.fn(),
+    purgePending: vi.fn(),
   },
 }));
 
@@ -24,6 +33,7 @@ vi.mock("@/api/client", () => ({
     listAgents: vi.fn(() => Promise.resolve([])),
     listPromptProfiles: vi.fn(() => Promise.resolve([])),
     listSessions: vi.fn(() => Promise.resolve([])),
+    getSession: vi.fn(),
     createSession: vi.fn(),
     getMessages: vi.fn(() => Promise.resolve([])),
   },
@@ -35,6 +45,14 @@ import { socket } from "@/api/websocket";
 
 const mockedApi = vi.mocked(api);
 const mockedSocket = vi.mocked(socket);
+
+function getSocketHandler(type: string): (env: unknown) => void {
+  const handler = socketHandlers.get(type);
+  if (!handler) {
+    throw new Error(`missing socket handler for ${type}`);
+  }
+  return handler;
+}
 
 describe("sessionStore", () => {
   beforeEach(() => {
@@ -120,6 +138,44 @@ describe("sessionStore", () => {
         "sess-1",
         "test input",
       );
+    });
+
+    it("sends interactive input when the session is responding and the agent supports it", () => {
+      useSessionStore.setState({
+        activeSessionId: "sess-1",
+        messages: new Map(),
+        responding: new Set(["sess-1"]),
+        sessions: [
+          {
+            id: "sess-1",
+            user_id: "u1",
+            agent_id: "ag-1",
+            runtime_id: "rt-1",
+            profile: "claude-code",
+            state: "responding",
+            created_at: "2024-01-01T00:00:00Z",
+            updated_at: "2024-01-01T00:00:00Z",
+          },
+        ],
+        agents: [
+          {
+            id: "ag-1",
+            runtime_id: "rt-1",
+            profile: "claude-code",
+            name: "Claude",
+            online: true,
+            caps: JSON.stringify({ exec_model: "interactive" }),
+          },
+        ],
+      });
+
+      useSessionStore.getState().sendMessage("test input");
+
+      expect(mockedSocket.sendInteractiveInput).toHaveBeenCalledWith(
+        "sess-1",
+        "test input",
+      );
+      expect(mockedSocket.sendMessage).not.toHaveBeenCalled();
     });
 
     it("appends to existing messages", () => {
@@ -325,6 +381,16 @@ describe("sessionStore", () => {
         },
       ];
       mockedApi.getMessages.mockResolvedValue(msgs);
+      mockedApi.getSession.mockResolvedValue({
+        id: "sess-1",
+        user_id: "u1",
+        agent_id: "ag-1",
+        runtime_id: "rt-1",
+        profile: "claude-code",
+        state: "active",
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+      });
 
       await useSessionStore.getState().selectSession("sess-1");
 
@@ -349,6 +415,33 @@ describe("sessionStore", () => {
       expect(mockedSocket.subscribe).toHaveBeenCalledWith("sess-1", 0);
     });
 
+    it("subscribes before the history request resolves", async () => {
+      let resolveMessages!: (value: never[]) => void;
+      mockedApi.getMessages.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveMessages = resolve;
+          }),
+      );
+      mockedApi.getSession.mockResolvedValue({
+        id: "sess-1",
+        user_id: "u1",
+        agent_id: "ag-1",
+        runtime_id: "rt-1",
+        profile: "claude-code",
+        state: "active",
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+      });
+
+      const pending = useSessionStore.getState().selectSession("sess-1");
+
+      expect(mockedSocket.subscribe).toHaveBeenCalledWith("sess-1", 0);
+
+      resolveMessages([]);
+      await pending;
+    });
+
     it("subscribes with max seq from loaded messages", async () => {
       const msgs = [
         {
@@ -371,6 +464,16 @@ describe("sessionStore", () => {
         },
       ];
       mockedApi.getMessages.mockResolvedValue(msgs);
+      mockedApi.getSession.mockResolvedValue({
+        id: "sess-1",
+        user_id: "u1",
+        agent_id: "ag-1",
+        runtime_id: "rt-1",
+        profile: "claude-code",
+        state: "active",
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+      });
 
       await useSessionStore.getState().selectSession("sess-1");
 
@@ -391,12 +494,238 @@ describe("sessionStore", () => {
         },
       ]);
       useSessionStore.setState({ messages: existingMessages });
+      mockedApi.getSession.mockResolvedValue({
+        id: "sess-1",
+        user_id: "u1",
+        agent_id: "ag-1",
+        runtime_id: "rt-1",
+        profile: "claude-code",
+        state: "active",
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+      });
 
       await useSessionStore.getState().selectSession("sess-1");
 
       expect(mockedApi.getMessages).not.toHaveBeenCalled();
       // Should still subscribe with max seq from existing messages.
       expect(mockedSocket.subscribe).toHaveBeenCalledWith("sess-1", 3);
+    });
+
+    it("refreshes session metadata while selecting", async () => {
+      mockedApi.getMessages.mockResolvedValue([]);
+      mockedApi.getSession.mockResolvedValue({
+        id: "sess-1",
+        user_id: "u1",
+        agent_id: "ag-1",
+        runtime_id: "rt-1",
+        profile: "claude-code",
+        state: "closed",
+        native_handle: "claude-session-123",
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:01Z",
+      });
+      useSessionStore.setState({
+        sessions: [
+          {
+            id: "sess-1",
+            user_id: "u1",
+            agent_id: "ag-1",
+            runtime_id: "rt-1",
+            profile: "claude-code",
+            state: "creating",
+            created_at: "2024-01-01T00:00:00Z",
+            updated_at: "2024-01-01T00:00:00Z",
+          },
+        ],
+      });
+
+      await useSessionStore.getState().selectSession("sess-1");
+
+      const session = useSessionStore.getState().sessions[0];
+      expect(session.state).toBe("closed");
+      expect(session.native_handle).toBe("claude-session-123");
+    });
+  });
+
+  describe("socket message merging", () => {
+    it("replaces a live agent output with the persisted history copy for the same seq", () => {
+      const onAgentOutput = getSocketHandler("agent.output");
+      const onHistoryResponse = getSocketHandler("history.response");
+
+      useSessionStore.setState({
+        messages: new Map([["sess-1", []]]),
+      });
+
+      onAgentOutput({
+        payload: {
+          session_id: "sess-1",
+          seq: 5,
+          channel: "stdout",
+          content: "hello",
+        },
+      });
+
+      onHistoryResponse({
+        payload: {
+          session_id: "sess-1",
+          messages: [
+            {
+              id: "persisted-1",
+              session_id: "sess-1",
+              seq: 5,
+              direction: "agent",
+              channel: "stdout",
+              content: "hello",
+              created_at: "2024-01-01T00:00:00Z",
+            },
+          ],
+        },
+      });
+
+      const messages = useSessionStore.getState().messages.get("sess-1") || [];
+      expect(messages).toHaveLength(1);
+      expect(messages[0].id).toBe("persisted-1");
+      expect(messages[0].seq).toBe(5);
+    });
+
+    it("replaces an optimistic user message when history arrives with the persisted seq", () => {
+      const onHistoryResponse = getSocketHandler("history.response");
+
+      useSessionStore.setState({
+        messages: new Map([
+          [
+            "sess-1",
+            [
+              {
+                id: "msg-1",
+                session_id: "sess-1",
+                seq: 0,
+                direction: "user",
+                channel: "stdin",
+                content: "ship it",
+                created_at: "2024-01-01T00:00:00Z",
+              },
+            ],
+          ],
+        ]),
+      });
+
+      onHistoryResponse({
+        payload: {
+          session_id: "sess-1",
+          messages: [
+            {
+              id: "msg-1",
+              session_id: "sess-1",
+              seq: 7,
+              direction: "user",
+              channel: "stdin",
+              content: "ship it",
+              created_at: "2024-01-01T00:00:01Z",
+            },
+          ],
+        },
+      });
+
+      const messages = useSessionStore.getState().messages.get("sess-1") || [];
+      expect(messages).toHaveLength(1);
+      expect(messages[0].id).toBe("msg-1");
+      expect(messages[0].seq).toBe(7);
+    });
+  });
+
+  describe("socket session metadata updates", () => {
+    it("marks a session active and stores native_handle on session.created", () => {
+      const onSessionCreated = getSocketHandler("session.created");
+
+      useSessionStore.setState({
+        sessions: [
+          {
+            id: "sess-1",
+            user_id: "u1",
+            agent_id: "ag-1",
+            runtime_id: "rt-1",
+            profile: "claude-code",
+            state: "creating",
+            created_at: "2024-01-01T00:00:00Z",
+            updated_at: "2024-01-01T00:00:00Z",
+          },
+        ],
+      });
+
+      onSessionCreated({
+        payload: {
+          session_id: "sess-1",
+          ok: true,
+          native_handle: "claude-session-123",
+        },
+      });
+
+      const session = useSessionStore.getState().sessions[0];
+      expect(session.state).toBe("active");
+      expect(session.native_handle).toBe("claude-session-123");
+    });
+
+    it("closes a rejected session and surfaces the runtime error", () => {
+      const onSessionCreated = getSocketHandler("session.created");
+
+      useSessionStore.setState({
+        sessions: [
+          {
+            id: "sess-1",
+            user_id: "u1",
+            agent_id: "ag-1",
+            runtime_id: "rt-1",
+            profile: "claude-code",
+            state: "creating",
+            created_at: "2024-01-01T00:00:00Z",
+            updated_at: "2024-01-01T00:00:00Z",
+          },
+        ],
+      });
+
+      onSessionCreated({
+        payload: {
+          session_id: "sess-1",
+          ok: false,
+          error: "resume failed",
+        },
+      });
+
+      const state = useSessionStore.getState();
+      expect(state.sessions[0].state).toBe("closed");
+      expect(state.toasts[0]?.message).toBe("resume failed");
+    });
+
+    it("updates the session native_handle from turn.completed", () => {
+      const onTurnCompleted = getSocketHandler("turn.completed");
+
+      useSessionStore.setState({
+        sessions: [
+          {
+            id: "sess-1",
+            user_id: "u1",
+            agent_id: "ag-1",
+            runtime_id: "rt-1",
+            profile: "claude-code",
+            state: "responding",
+            created_at: "2024-01-01T00:00:00Z",
+            updated_at: "2024-01-01T00:00:00Z",
+          },
+        ],
+      });
+
+      onTurnCompleted({
+        payload: {
+          session_id: "sess-1",
+          native_handle: "claude-session-456",
+        },
+      });
+
+      const session = useSessionStore.getState().sessions[0];
+      expect(session.state).toBe("active");
+      expect(session.native_handle).toBe("claude-session-456");
     });
   });
 });

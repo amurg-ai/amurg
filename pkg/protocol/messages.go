@@ -108,6 +108,18 @@ type UserMessage struct {
 	NativeHandle  string `json:"native_handle,omitempty"`  // for lazy session recreation
 }
 
+// InteractiveInput carries follow-up input to a running interactive session
+// without starting a new turn.
+type InteractiveInput struct {
+	SessionID     string `json:"session_id"`
+	MessageID     string `json:"message_id"` // client-generated UUID for idempotency
+	Content       string `json:"content"`
+	AgentID       string `json:"agent_id,omitempty"`       // for lazy session recreation
+	UserID        string `json:"user_id,omitempty"`        // for lazy session recreation
+	PromptProfile string `json:"prompt_profile,omitempty"` // for lazy session recreation
+	NativeHandle  string `json:"native_handle,omitempty"`  // for lazy session recreation
+}
+
 // AgentOutput carries agent output back (runtime → hub → UI).
 type AgentOutput struct {
 	SessionID string `json:"session_id"`
@@ -158,19 +170,20 @@ type Pong struct{}
 
 const (
 	// Runtime ↔ Hub
-	TypeRuntimeHello   = "runtime.hello"
-	TypeHelloAck       = "hello.ack"
-	TypeSessionCreate  = "session.create"
-	TypeSessionCreated = "session.created"
-	TypeSessionClose   = "session.close"
-	TypeUserMessage    = "user.message"
-	TypeAgentOutput    = "agent.output"
-	TypeTurnStarted    = "turn.started"
-	TypeTurnCompleted  = "turn.completed"
-	TypeStopRequest    = "stop.request"
-	TypeStopAck        = "stop.ack"
-	TypePing           = "ping"
-	TypePong           = "pong"
+	TypeRuntimeHello     = "runtime.hello"
+	TypeHelloAck         = "hello.ack"
+	TypeSessionCreate    = "session.create"
+	TypeSessionCreated   = "session.created"
+	TypeSessionClose     = "session.close"
+	TypeUserMessage      = "user.message"
+	TypeInteractiveInput = "interactive.input"
+	TypeAgentOutput      = "agent.output"
+	TypeTurnStarted      = "turn.started"
+	TypeTurnCompleted    = "turn.completed"
+	TypeStopRequest      = "stop.request"
+	TypeStopAck          = "stop.ack"
+	TypePing             = "ping"
+	TypePong             = "pong"
 
 	// Token refresh
 	TypeRuntimeTokenRefresh = "runtime.token_refresh"

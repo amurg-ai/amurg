@@ -70,7 +70,28 @@ cp runtime/deploy/config.example.json runtime/deploy/config.local.json
 
 ### Endpoints (Agents)
 
-Each endpoint defines an agent the runtime can manage. Four adapter profiles are supported:
+Each endpoint defines an agent the runtime can manage.
+
+**Claude Code** supports two transports:
+- `stream-json`: persistent bidirectional `claude -p` session over stdin/stdout
+- `tmux`: native interactive Claude TUI inside tmux, suitable when you want true terminal interaction instead of print mode
+
+Example:
+```json
+{
+  "id": "claude-code",
+  "name": "Claude Code",
+  "profile": "claude-code",
+  "claude_code": {
+    "command": "claude",
+    "work_dir": "/path/to/project",
+    "transport": "tmux",
+    "model": "sonnet"
+  }
+}
+```
+
+Other built-in profiles:
 
 **CLI** — Long-running interactive process (bash, python, etc.):
 ```json

@@ -81,6 +81,7 @@ export interface TurnCompleted {
   session_id: string;
   in_response_to?: string;
   exit_code?: number;
+  native_handle?: string;
 }
 
 export interface UserInfo {

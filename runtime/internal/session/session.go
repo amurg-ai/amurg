@@ -3,6 +3,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -15,10 +16,10 @@ import (
 type State string
 
 const (
-	StateActive    State = "active"
+	StateActive     State = "active"
 	StateResponding State = "responding"
-	StateIdle      State = "idle"
-	StateClosed   State = "closed"
+	StateIdle       State = "idle"
+	StateClosed     State = "closed"
 )
 
 // OutputHandler is called for each piece of agent output.
@@ -31,13 +32,13 @@ type Session struct {
 	UserID    string
 	CreatedAt time.Time
 
-	agent   adapter.AgentSession
-	state   atomic.Value // State
-	logger  *slog.Logger
+	agent    adapter.AgentSession
+	state    atomic.Value // State
+	logger   *slog.Logger
 	onOutput OutputHandler
 
-	mu       sync.Mutex
-	seq      int64
+	mu  sync.Mutex
+	seq int64
 }
 
 // NewSession creates a new session wrapping an agent session.
@@ -82,6 +83,29 @@ func (s *Session) Send(ctx context.Context, input []byte, idleTimeout time.Durat
 	go s.drainOutput(idleTimeout)
 
 	return nil
+}
+
+// SendInteractive delivers follow-up input to a running interactive session.
+// If the runtime recreated the local wrapper while the native process is still
+// alive, this also restarts output draining for the current turn.
+func (s *Session) SendInteractive(ctx context.Context, input []byte, idleTimeout time.Duration) error {
+	state := s.State()
+	if state == StateClosed {
+		return fmt.Errorf("session closed")
+	}
+
+	s.logger.Info("sending interactive input", "bytes", len(input), "state", state)
+	if state == StateActive || state == StateIdle {
+		s.state.Store(StateResponding)
+		if err := s.agent.Send(ctx, input); err != nil {
+			s.state.Store(state)
+			return err
+		}
+		go s.drainOutput(idleTimeout)
+		return nil
+	}
+
+	return s.agent.Send(ctx, input)
 }
 
 // Stop requests the agent to stop.

@@ -30,6 +30,83 @@ function assignSequenceNumbers(sessions: SessionInfo[]): SessionInfo[] {
   return sessions;
 }
 
+function compareMessages(a: StoredMessage, b: StoredMessage): number {
+  const aSeq = a.seq > 0 ? a.seq : Number.MAX_SAFE_INTEGER;
+  const bSeq = b.seq > 0 ? b.seq : Number.MAX_SAFE_INTEGER;
+  if (aSeq !== bSeq) return aSeq - bSeq;
+  return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+}
+
+function mergeMessages(existing: StoredMessage[], incoming: StoredMessage[]): StoredMessage[] {
+  const merged = [...existing];
+
+  for (const msg of incoming) {
+    let idx = -1;
+
+    if (msg.seq > 0) {
+      idx = merged.findIndex((m) => m.seq > 0 && m.seq === msg.seq);
+    }
+    if (idx === -1 && msg.id) {
+      idx = merged.findIndex((m) => m.id === msg.id);
+    }
+
+    if (idx >= 0) {
+      merged[idx] = msg;
+    } else {
+      merged.push(msg);
+    }
+  }
+
+  merged.sort(compareMessages);
+  return merged;
+}
+
+function patchSession(
+  sessions: SessionInfo[],
+  sessionId: string,
+  patch: Partial<SessionInfo>,
+): SessionInfo[] {
+  const updatedAt = patch.updated_at || new Date().toISOString();
+  return sessions.map((session) =>
+    session.id === sessionId
+      ? {
+          ...session,
+          ...patch,
+          updated_at: updatedAt,
+        }
+      : session,
+  );
+}
+
+function upsertSession(sessions: SessionInfo[], incoming: SessionInfo): SessionInfo[] {
+  const exists = sessions.some((session) => session.id === incoming.id);
+  const next = exists
+    ? sessions.map((session) => (session.id === incoming.id ? incoming : session))
+    : [incoming, ...sessions];
+  return assignSequenceNumbers(next);
+}
+
+function parseAgentExecModel(agent: AgentInfo | undefined): string | null {
+  if (!agent?.caps) return null;
+  try {
+    const caps = JSON.parse(agent.caps);
+    return typeof caps.exec_model === "string" ? caps.exec_model : null;
+  } catch {
+    return null;
+  }
+}
+
+function sessionAllowsInteractiveInput(
+  sessionId: string,
+  sessions: SessionInfo[],
+  agents: AgentInfo[],
+): boolean {
+  const session = sessions.find((entry) => entry.id === sessionId);
+  if (!session) return false;
+  const agent = agents.find((entry) => entry.id === session.agent_id);
+  return parseAgentExecModel(agent) === "interactive";
+}
+
 interface SessionState {
   // Auth
   user: UserInfo | null;
@@ -67,6 +144,7 @@ interface SessionState {
   selectSession: (sessionId: string) => Promise<void>;
   deselectSession: () => void;
   sendMessage: (content: string) => void;
+  canSendInteractiveInput: (sessionId: string) => boolean;
   stopSession: () => void;
   closeSession: (sessionId: string) => Promise<void>;
   cleanupSession: (sessionId: string) => void;
@@ -82,6 +160,31 @@ export const useSessionStore = create<SessionState>((set, get) => {
   // Handlers use get() for fresh state, so they work regardless of
   // when the WebSocket actually connects.
   (function setupSocketHandlers() {
+    socket.on("session.created", (env: Envelope) => {
+      const payload = env.payload as {
+        session_id: string;
+        ok: boolean;
+        error?: string;
+        native_handle?: string;
+      };
+      const { sessions } = get();
+
+      if (!payload.ok) {
+        set({ sessions: patchSession(sessions, payload.session_id, { state: "closed" }) });
+        if (payload.error) {
+          get().addToast(payload.error, "error");
+        }
+        return;
+      }
+
+      set({
+        sessions: patchSession(sessions, payload.session_id, {
+          state: "active",
+          ...(payload.native_handle ? { native_handle: payload.native_handle } : {}),
+        }),
+      });
+    });
+
     socket.on("agent.output", (env: Envelope) => {
       const output = env.payload as AgentOutput;
       const { messages } = get();
@@ -98,7 +201,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
       };
 
       const updated = new Map(messages);
-      updated.set(output.session_id, [...sessionMessages, newMessage]);
+      updated.set(output.session_id, mergeMessages(sessionMessages, [newMessage]));
       set({ messages: updated });
 
       // Increment unread count if not the active session
@@ -112,7 +215,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
 
     socket.on("turn.started", (env: Envelope) => {
       const payload = env.payload as { session_id: string };
-      const { responding, turns, messages } = get();
+      const { responding, turns, messages, sessions } = get();
 
       // Mark responding
       const updatedResponding = new Set(responding);
@@ -130,12 +233,16 @@ export const useSessionStore = create<SessionState>((set, get) => {
       const updatedTurns = new Map(turns);
       updatedTurns.set(payload.session_id, [...sessionTurns, newTurn]);
 
-      set({ responding: updatedResponding, turns: updatedTurns });
+      set({
+        responding: updatedResponding,
+        turns: updatedTurns,
+        sessions: patchSession(sessions, payload.session_id, { state: "responding" }),
+      });
     });
 
     socket.on("turn.completed", (_env: Envelope) => {
       const payload = _env.payload as TurnCompleted;
-      const { responding, turns, messages } = get();
+      const { responding, turns, messages, sessions } = get();
 
       // Clear responding
       const updatedResponding = new Set(responding);
@@ -154,7 +261,14 @@ export const useSessionStore = create<SessionState>((set, get) => {
       const updatedTurns = new Map(turns);
       updatedTurns.set(payload.session_id, sessionTurns);
 
-      set({ responding: updatedResponding, turns: updatedTurns });
+      set({
+        responding: updatedResponding,
+        turns: updatedTurns,
+        sessions: patchSession(sessions, payload.session_id, {
+          state: "active",
+          ...(payload.native_handle ? { native_handle: payload.native_handle } : {}),
+        }),
+      });
     });
 
     socket.on("history.response", (env: Envelope) => {
@@ -164,14 +278,10 @@ export const useSessionStore = create<SessionState>((set, get) => {
       };
       const { messages } = get();
       const existing = messages.get(payload.session_id) || [];
-      const existingIds = new Set(existing.map((m) => m.id));
-      const newMsgs = payload.messages.filter((m) => !existingIds.has(m.id));
-
-      if (newMsgs.length > 0) {
-        const updated = new Map(messages);
-        updated.set(payload.session_id, [...existing, ...newMsgs]);
-        set({ messages: updated });
-      }
+      const merged = mergeMessages(existing, payload.messages || []);
+      const updated = new Map(messages);
+      updated.set(payload.session_id, merged);
+      set({ messages: updated });
     });
 
     socket.on("session.closed", (env: Envelope) => {
@@ -180,9 +290,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
 
       // Update session state in the sessions array
       set({
-        sessions: sessions.map(s =>
-          s.id === payload.session_id ? { ...s, state: "closed" } : s
-        ),
+        sessions: patchSession(sessions, payload.session_id, { state: "closed" }),
       });
 
       // CGR-28: drop any queued outbound messages for this session so they
@@ -203,9 +311,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
       const payload = env.payload as { session_id: string };
       const { sessions } = get();
       set({
-        sessions: sessions.map(s =>
-          s.id === payload.session_id ? { ...s, state: "active" } : s
-        ),
+        sessions: patchSession(sessions, payload.session_id, { state: "active" }),
       });
     });
 
@@ -398,29 +504,55 @@ export const useSessionStore = create<SessionState>((set, get) => {
       unreadCounts.delete(sessionId);
       set({ activeSessionId: sessionId, unreadCounts });
 
-      // Load history if not already loaded
-      const { messages } = get();
-      if (!messages.has(sessionId)) {
-        try {
-          const msgs = await api.getMessages(sessionId);
-          const updated = new Map(get().messages);
-          updated.set(sessionId, msgs || []);
-          set({ messages: updated });
-        } catch {
-          // Session might not have messages yet
-          const updated = new Map(get().messages);
-          updated.set(sessionId, []);
-          set({ messages: updated });
-        }
-      }
-
-      // Subscribe for live updates
-      const sessionMessages = get().messages.get(sessionId) || [];
-      const maxSeq = sessionMessages.reduce(
+      // Subscribe immediately to avoid a race where live output arrives between
+      // the history fetch and the WebSocket subscription.
+      const currentMessages = get().messages.get(sessionId) || [];
+      const initialMaxSeq = currentMessages.reduce(
         (max, m) => Math.max(max, m.seq),
         0
       );
-      socket.subscribe(sessionId, maxSeq);
+      socket.subscribe(sessionId, initialMaxSeq);
+
+      const refreshSession = async () => {
+        try {
+          const latestSession = await api.getSession(sessionId);
+          set({ sessions: upsertSession(get().sessions, latestSession) });
+        } catch {
+          // Session metadata refresh is best-effort.
+        }
+      };
+
+      // Load history if not already loaded, then advance the tracked replay
+      // cursor once the merged transcript is known.
+      const hasLoadedMessages = get().messages.has(sessionId);
+      if (!hasLoadedMessages) {
+        try {
+          const [msgs] = await Promise.all([
+            api.getMessages(sessionId),
+            refreshSession(),
+          ]);
+          const updated = new Map(get().messages);
+          const existing = updated.get(sessionId) || [];
+          const merged = mergeMessages(existing, msgs || []);
+          updated.set(sessionId, merged);
+          set({ messages: updated });
+
+          const mergedMaxSeq = merged.reduce(
+            (max, m) => Math.max(max, m.seq),
+            0
+          );
+          socket.subscribe(sessionId, mergedMaxSeq);
+        } catch {
+          // Session might not have messages yet
+          if (!get().messages.has(sessionId)) {
+            const updated = new Map(get().messages);
+            updated.set(sessionId, []);
+            set({ messages: updated });
+          }
+        }
+      } else {
+        void refreshSession();
+      }
     },
 
     deselectSession: () => {
@@ -454,7 +586,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
     },
 
     sendMessage: (content: string) => {
-      const { activeSessionId, messages, previewSessionIds } = get();
+      const { activeSessionId, messages, previewSessionIds, responding, sessions, agents } = get();
       if (!activeSessionId) return;
 
       // Promote preview session to permanent on first message
@@ -479,9 +611,17 @@ export const useSessionStore = create<SessionState>((set, get) => {
       const sessionMessages = messages.get(activeSessionId) || [];
       const updated = new Map(messages);
       updated.set(activeSessionId, [...sessionMessages, userMessage]);
-      set({ messages: updated });
+      set({
+        messages: updated,
+        sessions: patchSession(get().sessions, activeSessionId, {}),
+      });
 
-      const sent = socket.sendMessage(activeSessionId, content);
+      const shouldSendInteractive =
+        responding.has(activeSessionId) &&
+        sessionAllowsInteractiveInput(activeSessionId, sessions, agents);
+      const sent = shouldSendInteractive
+        ? socket.sendInteractiveInput(activeSessionId, content)
+        : socket.sendMessage(activeSessionId, content);
       if (!sent) {
         // Remove the optimistic message on failure
         const currentMessages = get().messages;
@@ -494,6 +634,11 @@ export const useSessionStore = create<SessionState>((set, get) => {
         set({ messages: rolledBack });
         get().addToast("Message not sent — connection lost. It will be retried when reconnected.", "error");
       }
+    },
+
+    canSendInteractiveInput: (sessionId: string) => {
+      const { sessions, agents } = get();
+      return sessionAllowsInteractiveInput(sessionId, sessions, agents);
     },
 
     stopSession: () => {

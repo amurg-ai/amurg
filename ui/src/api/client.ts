@@ -88,6 +88,8 @@ export const api = {
 
   listSessions: () => request<SessionInfo[]>("/api/sessions"),
 
+  getSession: (sessionId: string) => request<SessionInfo>(`/api/sessions/${sessionId}`),
+
   createSession: (agentId: string, resumeSessionId?: string, promptProfile?: string) =>
     request<SessionInfo>("/api/sessions", {
       method: "POST",

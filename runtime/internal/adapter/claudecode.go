@@ -41,7 +41,14 @@ func (a *ClaudeCodeAdapter) Start(ctx context.Context, cfg config.AgentConfig) (
 		security: cfg.Security,
 		output:   make(chan Output, 64),
 	}
-	return sess, nil
+	switch resolvedCfg.Transport {
+	case "", "stream-json":
+		return sess, nil
+	case "tmux":
+		return newClaudeTMuxSession(ctx, resolvedCfg, cfg.Security), nil
+	default:
+		return nil, fmt.Errorf("unsupported claude transport %q", resolvedCfg.Transport)
+	}
 }
 
 // claudeCodeSession manages a persistent Claude Code conversation.
@@ -583,33 +590,15 @@ func (s *claudeCodeSession) LoadNativeHistory() []Output {
 	s.mu.Lock()
 	sid := s.sessionID
 	s.mu.Unlock()
+	return loadClaudeNativeHistory(sid)
+}
+
+func loadClaudeNativeHistory(sid string) []Output {
 	if sid == "" {
 		return nil
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil
-	}
-
-	// Find the JSONL file across all project directories.
-	projectsDir := filepath.Join(home, ".claude", "projects")
-	dirEntries, err := os.ReadDir(projectsDir)
-	if err != nil {
-		return nil
-	}
-
-	var jsonlPath string
-	for _, de := range dirEntries {
-		if !de.IsDir() {
-			continue
-		}
-		candidate := filepath.Join(projectsDir, de.Name(), sid+".jsonl")
-		if _, err := os.Stat(candidate); err == nil {
-			jsonlPath = candidate
-			break
-		}
-	}
+	jsonlPath := findClaudeSessionJSONL(sid)
 	if jsonlPath == "" {
 		return nil
 	}
@@ -699,6 +688,34 @@ func (s *claudeCodeSession) LoadNativeHistory() []Output {
 	}
 
 	return history
+}
+
+func findClaudeSessionJSONL(sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+
+	projectsDir := filepath.Join(home, ".claude", "projects")
+	dirEntries, err := os.ReadDir(projectsDir)
+	if err != nil {
+		return ""
+	}
+
+	for _, de := range dirEntries {
+		if !de.IsDir() {
+			continue
+		}
+		candidate := filepath.Join(projectsDir, de.Name(), sessionID+".jsonl")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return ""
 }
 
 // ListNativeSessions scans ~/.claude/projects/*/sessions-index.json
@@ -799,6 +816,18 @@ func decodeProjectPath(dirName string) string {
 		return ""
 	}
 	return "/" + strings.ReplaceAll(dirName[1:], "-", "/")
+}
+
+func encodeProjectPath(projectPath string) string {
+	cleaned := filepath.Clean(projectPath)
+	if cleaned == "" || cleaned == "." || cleaned == string(os.PathSeparator) {
+		return ""
+	}
+	trimmed := strings.TrimPrefix(cleaned, string(os.PathSeparator))
+	if trimmed == "" {
+		return ""
+	}
+	return "-" + strings.ReplaceAll(trimmed, string(os.PathSeparator), "-")
 }
 
 // scanJSONLMetadata reads a JSONL file to extract the first user prompt and message count.

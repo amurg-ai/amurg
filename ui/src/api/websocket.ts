@@ -15,6 +15,9 @@ const MAX_PENDING_QUEUE = 50;
 // Server sends WebSocket pings every 30s; if we receive nothing for 75s the
 // connection is likely dead (proxy killed it silently). Force-close and reconnect.
 const STALE_TIMEOUT_MS = 75_000;
+// Browsers do not expose WebSocket control ping/pong frames to JS, so send a
+// small application-level heartbeat to get a visible response from the hub.
+const HEARTBEAT_INTERVAL_MS = 25_000;
 
 export class AmurgSocket {
   private ws: WebSocket | null = null;
@@ -27,6 +30,7 @@ export class AmurgSocket {
   private subscriptions = new Map<string, number>(); // sessionId → afterSeq
   private pendingQueue: PendingMessage[] = [];
   private staleTimer: ReturnType<typeof setTimeout> | null = null;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -48,6 +52,7 @@ export class AmurgSocket {
           this.reconnectDelay = 1000;
           this.onStateChange?.("connected");
           this.resetStaleTimer();
+          this.startHeartbeat();
 
           // Re-subscribe to all tracked sessions
           for (const [sessionId, afterSeq] of this.subscriptions) {
@@ -100,6 +105,7 @@ export class AmurgSocket {
 
         this.ws.onclose = () => {
           this.clearStaleTimer();
+          this.clearHeartbeat();
           this.onStateChange?.("disconnected");
           if (this.shouldReconnect) {
             this.onStateChange?.("reconnecting");
@@ -122,6 +128,7 @@ export class AmurgSocket {
   disconnect(): void {
     this.shouldReconnect = false;
     this.clearStaleTimer();
+    this.clearHeartbeat();
     this.ws?.close();
     this.ws = null;
   }
@@ -143,6 +150,20 @@ export class AmurgSocket {
     }
   }
 
+  private startHeartbeat(): void {
+    this.clearHeartbeat();
+    this.heartbeatTimer = setInterval(() => {
+      this.send("ping", {});
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  private clearHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
   on(type: string, handler: MessageHandler): () => void {
     if (!this.handlers.has(type)) {
       this.handlers.set(type, new Set());
@@ -155,8 +176,13 @@ export class AmurgSocket {
 
   send(type: string, payload: unknown, sessionId?: string): boolean {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      // Enqueue user messages and permission responses when not connected
-      if (type === "user.message" || type === "permission.response") {
+      // Enqueue operations that can be safely replayed on reconnect.
+      if (
+        type === "user.message" ||
+        type === "interactive.input" ||
+        type === "permission.response" ||
+        type === "native.sessions.list"
+      ) {
         if (this.pendingQueue.length < MAX_PENDING_QUEUE) {
           this.pendingQueue.push({ type, payload, sessionId });
         }
@@ -179,6 +205,19 @@ export class AmurgSocket {
     const messageId = uuid();
     return this.send(
       "user.message",
+      {
+        session_id: sessionId,
+        message_id: messageId,
+        content,
+      },
+      sessionId
+    );
+  }
+
+  sendInteractiveInput(sessionId: string, content: string): boolean {
+    const messageId = uuid();
+    return this.send(
+      "interactive.input",
       {
         session_id: sessionId,
         message_id: messageId,

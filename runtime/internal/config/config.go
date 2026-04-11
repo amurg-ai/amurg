@@ -119,6 +119,7 @@ type ClaudeCodeConfig struct {
 	WorkDir         string            `json:"work_dir,omitempty"`
 	Env             map[string]string `json:"env,omitempty"`
 	Model           string            `json:"model,omitempty"`           // e.g. "sonnet"
+	Transport       string            `json:"transport,omitempty"`       // "stream-json" (default) or "tmux"
 	PermissionMode  string            `json:"permission_mode,omitempty"` // e.g. "dangerously-skip-permissions"
 	MaxTurns        int               `json:"max_turns,omitempty"`
 	AllowedTools    []string          `json:"allowed_tools,omitempty"`
@@ -289,6 +290,14 @@ func (c *Config) validate() error {
 				// valid
 			default:
 				return fmt.Errorf("agents[%d].claude_code.permission_mode %q is not recognized; use skip, acceptEdits, plan, or strict", i, agent.ClaudeCode.PermissionMode)
+			}
+		}
+		if agent.ClaudeCode != nil && agent.ClaudeCode.Transport != "" {
+			switch agent.ClaudeCode.Transport {
+			case "stream-json", "tmux":
+				// valid
+			default:
+				return fmt.Errorf("agents[%d].claude_code.transport %q is not recognized; use stream-json or tmux", i, agent.ClaudeCode.Transport)
 			}
 		}
 	}

@@ -345,6 +345,40 @@ func TestLoad_EmptyClaudeCodePermissionMode_OK(t *testing.T) {
 	}
 }
 
+func TestLoad_ValidClaudeCodeTransports(t *testing.T) {
+	for _, transport := range []string{"stream-json", "tmux"} {
+		cfgJSON := `{
+			"hub": {"url": "ws://localhost", "token": "t"},
+			"runtime": {"id": "r1"},
+			"agents": [{
+				"id": "cc1", "name": "CC", "profile": "claude-code",
+				"claude_code": {"transport": "` + transport + `"}
+			}]
+		}`
+		path := writeTemp(t, cfgJSON)
+		_, err := Load(path)
+		if err != nil {
+			t.Errorf("transport %q should be valid, got error: %v", transport, err)
+		}
+	}
+}
+
+func TestLoad_InvalidClaudeCodeTransport(t *testing.T) {
+	cfgJSON := `{
+		"hub": {"url": "ws://localhost", "token": "t"},
+		"runtime": {"id": "r1"},
+		"agents": [{
+			"id": "cc1", "name": "CC", "profile": "claude-code",
+			"claude_code": {"transport": "pty"}
+		}]
+	}`
+	path := writeTemp(t, cfgJSON)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected validation error for invalid claude_code.transport")
+	}
+}
+
 // writeTemp creates a temporary file with the given content and returns its path.
 func writeTemp(t *testing.T, content string) string {
 	t.Helper()

@@ -25,8 +25,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-
-
 // makeUpgrader creates a WebSocket upgrader with origin checking.
 func makeUpgrader(allowedOrigins []string) websocket.Upgrader {
 	allowAll := len(allowedOrigins) == 0 || (len(allowedOrigins) == 1 && allowedOrigins[0] == "*")
@@ -187,11 +185,6 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 	// Set read limit for runtime connections.
 	conn.SetReadLimit(r.maxRuntimeMessageSize)
 
-	// Set up WebSocket-level keepalive (pings every 30s).
-	var rtMu sync.Mutex
-	cancelKeepalive := startWSKeepalive(conn, &rtMu)
-	defer cancelKeepalive()
-
 	// Read the hello message.
 	_, msg, err := conn.ReadMessage()
 	if err != nil {
@@ -275,10 +268,6 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 	}
 	r.runtimes[hello.RuntimeID] = rtConn
 	r.mu.Unlock()
-
-	// Set up WebSocket-level keepalive using the runtimeConn mutex for write safety.
-	cancelRtKeepalive := startWSKeepalive(conn, &rtConn.mu)
-	defer cancelRtKeepalive()
 
 	// Update store.
 	ctx := context.Background()
@@ -378,6 +367,11 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 		refreshCtx, refreshCancel = context.WithCancel(ctx)
 		go r.scheduleTokenRefresh(refreshCtx, hello.RuntimeID, rtConn)
 	}
+
+	// Start keepalive only after the runtime has been registered and the initial
+	// hello/override writes are done, so every future write shares rtConn.mu.
+	cancelRtKeepalive := startWSKeepalive(conn, &rtConn.mu)
+	defer cancelRtKeepalive()
 
 	// Read messages from runtime.
 	defer func() {
@@ -540,8 +534,8 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 			return
 		}
 
+		ctx := context.Background()
 		if resp.OK {
-			ctx := context.Background()
 			// Transition session from "creating" to "active" now that the runtime accepted it.
 			if err := r.store.UpdateSessionState(ctx, resp.SessionID, "active"); err != nil {
 				r.logger.Warn("failed to update session state to active", "session_id", resp.SessionID, "error", err)
@@ -551,7 +545,14 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 					r.logger.Warn("failed to set session native handle", "session_id", resp.SessionID, "error", err)
 				}
 			}
+		} else {
+			if err := r.store.UpdateSessionState(ctx, resp.SessionID, "closed"); err != nil {
+				r.logger.Warn("failed to close rejected session", "session_id", resp.SessionID, "error", err)
+			}
+			r.logger.Warn("runtime rejected session creation", "session_id", resp.SessionID, "error", resp.Error)
 		}
+
+		r.broadcastToSession(resp.SessionID, protocol.TypeSessionCreated, resp)
 
 	case protocol.TypeAgentOutput:
 		data, _ := json.Marshal(env.Payload)
@@ -854,7 +855,8 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 
 func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 	switch env.Type {
-	case protocol.TypeUserMessage:
+	case protocol.TypeUserMessage, protocol.TypeInteractiveInput:
+		interactive := env.Type == protocol.TypeInteractiveInput
 		data, _ := json.Marshal(env.Payload)
 		var msg protocol.UserMessage
 		if err := json.Unmarshal(data, &msg); err != nil {
@@ -908,8 +910,20 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 			r.logger.Info("reopened closed session on new message", "session_id", sess.ID, "user_id", cc.userID)
 		}
 
-		// Turn gating: reject if session is responding and turn-based mode is on.
-		if r.turnBased && sess.State == "responding" {
+		if interactive {
+			if sess.State != "responding" {
+				r.sendToClient(cc, protocol.TypeErrorResponse, msg.SessionID, protocol.ErrorResponse{
+					Code: "interactive_input_unavailable", Message: "interactive input is only available while the agent is responding",
+				})
+				return
+			}
+			if !r.sessionSupportsInteractiveInput(ctx, sess) {
+				r.sendToClient(cc, protocol.TypeErrorResponse, msg.SessionID, protocol.ErrorResponse{
+					Code: "interactive_input_unsupported", Message: "this session does not support interactive input",
+				})
+				return
+			}
+		} else if r.turnBased && sess.State == "responding" {
 			r.sendToClient(cc, protocol.TypeErrorResponse, msg.SessionID, protocol.ErrorResponse{
 				Code: "turn_in_progress", Message: "wait for the current turn to complete",
 			})
@@ -941,11 +955,17 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 			return
 		}
 
+		action := "message.sent"
+		runtimeType := protocol.TypeUserMessage
+		if interactive {
+			action = "interactive_input.sent"
+			runtimeType = protocol.TypeInteractiveInput
+		}
 		if err := r.store.LogAuditEvent(ctx, &store.AuditEvent{
-			ID: uuid.New().String(), OrgID: cc.orgID, Action: "message.sent", UserID: cc.userID,
+			ID: uuid.New().String(), OrgID: cc.orgID, Action: action, UserID: cc.userID,
 			SessionID: msg.SessionID, AgentID: sess.AgentID, CreatedAt: time.Now(),
 		}); err != nil {
-			r.logger.Warn("failed to log audit event", "action", "message.sent", "error", err)
+			r.logger.Warn("failed to log audit event", "action", action, "error", err)
 		}
 
 		// Include session metadata so the runtime can lazily recreate the session
@@ -957,7 +977,7 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 
 		// Forward to runtime. Notify the client if delivery fails so
 		// the UI can inform the user instead of silently dropping it.
-		if !r.sendToRuntime(sess.RuntimeID, protocol.TypeUserMessage, msg.SessionID, msg) {
+		if !r.sendToRuntime(sess.RuntimeID, runtimeType, msg.SessionID, msg) {
 			r.sendToClient(cc, protocol.TypeErrorResponse, msg.SessionID, protocol.ErrorResponse{
 				Code: "runtime_unavailable", Message: "agent runtime is temporarily offline, message will be delivered when it reconnects",
 			})
@@ -1125,6 +1145,9 @@ func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 		// Forward to runtime.
 		r.sendToRuntime(agent.RuntimeID, protocol.TypeNativeSessionsList, "", req)
 
+	case protocol.TypePing:
+		r.sendToClient(cc, protocol.TypePong, "", protocol.Pong{})
+
 	default:
 		r.logger.Warn("unknown client message type", "type", env.Type, "user", cc.username)
 	}
@@ -1222,6 +1245,20 @@ func (r *Router) CreateSession(ctx context.Context, userID, agentID string, opts
 	}
 
 	return sess, nil
+}
+
+func (r *Router) sessionSupportsInteractiveInput(ctx context.Context, sess *store.Session) bool {
+	agent, err := r.store.GetAgent(ctx, sess.AgentID)
+	if err == nil && agent != nil && agent.Caps != "" {
+		var caps protocol.ProfileCaps
+		if err := json.Unmarshal([]byte(agent.Caps), &caps); err == nil && caps.ExecModel != "" {
+			return caps.ExecModel == protocol.ExecInteractive
+		}
+	}
+	if caps, ok := protocol.KnownProfiles[sess.Profile]; ok {
+		return caps.ExecModel == protocol.ExecInteractive
+	}
+	return false
 }
 
 // broadcastToSession sends a message to all clients subscribed to a session.

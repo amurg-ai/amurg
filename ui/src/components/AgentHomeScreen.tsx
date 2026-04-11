@@ -246,7 +246,13 @@ export function AgentHomeScreen() {
       // CGR-39: check if we already have an active hub session for this native
       // session before creating another one (avoids orphaned duplicates).
       const existing = sessions.find(
-        (s) => s.state !== "closed" && previewSessionIds.has(s.id) && s.agent_id === session.agentId,
+        (s) =>
+          s.state !== "closed" &&
+          s.agent_id === session.agentId &&
+          (
+            s.native_handle === session.id ||
+            previewSessionIds.has(s.id)
+          ),
       );
       if (existing) {
         await selectSession(existing.id);

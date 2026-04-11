@@ -23,6 +23,7 @@
       "claude_code": {
         "work_dir": "/workspace",
         "model": "sonnet",
+        "transport": "stream-json",
         "permission_mode": "dangerously-skip-permissions",
         "max_turns": 25,
         "system_prompt": "You are a helpful coding assistant."

@@ -261,6 +261,26 @@ func TestManager_Stop_NotFound(t *testing.T) {
 	}
 }
 
+func TestManager_SendInteractive(t *testing.T) {
+	m := newTestManager(t)
+
+	if err := m.Create(context.Background(), "sess-1", "ep-1", "user-1", "standard"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := m.SendInteractive(context.Background(), "sess-1", []byte("reply")); err != nil {
+		t.Fatalf("unexpected error sending interactive input: %v", err)
+	}
+
+	sess, ok := m.Get("sess-1")
+	if !ok {
+		t.Fatal("expected session to exist")
+	}
+	if sess.State() != StateResponding {
+		t.Fatalf("expected responding state, got %s", sess.State())
+	}
+}
+
 func TestManager_CloseAll(t *testing.T) {
 	m := newTestManager(t)
 
