@@ -130,6 +130,16 @@ function AgentConfigEditor({
     }
   };
 
+  if (agent.caps.terminal === true) {
+    return (
+      <div className="p-4 space-y-4">
+        <button onClick={onBack} className="text-sm text-slate-400">Back</button>
+        <h3 className="text-slate-100 font-medium">{agent.name || agent.id}</h3>
+        <p className="text-sm text-slate-400">This agent runs as a persistent interactive session. Change its settings in the native agent; permission prompts appear in the conversation.</p>
+      </div>
+    );
+  }
+
   const profileInfo = PROFILE_DISPLAY[agent.profile] || { label: agent.profile, color: "bg-slate-600", icon: "?" };
 
   return (

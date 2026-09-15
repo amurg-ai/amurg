@@ -94,6 +94,42 @@ get_latest_version() {
 
 # ── Install ──────────────────────────────────────────────────────────────────
 
+# Interactive sessions are part of the runtime, so install their dependency
+# alongside it. Hub and command-line client installations do not need it.
+as_root() {
+    if [ "$(id -u)" = "0" ]; then
+        "$@"
+    elif command -v sudo > /dev/null 2>&1; then
+        sudo "$@"
+    else
+        fatal "Installing the runtime dependency requires root or sudo."
+    fi
+}
+
+install_runtime_dependencies() {
+    [ "$BINARY" = "amurg-runtime" ] || return 0
+    command -v tmux > /dev/null 2>&1 && return 0
+    info "Installing the runtime's terminal dependency..."
+    if [ "$OS" = "darwin" ]; then
+        need_cmd brew
+        brew install tmux
+    elif command -v apt-get > /dev/null 2>&1; then
+        as_root apt-get update
+        as_root apt-get install -y tmux
+    elif command -v dnf > /dev/null 2>&1; then
+        as_root dnf install -y tmux
+    elif command -v apk > /dev/null 2>&1; then
+        as_root apk add --no-cache tmux
+    elif command -v pacman > /dev/null 2>&1; then
+        as_root pacman -S --needed --noconfirm tmux
+    elif command -v zypper > /dev/null 2>&1; then
+        as_root zypper --non-interactive install tmux
+    else
+        fatal "No supported package manager found for the runtime's tmux dependency."
+    fi
+    need_cmd tmux
+}
+
 do_install() {
     local base_url="https://github.com/${REPO}/releases/download/v${VERSION}"
     local archive="${BINARY}_${VERSION}_${OS}_${ARCH}.tar.gz"
@@ -189,6 +225,7 @@ main() {
     detect_os
     detect_arch
     detect_install_dir
+    install_runtime_dependencies
     get_latest_version
     do_install
 }

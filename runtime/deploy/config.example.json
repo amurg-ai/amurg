@@ -19,89 +19,77 @@
       "id": "claude-code-1",
       "name": "Claude Code",
       "profile": "claude-code",
-      "tags": {"env": "dev"},
+      "tags": {
+        "env": "dev"
+      },
       "claude_code": {
-        "work_dir": "/workspace",
-        "model": "sonnet",
-        "transport": "stream-json",
-        "permission_mode": "dangerously-skip-permissions",
-        "max_turns": 25,
-        "system_prompt": "You are a helpful coding assistant."
+        "work_dir": "/workspace"
       }
     },
     {
       "id": "copilot-1",
       "name": "GitHub Copilot",
       "profile": "github-copilot",
-      "tags": {"env": "dev"},
-      "copilot": {
-        "work_dir": "/workspace",
-        "model": "claude-sonnet-4.5",
-        "max_autopilot_continues": 10,
-        "allowed_tools": ["shell(git *)"],
-        "denied_tools": ["shell(rm -rf *)"]
+      "tags": {
+        "env": "dev"
       },
-      "security": {
-        "permission_mode": "skip"
+      "copilot": {
+        "work_dir": "/workspace"
       }
     },
     {
       "id": "codex-1",
       "name": "OpenAI Codex",
       "profile": "codex",
-      "tags": {"env": "dev"},
+      "tags": {
+        "env": "dev"
+      },
       "codex": {
-        "work_dir": "/workspace",
-        "model": "gpt-5.3-codex",
-        "approval_mode": "on-request",
-        "sandbox_mode": "workspace-write",
-        "full_auto": true,
-        "additional_dirs": ["/data"]
+        "work_dir": "/workspace"
       }
     },
     {
       "id": "gemini-1",
       "name": "Gemini CLI",
       "profile": "gemini-cli",
-      "tags": {"env": "dev"},
+      "tags": {
+        "env": "dev"
+      },
       "gemini": {
-        "work_dir": "/workspace",
-        "model": "gemini-2.5-pro",
-        "approval_mode": "auto_edit",
-        "include_directories": ["/data", "/config"]
+        "work_dir": "/workspace"
       }
     },
     {
       "id": "kilo-1",
       "name": "Kilo Code",
       "profile": "kilo-code",
-      "tags": {"env": "dev"},
-      "kilo": {
-        "work_dir": "/workspace",
-        "model": "anthropic/claude-sonnet-4",
-        "provider": "anthropic",
-        "mode": "code",
-        "system_prompt": "Focus on clean, maintainable code."
+      "tags": {
+        "env": "dev"
       },
-      "security": {
-        "permission_mode": "skip"
+      "kilo": {
+        "work_dir": "/workspace"
       }
     },
     {
       "id": "echo-cli",
       "name": "Echo CLI",
       "profile": "generic-cli",
-      "tags": {"env": "dev", "purpose": "testing"},
+      "tags": {
+        "env": "dev",
+        "purpose": "testing"
+      },
       "cli": {
-        "command": "cat",
-        "spawn_policy": "per-session"
+        "command": "cat"
       }
     },
     {
       "id": "date-job",
       "name": "Date Job",
       "profile": "generic-job",
-      "tags": {"env": "dev", "purpose": "testing"},
+      "tags": {
+        "env": "dev",
+        "purpose": "testing"
+      },
       "job": {
         "command": "date",
         "max_runtime": "10s"
@@ -111,7 +99,10 @@
       "id": "httpbin-http",
       "name": "HTTPBin",
       "profile": "generic-http",
-      "tags": {"env": "dev", "purpose": "testing"},
+      "tags": {
+        "env": "dev",
+        "purpose": "testing"
+      },
       "http": {
         "base_url": "https://httpbin.org/post",
         "method": "POST",

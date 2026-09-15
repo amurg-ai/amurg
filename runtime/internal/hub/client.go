@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/amurg-ai/amurg/pkg/protocol"
 	"github.com/amurg-ai/amurg/runtime/internal/config"
+	"github.com/gorilla/websocket"
 )
 
 const (
@@ -35,6 +35,7 @@ var bufferableTypes = map[string]bool{
 	protocol.TypeFileAvailable:     true,
 	protocol.TypeSessionCreated:    true,
 }
+
 // MessageHandler processes messages received from the hub.
 type MessageHandler func(env protocol.Envelope) error
 
@@ -295,6 +296,15 @@ func (c *Client) sendMessage(msgType, sessionID string, payload any) error {
 		return fmt.Errorf("not connected")
 	}
 
+	if msgType == protocol.TypeTerminalOutput {
+		_ = c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		defer c.conn.SetWriteDeadline(time.Time{})
+		if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			_ = c.conn.Close() // force reconnect and a fresh terminal repaint
+			return err
+		}
+		return nil
+	}
 	return c.conn.WriteMessage(websocket.TextMessage, data)
 }
 

@@ -21,7 +21,7 @@ amurg-runtime run     # start with generated config
 |----------|---------|-------------|
 | CPU | 1 core | 2 cores |
 | RAM | 128 MB + agent overhead | 1 GB |
-| OS | Linux, macOS, Windows (amd64/arm64) | - |
+| OS | Linux/macOS; WSL on Windows for interactive agents (amd64/arm64) | - |
 | Network | Outbound to Hub (WebSocket) | No inbound ports required |
 
 The Runtime needs to be on the same machine (or network) as the agents it manages. It only makes outbound connections — no inbound ports need to be exposed.
@@ -65,33 +65,66 @@ cp runtime/deploy/config.example.json runtime/deploy/config.local.json
 | `runtime.max_sessions` | Max concurrent sessions | `10` |
 | `runtime.default_timeout` | Default session timeout | `30m` |
 | `runtime.max_output_bytes` | Max output buffer per session | `10485760` (10 MB) |
-| `runtime.idle_timeout` | CLI idle detection timeout | `10s` |
+| `runtime.idle_timeout` | Chat adapter idle timeout (persistent terminals do not expire) | `10s` |
 | `runtime.log_level` | Log level | `info` |
 
 ### Endpoints (Agents)
 
 Each endpoint defines an agent the runtime can manage.
 
-**Claude Code** supports two transports:
-- `stream-json`: persistent bidirectional `claude -p` session over stdin/stdout
-- `tmux`: native interactive Claude TUI inside tmux, suitable when you want true terminal interaction instead of print mode
+### Persistent interactive agents
 
-Example:
+Choose an agent and working directory in `amurg-runtime init`, then open a
+conversation in Amurg. Claude Code, Codex, Gemini CLI, GitHub Copilot, Kilo Code,
+and custom interactive commands all run as persistent terminal sessions.
+The runtime manages persistence automatically.
+
 ```json
 {
   "id": "claude-code",
   "name": "Claude Code",
   "profile": "claude-code",
-  "claude_code": {
-    "command": "claude",
-    "work_dir": "/path/to/project",
-    "transport": "tmux",
-    "model": "sonnet"
-  }
+  "claude_code": { "work_dir": "/path/to/project" }
 }
 ```
 
-Other built-in profiles:
+The runtime selects the normal interactive command for each agent. Existing
+`command`, `work_dir`, `env`, and `model` settings carry over. Optional `args`
+in the agent's settings add native CLI arguments. Amurg does not add print-mode
+flags or restart the agent for each message. Legacy Claude `transport` and CLI
+`spawn_policy` settings no longer select a different runtime. Stored chat transcripts
+remain in the hub; they are not automatically imported into a new native agent process.
+
+The browser shows the agent's live terminal. Use the mobile composer for
+multiline text, editable voice dictation, and file attachments, then press Send.
+Uploads are confirmed on the runtime host before their paths accompany the
+prompt. Direct keyboard input and touch keys handle native prompts and controls.
+Agent permission prompts appear in the terminal. Configured native launch
+permissions apply when a new process starts; remote chat permission overrides
+are not supported for running interactive processes.
+
+Amurg manages its own background tmux server and session names internally.
+The installer provisions tmux on Linux/macOS; the runtime container includes it.
+No tmux configuration or commands are needed for normal use. Source builds need
+`tmux` available on PATH. On Windows, run the interactive runtime in WSL.
+
+- **Runtime restart:** reconnects to the same live agent process.
+- **Browser/network reconnect:** restores the current terminal screen.
+  Disconnected keystrokes are never queued or replayed.
+- **Close in Amurg:** closes the conversation and releases its attachment.
+  The agent stays alive; reopening the conversation reattaches it.
+- **Ctrl-C:** interrupts the application, just as in a local terminal.
+- **History:** the terminal retains screen/scrollback state. Terminal output is
+  not converted into chat messages or a durable raw-I/O journal.
+- **Multiple viewers:** share the same terminal and its dimensions.
+
+For host administration, managed sessions live on the `amurg` tmux socket;
+`tmux -L amurg list-sessions` lists them. The hub's `native_handle` identifies
+the session. Exit the native application to end its process permanently.
+Container destruction or a host reboot ends the processes; persistence covers
+runtime/client restarts while the host and tmux server remain alive.
+
+Other endpoint types:
 
 **CLI** — Long-running interactive process (bash, python, etc.):
 ```json
@@ -103,8 +136,7 @@ Other built-in profiles:
     "command": "bash",
     "args": ["--norc", "--noprofile", "-i"],
     "work_dir": "/path/to/project",
-    "env": {"PS1": "$ ", "TERM": "dumb"},
-    "spawn_policy": "per-session"
+    "env": {"PS1": "$ "}
   }
 }
 ```
@@ -192,6 +224,8 @@ Type=simple
 ExecStart=/usr/local/bin/amurg-runtime run /etc/amurg/config.json
 Restart=always
 RestartSec=5
+# Keep managed interactive processes alive across runtime restarts.
+KillMode=process
 User=amurg
 Group=amurg
 

@@ -49,6 +49,7 @@ type AgentRegistration struct {
 
 // ProfileCaps declares capabilities for a profile (spec §5.2).
 type ProfileCaps struct {
+	Terminal         bool           `json:"terminal,omitempty"`
 	NativeSessionIDs bool           `json:"native_session_ids"`
 	TurnCompletion   bool           `json:"turn_completion"`
 	ResumeAttach     bool           `json:"resume_attach"`

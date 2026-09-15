@@ -1,3 +1,4 @@
+import { agentCapabilities } from "@/types";
 import { create } from "zustand";
 import type {
   SessionInfo,
@@ -89,7 +90,7 @@ function upsertSession(sessions: SessionInfo[], incoming: SessionInfo): SessionI
 function parseAgentExecModel(agent: AgentInfo | undefined): string | null {
   if (!agent?.caps) return null;
   try {
-    const caps = JSON.parse(agent.caps);
+    const caps = agentCapabilities(agent);
     return typeof caps.exec_model === "string" ? caps.exec_model : null;
   } catch {
     return null;
@@ -738,7 +739,7 @@ export const useSessionStore = create<SessionState>((set, get) => {
       const capable = agents.filter((a) => {
         if (!a.online) return false;
         try {
-          const caps = JSON.parse(a.caps || "{}");
+          const caps = agentCapabilities(a);
           return caps.native_session_ids === true;
         } catch {
           return false;

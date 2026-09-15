@@ -119,18 +119,18 @@ func TestWizard_CloudHub(t *testing.T) {
 
 func TestWizard_GenericCLI(t *testing.T) {
 	input := strings.Join([]string{
-		"2",                                 // hub: Self-hosted
-		"ws://localhost:8080/ws/runtime",     // hub URL
-		"2",                                 // auth: Enter token manually
-		"dev-token",                         // token
-		"dev-runtime",                       // runtime ID
-		"debug",                             // log level
-		"1",                                 // 1 agent
-		"5",                                 // profile: generic-cli (5th option)
-		"Bash Shell",                        // agent name
-		"bash",                              // command
-		"--norc -i",                         // args
-		"2",                                 // start now: No
+		"2",                              // hub: Self-hosted
+		"ws://localhost:8080/ws/runtime", // hub URL
+		"2",                              // auth: Enter token manually
+		"dev-token",                      // token
+		"dev-runtime",                    // runtime ID
+		"debug",                          // log level
+		"1",                              // 1 agent
+		"6",                              // profile: generic-cli (6th option)
+		"Bash Shell",                     // agent name
+		"bash",                           // command
+		"--norc -i",                      // args
+		"2",                              // start now: No
 	}, "\n") + "\n"
 
 	out := &bytes.Buffer{}

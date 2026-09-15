@@ -321,6 +321,8 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 	// Send ack.
 	r.sendToConn(conn, protocol.TypeHelloAck, "", protocol.HelloAck{OK: true})
 
+	r.reconnectTerminals(hello.RuntimeID)
+
 	// Push any stored config overrides to the runtime on reconnect.
 	for _, agent := range hello.Agents {
 		override, err := r.store.GetAgentConfigOverride(ctx, agent.ID)
@@ -553,6 +555,24 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 		}
 
 		r.broadcastToSession(resp.SessionID, protocol.TypeSessionCreated, resp)
+
+	case protocol.TypeFileReceived:
+		var receipt protocol.FileReceived
+		data, err := json.Marshal(env.Payload)
+		if err != nil || json.Unmarshal(data, &receipt) != nil {
+			return
+		}
+		sess, err := r.store.GetSession(context.Background(), receipt.SessionID)
+		if err != nil || sess == nil || sess.RuntimeID != runtimeID || !r.sessionIsTerminal(context.Background(), sess) {
+			return
+		}
+		if len(receipt.Path) > 4096 || len(receipt.Name) > 255 {
+			return
+		}
+		r.broadcastToSession(receipt.SessionID, protocol.TypeFileReceived, receipt)
+
+	case protocol.TypeTerminalOutput:
+		r.handleTerminalOutput(runtimeID, env)
 
 	case protocol.TypeAgentOutput:
 		data, _ := json.Marshal(env.Payload)
@@ -855,6 +875,8 @@ func (r *Router) handleRuntimeMessage(runtimeID string, env protocol.Envelope) {
 
 func (r *Router) handleClientMessage(cc *clientConn, env protocol.Envelope) {
 	switch env.Type {
+	case protocol.TypeTerminalAttach, protocol.TypeTerminalInput, protocol.TypeTerminalResize:
+		r.handleTerminalClient(cc, env)
 	case protocol.TypeUserMessage, protocol.TypeInteractiveInput:
 		interactive := env.Type == protocol.TypeInteractiveInput
 		data, _ := json.Marshal(env.Payload)
@@ -1325,7 +1347,14 @@ func (r *Router) sendToClient(cc *clientConn, msgType, sessionID string, payload
 
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
+	if msgType == protocol.TypeTerminalOutput {
+		_ = cc.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		defer cc.conn.SetWriteDeadline(time.Time{})
+	}
 	if err := cc.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		if msgType == protocol.TypeTerminalOutput {
+			_ = cc.conn.Close()
+		}
 		r.logger.Debug("send to client failed", "conn_id", cc.id, "error", err)
 	}
 }
@@ -1353,6 +1382,9 @@ func (r *Router) StartIdleReaper(ctx context.Context, defaultTimeout time.Durati
 				now := time.Now()
 				for _, sess := range sessions {
 					timeout := defaultTimeout
+					if r.sessionIsTerminal(ctx, &sess) {
+						continue
+					}
 					if pt, ok := profileTimeouts[sess.Profile]; ok {
 						timeout = pt
 					}

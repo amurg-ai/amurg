@@ -2,9 +2,17 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useSessionStore } from "@/stores/sessionStore";
 import { VoiceInput } from "@/components/VoiceInput";
 
-export function MessageInput() {
+interface MessageInputProps {
+  onSend?: (content: string) => boolean;
+  onUpload?: (file: File) => Promise<string>;
+  disabled?: boolean;
+}
+
+export function MessageInput({ onSend, onUpload, disabled = false }: MessageInputProps = {}) {
   const [text, setText] = useState("");
+  const [attachments, setAttachments] = useState<{ name: string; path: string }[]>([]);
   const [multiline, setMultiline] = useState(false);
+  const editingMultiline = multiline || Boolean(onSend);
   const [interimText, setInterimText] = useState("");
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -18,31 +26,34 @@ export function MessageInput() {
   const canReplyWhileResponding = activeSessionId
     ? isResponding && canSendInteractiveInput(activeSessionId)
     : false;
-  const inputLocked = isResponding && !canReplyWhileResponding;
+  const inputLocked = disabled || (!onSend && isResponding && !canReplyWhileResponding);
 
   // Auto-resize textarea in multiline mode
   useEffect(() => {
     const el = textareaRef.current;
-    if (el && multiline) {
+    if (el && editingMultiline) {
       el.style.height = "auto";
       el.style.height = Math.min(el.scrollHeight, 200) + "px";
     }
-  }, [text, multiline]);
+  }, [text, editingMultiline]);
 
   const handleSubmit = () => {
     const trimmed = text.trim();
-    if (!trimmed || inputLocked) return;
-
-    sendMessage(trimmed);
+    if ((!trimmed && attachments.length === 0) || inputLocked || uploading) return;
+    const content = [onSend ? text : trimmed, attachments.length ? "Attached files:\n" + attachments.map((a) => a.path).join("\n") : ""].filter(Boolean).join("\n\n");
+    if (onSend) {
+      if (!onSend(content)) return; // Keep the draft if disconnected.
+    } else sendMessage(content);
+    setAttachments([]);
     setText("");
     setMultiline(false);
 
-    // Re-focus single-line input after submit
-    setTimeout(() => inputRef.current?.focus(), 0);
+    // Keep the composer focused for the next prompt.
+    setTimeout(() => (onSend ? textareaRef.current : inputRef.current)?.focus(), 0);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (multiline) {
+    if (editingMultiline) {
       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
         e.preventDefault();
         handleSubmit();
@@ -63,13 +74,16 @@ export function MessageInput() {
     if (!activeSessionId) return;
     setUploading(true);
     try {
-      await uploadFile(activeSessionId, file);
+      if (onUpload) {
+        const path = await onUpload(file);
+        setAttachments((current) => [...current, { name: file.name, path }]);
+      } else await uploadFile(activeSessionId, file);
     } catch (err) {
       addToast(err instanceof Error ? err.message : "Upload failed", "error");
     } finally {
       setUploading(false);
     }
-  }, [activeSessionId, uploadFile, addToast]);
+  }, [activeSessionId, uploadFile, addToast, onUpload]);
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -99,7 +113,7 @@ export function MessageInput() {
 
   const handleVoiceResult = (transcript: string) => {
     setText((prev) => (prev ? prev + " " + transcript : transcript));
-    if (multiline) {
+    if (editingMultiline) {
       textareaRef.current?.focus();
     } else {
       inputRef.current?.focus();
@@ -124,6 +138,17 @@ export function MessageInput() {
         onChange={handleFileSelect}
       />
 
+      {attachments.length > 0 && (
+        <div className="flex flex-wrap gap-2 pb-2" aria-label="Attached files">
+          {attachments.map((attachment, index) => (
+            <span key={attachment.path} className="inline-flex items-center gap-2 rounded bg-slate-700 px-2 py-1 text-xs text-slate-200">
+              {attachment.name}
+              <button type="button" aria-label={`Remove ${attachment.name}`} onClick={() => setAttachments((items) => items.filter((_, i) => i !== index))}>×</button>
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* Live transcription preview */}
       {interimText && (
         <div className="text-xs text-slate-500 italic px-7 pb-1 truncate">
@@ -146,7 +171,7 @@ export function MessageInput() {
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
-          disabled={!activeSessionId || uploading}
+          disabled={!activeSessionId || uploading || disabled}
           className="flex-shrink-0 p-2 text-slate-500 hover:text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors rounded-lg"
           title="Attach file"
         >
@@ -157,28 +182,30 @@ export function MessageInput() {
 
         {/* Input area */}
         <div className="flex-1 min-w-0">
-          {multiline ? (
+          {editingMultiline ? (
             <div>
               <textarea
                 ref={textareaRef}
+                aria-label="Message"
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder={inputLocked ? "Waiting..." : (canReplyWhileResponding ? "Reply to the running prompt..." : "")}
+                placeholder={inputLocked ? "Waiting..." : onSend ? "Message the agent…" : (canReplyWhileResponding ? "Reply to the running prompt..." : "")}
                 disabled={inputLocked}
-                rows={3}
+                rows={onSend ? 1 : 3}
                 className={`w-full px-3 py-2 bg-slate-700/50 border rounded-lg
                            text-slate-100 placeholder-slate-500 resize-none font-mono text-sm
                            focus:outline-none focus:ring-1 focus:ring-teal-500 focus:border-transparent
                            disabled:opacity-50 disabled:cursor-not-allowed
                            ${voiceFlash ? "border-green-400 ring-1 ring-green-400/50" : "border-slate-600"}`}
-                autoFocus
+                autoFocus={!onSend}
               />
-              <span className="text-xs text-slate-600 mt-1 block">Ctrl+Enter to send</span>
+              {!onSend && <span className="text-xs text-slate-600 mt-1 block">Ctrl+Enter to send</span>}
             </div>
           ) : (
             <input
               ref={inputRef}
+              aria-label="Message"
               type="text"
               value={text}
               onChange={(e) => setText(e.target.value)}
@@ -193,6 +220,8 @@ export function MessageInput() {
             />
           )}
         </div>
+
+        {onSend && <button type="button" onClick={handleSubmit} disabled={inputLocked || uploading || (!text.trim() && attachments.length === 0)} className="rounded bg-teal-600 px-3 py-2 text-sm text-white disabled:opacity-40">Send</button>}
 
         {/* Voice input */}
         <div className="flex-shrink-0 pt-1">

@@ -66,6 +66,10 @@ func New(cfg *config.Config, logger *slog.Logger, bus *eventbus.Bus) *Runtime {
 		logger,
 	)
 
+	rt.sessions.SetTerminalOutputHandler(func(out protocol.TerminalOutput) {
+		_ = rt.hubClient.Send(protocol.TypeTerminalOutput, out.SessionID, out)
+	})
+
 	// Build agent registrations for hub.
 	agents := make([]protocol.AgentRegistration, 0, len(cfg.Agents))
 	for _, agent := range cfg.Agents {
@@ -168,6 +172,14 @@ func (r *Runtime) Sessions() []ipc.SessionInfo {
 
 // Run starts the runtime and blocks until the context is canceled.
 func (r *Runtime) Run(ctx context.Context) error {
+	for _, agent := range r.cfg.Agents {
+		if protocol.KnownProfiles[agent.Profile].Terminal {
+			if err := adapter.CheckTerminalSupport(); err != nil {
+				return err
+			}
+			break
+		}
+	}
 	r.logger.Info("starting runtime",
 		"id", r.cfg.Runtime.ID,
 		"agents", len(r.cfg.Agents),
@@ -186,6 +198,8 @@ func (r *Runtime) Run(ctx context.Context) error {
 // handleHubMessage processes a message from the hub.
 func (r *Runtime) handleHubMessage(env protocol.Envelope) error {
 	switch env.Type {
+	case protocol.TypeTerminalAttach, protocol.TypeTerminalInput, protocol.TypeTerminalResize:
+		return r.handleTerminal(env)
 	case protocol.TypeHelloAck:
 		return r.handleHelloAck(env)
 	case protocol.TypeSessionCreate:
@@ -397,6 +411,17 @@ func (r *Runtime) handleFileUpload(env protocol.Envelope) error {
 	}
 
 	r.logger.Info("file saved", "session_id", upload.SessionID, "file_id", upload.Metadata.FileID, "path", filePath)
+
+	if r.sessions.IsTerminal(upload.SessionID) {
+		absolutePath, err := filepath.Abs(filePath)
+		if err != nil {
+			return err
+		}
+		r.sendToHub(protocol.TypeFileReceived, upload.SessionID, protocol.FileReceived{
+			SessionID: upload.SessionID, FileID: upload.Metadata.FileID, Name: upload.Metadata.Name, Path: absolutePath,
+		})
+		return nil // A file attachment is submitted with the user's next prompt.
+	}
 
 	// Deliver to adapter via session manager.
 	r.sessions.DeliverFile(upload.SessionID, filePath, upload.Metadata)

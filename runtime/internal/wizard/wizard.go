@@ -25,6 +25,7 @@ var profileDescriptions = map[string]string{
 	protocol.ProfileClaudeCode:    "Claude Code (Anthropic CLI agent)",
 	protocol.ProfileGitHubCopilot: "GitHub Copilot (gh copilot)",
 	protocol.ProfileCodex:         "Codex (OpenAI CLI agent)",
+	protocol.ProfileGeminiCLI:     "Gemini CLI (Google CLI agent)",
 	protocol.ProfileKilo:          "Kilo Code (open-source agent)",
 	protocol.ProfileGenericCLI:    "Generic CLI (any interactive command)",
 	protocol.ProfileGenericJob:    "Generic Job (run-to-completion command)",
@@ -38,6 +39,7 @@ var orderedProfiles = []string{
 	protocol.ProfileGitHubCopilot,
 	protocol.ProfileCodex,
 	protocol.ProfileKilo,
+	protocol.ProfileGeminiCLI,
 	protocol.ProfileGenericCLI,
 	protocol.ProfileGenericJob,
 	protocol.ProfileGenericHTTP,
@@ -382,6 +384,12 @@ func (w *Wizard) ConfigureAgent(index int) config.AgentConfig {
 		}
 		agent.Kilo = kc
 
+	case protocol.ProfileGeminiCLI:
+		agent.Gemini = &config.GeminiCLIConfig{
+			WorkDir: w.p.AskDir("  Working directory", defaultWorkDir),
+			Model:   w.p.Ask("  Model (leave empty for default)", ""),
+		}
+
 	case protocol.ProfileGenericCLI:
 		command := w.p.Ask("  Command", "")
 		argsStr := w.p.Ask("  Arguments (space-separated)", "")
@@ -437,6 +445,7 @@ Type=simple
 ExecStart=/usr/local/bin/amurg-runtime run %s
 Restart=always
 RestartSec=5
+KillMode=process
 
 [Install]
 WantedBy=multi-user.target

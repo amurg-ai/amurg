@@ -21,6 +21,7 @@ var profileOptions = []struct {
 	{protocol.ProfileClaudeCode, "Claude Code (Anthropic CLI agent)"},
 	{protocol.ProfileGitHubCopilot, "GitHub Copilot (gh copilot)"},
 	{protocol.ProfileCodex, "Codex (OpenAI CLI agent)"},
+	{protocol.ProfileGeminiCLI, "Gemini CLI (Google CLI agent)"},
 	{protocol.ProfileKilo, "Kilo Code (open-source agent)"},
 	{protocol.ProfileGenericCLI, "Generic CLI (any interactive command)"},
 	{protocol.ProfileGenericJob, "Generic Job (run-to-completion command)"},
@@ -137,8 +138,11 @@ func (m *agentFormModel) setupFieldsForProfile(profile string) {
 		}
 	}
 
+	if profile == protocol.ProfileGenericCLI {
+		m.dirInput.Placeholder = wd
+	}
 	switch profile {
-	case protocol.ProfileClaudeCode, protocol.ProfileGitHubCopilot, protocol.ProfileCodex, protocol.ProfileKilo:
+	case protocol.ProfileClaudeCode, protocol.ProfileGitHubCopilot, protocol.ProfileCodex, protocol.ProfileGeminiCLI, protocol.ProfileKilo:
 		m.dirInput.Placeholder = wd
 		m.extra1Input.Placeholder = "leave empty for default"
 		switch profile {
@@ -195,7 +199,7 @@ func (m agentFormModel) lastField() agentField {
 	switch profile {
 	case protocol.ProfileClaudeCode, protocol.ProfileKilo:
 		return fieldExtra2
-	case protocol.ProfileGitHubCopilot, protocol.ProfileCodex:
+	case protocol.ProfileGitHubCopilot, protocol.ProfileCodex, protocol.ProfileGeminiCLI:
 		return fieldExtra1
 	case protocol.ProfileGenericCLI, protocol.ProfileGenericJob, protocol.ProfileExternal:
 		return fieldExtra2
@@ -208,7 +212,7 @@ func (m agentFormModel) lastField() agentField {
 func (m agentFormModel) hasWorkDir() bool {
 	profile := profileOptions[m.profileCursor].profile
 	switch profile {
-	case protocol.ProfileClaudeCode, protocol.ProfileGitHubCopilot, protocol.ProfileCodex, protocol.ProfileKilo:
+	case protocol.ProfileGenericCLI, protocol.ProfileClaudeCode, protocol.ProfileGitHubCopilot, protocol.ProfileCodex, protocol.ProfileGeminiCLI, protocol.ProfileKilo:
 		return true
 	}
 	return false
@@ -272,6 +276,11 @@ func (m *agentFormModel) focusCurrent() tea.Cmd {
 func (m agentFormModel) finishAgent() (agentFormModel, tea.Cmd) {
 	profile := profileOptions[m.profileCursor].profile
 
+	if profile == protocol.ProfileGenericCLI && strings.TrimSpace(m.extra1Input.Value()) == "" {
+		m.dirError = "Enter an interactive command, such as claude, codex, or bash"
+		m.focusedField = fieldExtra1
+		return m, m.focusCurrent()
+	}
 	// Validate directory if needed.
 	if m.hasWorkDir() {
 		dir := m.dirInput.Value()
@@ -341,6 +350,9 @@ func (m agentFormModel) buildAgent(profile string) config.AgentConfig {
 		}
 		agent.Codex = cx
 
+	case protocol.ProfileGeminiCLI:
+		agent.Gemini = &config.GeminiCLIConfig{WorkDir: workDir, Model: m.extra1Input.Value()}
+
 	case protocol.ProfileKilo:
 		kc := &config.KiloConfig{WorkDir: workDir}
 		if v := m.extra1Input.Value(); v != "" {
@@ -353,6 +365,7 @@ func (m agentFormModel) buildAgent(profile string) config.AgentConfig {
 
 	case protocol.ProfileGenericCLI:
 		agent.CLI = &config.CLIConfig{
+			WorkDir: workDir,
 			Command: m.extra1Input.Value(),
 			Args:    splitArgs(m.extra2Input.Value()),
 		}
@@ -412,7 +425,7 @@ func (m agentFormModel) View() string {
 	case protocol.ProfileClaudeCode:
 		s += m.renderField("  Model", m.extra1Input, fieldExtra1)
 		s += m.renderField("  Permission mode", m.extra2Input, fieldExtra2)
-	case protocol.ProfileGitHubCopilot, protocol.ProfileCodex:
+	case protocol.ProfileGitHubCopilot, protocol.ProfileCodex, protocol.ProfileGeminiCLI:
 		s += m.renderField("  Model", m.extra1Input, fieldExtra1)
 	case protocol.ProfileKilo:
 		s += m.renderField("  Model", m.extra1Input, fieldExtra1)

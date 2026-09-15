@@ -53,14 +53,14 @@ func (r *Registry) Profiles() []string {
 // DefaultRegistry creates a registry with all built-in adapters.
 func DefaultRegistry() *Registry {
 	r := NewRegistry()
-	r.Register("generic-cli", &CLIAdapter{})
+	r.Register("generic-cli", &TMuxAdapter{})
 	r.Register("generic-job", &JobAdapter{})
 	r.Register("generic-http", &HTTPAdapter{})
-	r.Register("claude-code", &ClaudeCodeAdapter{})
-	r.Register("github-copilot", &GitHubCopilotAdapter{})
-	r.Register("codex", &CodexAdapter{})
+	r.Register("claude-code", &TMuxAdapter{})
+	r.Register("github-copilot", &TMuxAdapter{})
+	r.Register("codex", &TMuxAdapter{})
 	r.Register("external", &ExternalAdapter{})
-	r.Register("kilo-code", &KiloAdapter{})
-	r.Register("gemini-cli", &GeminiCLIAdapter{})
+	r.Register("kilo-code", &TMuxAdapter{})
+	r.Register("gemini-cli", &TMuxAdapter{})
 	return r
 }

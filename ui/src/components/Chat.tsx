@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, useCallback } from "react";
 import { useSessionStore } from "@/stores/sessionStore";
 import { SessionList } from "@/components/SessionList";
+import { isTerminalAgent } from "@/types";
 import { MessageList } from "@/components/MessageList";
 import { MessageInput } from "@/components/MessageInput";
 import { AgentPicker } from "@/components/AgentPicker";
@@ -9,6 +10,8 @@ import { ToastContainer } from "@/components/Toast";
 import { PermissionBanner } from "@/components/PermissionBanner";
 import { AgentHomeScreen } from "@/components/AgentHomeScreen";
 import { PROFILE_DISPLAY, PROMPT_PROFILE_DISPLAY } from "@/types";
+
+const TerminalView = lazy(() => import("@/components/TerminalView").then((module) => ({ default: module.TerminalView })));
 
 function ConnectionBanner() {
   const connectionState = useSessionStore((s) => s.connectionState);
@@ -168,12 +171,13 @@ function CopyableSessionId({ id }: { id: string }) {
 }
 
 export function Chat() {
-  const { activeSessionId, sessions, user, logout, stopSession, closeSession, responding, pendingPermissions } = useSessionStore();
+  const { activeSessionId, sessions, user, logout, stopSession, closeSession, responding, pendingPermissions, agents } = useSessionStore();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
 
   const activeSession = activeSessionId ? sessions.find((s) => s.id === activeSessionId) : null;
+  const isTerminal = isTerminalAgent(agents.find((a) => a.id === activeSession?.agent_id));
   const isResponding = activeSessionId ? responding.has(activeSessionId) : false;
   const pendingCount = activeSessionId ? (pendingPermissions.get(activeSessionId)?.length || 0) : 0;
 
@@ -333,10 +337,10 @@ export function Chat() {
                   {activeSession.agent_name || PROFILE_DISPLAY[activeSession.profile]?.label || activeSession.profile}
                   {activeSession.seq != null && <span className="text-slate-500"> #{activeSession.seq}</span>}
                 </span>
-                <span className="hidden sm:inline-flex items-center rounded-full bg-slate-700 px-2 py-0.5 text-[11px] font-medium text-slate-300">
+                {!isTerminal && <span className="hidden sm:inline-flex items-center rounded-full bg-slate-700 px-2 py-0.5 text-[11px] font-medium text-slate-300">
                   {PROMPT_PROFILE_DISPLAY[activeSession.prompt_profile || "standard"]?.label || "Standard"}
-                </span>
-                <StateIndicator state={activeSession.state} isResponding={isResponding} />
+                </span>}
+                {!isTerminal && <StateIndicator state={activeSession.state} isResponding={isResponding} />}
                 {pendingCount > 0 && (
                   <span className="inline-flex items-center justify-center w-5 h-5 text-xs font-bold bg-amber-600 text-white rounded-full">
                     {pendingCount}
@@ -390,8 +394,12 @@ export function Chat() {
         <ConnectionBanner />
 
         {/* Messages or Agent Home */}
-        <div className="flex-1 overflow-y-auto">
-          {activeSessionId ? (
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          {activeSessionId && isTerminal ? (
+            <Suspense fallback={<div className="p-4 text-slate-400">Loading terminal…</div>}>
+              <TerminalView key={activeSessionId} sessionId={activeSessionId} closed={activeSession?.state === "closed"} />
+            </Suspense>
+          ) : activeSessionId ? (
             <MessageList />
           ) : (
             <AgentHomeScreen />
@@ -399,10 +407,10 @@ export function Chat() {
         </div>
 
         {/* Permission banner */}
-        {activeSessionId && <PermissionBanner />}
+        {activeSessionId && !isTerminal && <PermissionBanner />}
 
         {/* Input — always shown for closed sessions so users can reopen by sending a message */}
-        {activeSessionId && <MessageInput />}
+        {activeSessionId && !isTerminal && <MessageInput />}
       </div>
 
       {/* Agent picker modal */}

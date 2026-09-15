@@ -345,7 +345,7 @@ func TestLoad_EmptyClaudeCodePermissionMode_OK(t *testing.T) {
 	}
 }
 
-func TestLoad_ValidClaudeCodeTransports(t *testing.T) {
+func TestLoad_LegacyClaudeCodeTransportsAccepted(t *testing.T) {
 	for _, transport := range []string{"stream-json", "tmux"} {
 		cfgJSON := `{
 			"hub": {"url": "ws://localhost", "token": "t"},
@@ -363,7 +363,7 @@ func TestLoad_ValidClaudeCodeTransports(t *testing.T) {
 	}
 }
 
-func TestLoad_InvalidClaudeCodeTransport(t *testing.T) {
+func TestLoad_ObsoleteTransportDoesNotSelectRuntime(t *testing.T) {
 	cfgJSON := `{
 		"hub": {"url": "ws://localhost", "token": "t"},
 		"runtime": {"id": "r1"},
@@ -374,8 +374,8 @@ func TestLoad_InvalidClaudeCodeTransport(t *testing.T) {
 	}`
 	path := writeTemp(t, cfgJSON)
 	_, err := Load(path)
-	if err == nil {
-		t.Fatal("expected validation error for invalid claude_code.transport")
+	if err != nil {
+		t.Fatalf("obsolete transport should be ignored: %v", err)
 	}
 }
 

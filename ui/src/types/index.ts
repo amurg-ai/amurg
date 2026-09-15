@@ -24,7 +24,7 @@ export interface AgentInfo {
   name: string;
   tags?: Record<string, string>;
   online: boolean;
-  caps: string; // JSON-encoded caps from store
+  caps: string | Record<string, unknown>; // API object, or legacy encoded value
   security?: string | SecurityProfile; // JSON string from hub or parsed object
 }
 
@@ -275,3 +275,26 @@ export const PROMPT_PROFILE_DISPLAY: Record<
     description: "Minimal framing for quick, well-scoped tasks.",
   },
 };
+
+
+export interface TerminalOutput {
+ session_id: string;
+ generation: string;
+ kind: "reset" | "output" | "detached" | "error" | "reconnect";
+ data?: string;
+ cols?: number;
+ rows?: number;
+ error?: string;
+}
+
+export function isTerminalAgent(agent: AgentInfo | undefined): boolean {
+ return agentCapabilities(agent).terminal === true;
+}
+
+export function agentCapabilities(agent: Pick<AgentInfo, "caps"> | undefined): Record<string, unknown> {
+ if (!agent) return {};
+ try {
+  const caps = typeof agent.caps === "string" ? JSON.parse(agent.caps) : agent.caps;
+  return caps && typeof caps === "object" ? caps : {};
+ } catch { return {}; }
+}

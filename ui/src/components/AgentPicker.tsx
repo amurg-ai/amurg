@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useSessionStore } from "@/stores/sessionStore";
 import { api } from "@/api/client";
-import { PROFILE_DISPLAY, PROMPT_PROFILE_DISPLAY } from "@/types";
+import { isTerminalAgent, PROFILE_DISPLAY, PROMPT_PROFILE_DISPLAY } from "@/types";
 import type { PromptProfileInfo } from "@/types";
 import { SecurityBadge } from "@/components/SecurityBadge";
 
@@ -51,7 +51,7 @@ export function AgentPicker({ onClose }: AgentPickerProps) {
     if (creating) return;
     setCreating(agentId);
     try {
-      await createSession(agentId, selectedProfile);
+      await createSession(agentId, isTerminalAgent(agents.find((a) => a.id === agentId)) ? "standard" : selectedProfile);
       onClose();
     } catch (err) {
       console.error("Failed to create session:", err);
@@ -102,7 +102,7 @@ export function AgentPicker({ onClose }: AgentPickerProps) {
           </div>
         </div>
 
-        <div className="px-4 pt-4 pb-2 border-b border-slate-700/70">
+        {agents.some((agent) => !isTerminalAgent(agent)) && <div className="px-4 pt-4 pb-2 border-b border-slate-700/70">
           <div className="mb-2">
             <h3 className="text-sm font-medium text-slate-100">Prompt Profile</h3>
             <p className="text-xs text-slate-400 mt-1">
@@ -138,7 +138,7 @@ export function AgentPicker({ onClose }: AgentPickerProps) {
               );
             })}
           </div>
-        </div>
+        </div>}
 
         {/* Agent list */}
         <div className="p-3 max-h-80 overflow-y-auto">

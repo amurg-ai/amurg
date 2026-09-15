@@ -59,6 +59,8 @@ type AgentConfig struct {
 	Limits        *AgentLimits      `json:"limits,omitempty"`
 	Security      *SecurityConfig   `json:"security,omitempty"`
 	PromptProfile string            `json:"-"`
+	SessionKey    string            `json:"-"` // stable, runtime-scoped hub session identity
+	TMux          *TMuxConfig       `json:"-"` // internal terminal launch settings, never a user transport choice
 
 	// Profile-specific settings (parsed by the adapter)
 	CLI        *CLIConfig        `json:"cli,omitempty"`
@@ -72,9 +74,22 @@ type AgentConfig struct {
 	External   *ExternalConfig   `json:"external,omitempty"`
 }
 
+// TMuxConfig launches a command interactively, or attaches a configured existing session.
+// Args are passed as argv; no print-mode flags or agent-specific protocol is added.
+type TMuxConfig struct {
+	Command     string            `json:"command,omitempty"`
+	Args        []string          `json:"args,omitempty"`
+	WorkDir     string            `json:"work_dir,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+	SocketName  string            `json:"socket_name,omitempty"`
+	SessionName string            `json:"session_name,omitempty"` // existing session; never created or killed
+}
+
 // WorkDir returns the working directory configured for this agent, if any.
 func (a AgentConfig) WorkDir() string {
 	switch {
+	case a.TMux != nil:
+		return a.TMux.WorkDir
 	case a.ClaudeCode != nil && a.ClaudeCode.WorkDir != "":
 		return a.ClaudeCode.WorkDir
 	case a.CLI != nil && a.CLI.WorkDir != "":
@@ -115,11 +130,12 @@ type CLIConfig struct {
 
 // ClaudeCodeConfig is config for the claude-code profile.
 type ClaudeCodeConfig struct {
+	Args            []string          `json:"args,omitempty"`    // additional native interactive CLI arguments
 	Command         string            `json:"command,omitempty"` // default: "claude"
 	WorkDir         string            `json:"work_dir,omitempty"`
 	Env             map[string]string `json:"env,omitempty"`
 	Model           string            `json:"model,omitempty"`           // e.g. "sonnet"
-	Transport       string            `json:"transport,omitempty"`       // "stream-json" (default) or "tmux"
+	Transport       string            `json:"transport,omitempty"`       // legacy field; ignored by persistent interactive sessions
 	PermissionMode  string            `json:"permission_mode,omitempty"` // e.g. "dangerously-skip-permissions"
 	MaxTurns        int               `json:"max_turns,omitempty"`
 	AllowedTools    []string          `json:"allowed_tools,omitempty"`
@@ -129,6 +145,7 @@ type ClaudeCodeConfig struct {
 
 // CopilotConfig is config for the github-copilot profile.
 type CopilotConfig struct {
+	Args                  []string          `json:"args,omitempty"`    // additional native interactive CLI arguments
 	Command               string            `json:"command,omitempty"` // default: "copilot"
 	WorkDir               string            `json:"work_dir,omitempty"`
 	Env                   map[string]string `json:"env,omitempty"`
@@ -140,6 +157,7 @@ type CopilotConfig struct {
 
 // CodexConfig is config for the codex profile.
 type CodexConfig struct {
+	Args           []string          `json:"args,omitempty"`    // additional native interactive CLI arguments
 	Command        string            `json:"command,omitempty"` // default: "codex"
 	WorkDir        string            `json:"work_dir,omitempty"`
 	Env            map[string]string `json:"env,omitempty"`
@@ -153,6 +171,7 @@ type CodexConfig struct {
 
 // KiloConfig is config for the kilo-code profile.
 type KiloConfig struct {
+	Args         []string          `json:"args,omitempty"`    // additional native interactive CLI arguments
 	Command      string            `json:"command,omitempty"` // default: "kilo"
 	WorkDir      string            `json:"work_dir,omitempty"`
 	Env          map[string]string `json:"env,omitempty"`
@@ -165,6 +184,7 @@ type KiloConfig struct {
 
 // GeminiCLIConfig is config for the gemini-cli profile.
 type GeminiCLIConfig struct {
+	Args             []string          `json:"args,omitempty"`    // additional native interactive CLI arguments
 	Command          string            `json:"command,omitempty"` // default: "gemini"
 	WorkDir          string            `json:"work_dir,omitempty"`
 	Env              map[string]string `json:"env,omitempty"`
@@ -292,14 +312,7 @@ func (c *Config) validate() error {
 				return fmt.Errorf("agents[%d].claude_code.permission_mode %q is not recognized; use skip, acceptEdits, plan, or strict", i, agent.ClaudeCode.PermissionMode)
 			}
 		}
-		if agent.ClaudeCode != nil && agent.ClaudeCode.Transport != "" {
-			switch agent.ClaudeCode.Transport {
-			case "stream-json", "tmux":
-				// valid
-			default:
-				return fmt.Errorf("agents[%d].claude_code.transport %q is not recognized; use stream-json or tmux", i, agent.ClaudeCode.Transport)
-			}
-		}
+
 	}
 	return nil
 }

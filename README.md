@@ -14,6 +14,8 @@
 └─────────┘     └─────────┘     └─────────┘     └─────────┘
 ```
 
+Interactive coding agents run in persistent sessions managed by Amurg. Use the browser composer for text, voice, and files; agents keep running across reconnects. See [interactive agents](runtime/README.md#persistent-interactive-agents).
+
 Amurg lets you interact with any agent — CLI tools, batch jobs, HTTP services, or custom protocols — through a single mobile-friendly chat UI. Runtimes connect outbound to the hub, so you never expose inbound ports.
 
 ---

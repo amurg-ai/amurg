@@ -27,6 +27,7 @@ type Manager struct {
 	agentCfgs map[string]config.AgentConfig
 
 	onOutput            OutputHandler
+	onTerminalOutput    func(protocol.TerminalOutput)
 	onPermissionRequest PermissionRequestFunc
 }
 
@@ -78,6 +79,7 @@ func (m *Manager) CreateWithResume(ctx context.Context, sessionID, agentID, user
 		return fmt.Errorf("unknown agent: %s", agentID)
 	}
 	agentCfg.PromptProfile = promptprofile.Normalize(profileID)
+	agentCfg.SessionKey = m.cfg.ID + "/" + userID + "/" + sessionID
 
 	adp, err := m.registry.Get(agentCfg.Profile)
 	if err != nil {
@@ -106,6 +108,15 @@ func (m *Manager) CreateWithResume(ctx context.Context, sessionID, agentID, user
 
 	sess := NewSession(sessionID, agentID, userID, agentSess, m.onOutput, m.logger)
 	m.sessions[sessionID] = sess
+	if terminal, ok := agentSess.(adapter.TerminalSession); ok && m.onTerminalOutput != nil {
+		handler := m.onTerminalOutput
+		go func() {
+			for out := range terminal.TerminalOutput() {
+				out.SessionID = sessionID
+				handler(out)
+			}
+		}()
+	}
 
 	// Load native history if this is a resumed session.
 	// History is loaded and emitted directly via onOutput (bypassing the
@@ -295,6 +306,12 @@ func (m *Manager) UpdateAgentConfig(agentID string, security *protocol.SecurityP
 	agentCfg, ok := m.agentCfgs[agentID]
 	if !ok {
 		return fmt.Errorf("unknown agent: %s", agentID)
+	}
+
+	if adp, err := m.registry.Get(agentCfg.Profile); err == nil {
+		if _, terminal := adp.(*adapter.TMuxAdapter); terminal && (security != nil || limits != nil) {
+			return fmt.Errorf("interactive agent settings are managed by the native application, not chat overrides")
+		}
 	}
 
 	if security != nil {

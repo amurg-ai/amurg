@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useSessionStore } from "@/stores/sessionStore";
 import { api } from "@/api/client";
-import { PROFILE_DISPLAY, PROMPT_PROFILE_DISPLAY } from "@/types";
+import { isTerminalAgent, PROFILE_DISPLAY, PROMPT_PROFILE_DISPLAY } from "@/types";
 import type { PromptProfileInfo, UnifiedSession } from "@/types";
 import { SecurityBadge } from "@/components/SecurityBadge";
 import { OnboardingGuide } from "@/components/OnboardingGuide";
@@ -228,7 +228,7 @@ export function AgentHomeScreen() {
     if (creating) return;
     setCreating(agentId);
     try {
-      await createSession(agentId, selectedPromptProfile);
+      await createSession(agentId, isTerminalAgent(agents.find((a) => a.id === agentId)) ? "standard" : selectedPromptProfile);
     } catch (err) {
       addToast(err instanceof Error ? err.message : "Failed to create session", "error");
     } finally {
@@ -295,7 +295,7 @@ export function AgentHomeScreen() {
         <div className="mb-8">
           <h2 className="text-lg font-semibold text-slate-200 mb-1">Agents</h2>
           <p className="text-sm text-slate-500">Select an agent to start a new session</p>
-          <div className="mt-4 max-w-sm">
+          {agents.some((agent) => !isTerminalAgent(agent)) && <div className="mt-4 max-w-sm">
             <label htmlFor="prompt-profile" className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">
               Prompt Profile
             </label>
@@ -314,7 +314,7 @@ export function AgentHomeScreen() {
             <p className="mt-1 text-xs text-slate-500">
               {promptProfiles.find((profile) => profile.id === selectedPromptProfile)?.description}
             </p>
-          </div>
+          </div>}
         </div>
 
         {/* Agent cards */}
