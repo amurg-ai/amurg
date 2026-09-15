@@ -54,19 +54,6 @@ func tmuxRun(args ...string) error {
 	return nil
 }
 
-func tmuxRunOutput(args ...string) (string, error) {
-	cmd := exec.Command("tmux", args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		trimmed := strings.TrimSpace(string(output))
-		if trimmed != "" {
-			return "", fmt.Errorf("tmux %s: %s", strings.Join(args, " "), trimmed)
-		}
-		return "", fmt.Errorf("tmux %s: %w", strings.Join(args, " "), err)
-	}
-	return string(output), nil
-}
-
 func tmuxHasSession(sessionName string) bool {
 	if sessionName == "" {
 		return false

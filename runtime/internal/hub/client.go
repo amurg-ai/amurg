@@ -298,7 +298,7 @@ func (c *Client) sendMessage(msgType, sessionID string, payload any) error {
 
 	if msgType == protocol.TypeTerminalOutput {
 		_ = c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-		defer c.conn.SetWriteDeadline(time.Time{})
+		defer func() { _ = c.conn.SetWriteDeadline(time.Time{}) }()
 		if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
 			_ = c.conn.Close() // force reconnect and a fresh terminal repaint
 			return err

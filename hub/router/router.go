@@ -1349,7 +1349,7 @@ func (r *Router) sendToClient(cc *clientConn, msgType, sessionID string, payload
 	defer cc.mu.Unlock()
 	if msgType == protocol.TypeTerminalOutput {
 		_ = cc.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-		defer cc.conn.SetWriteDeadline(time.Time{})
+		defer func() { _ = cc.conn.SetWriteDeadline(time.Time{}) }()
 	}
 	if err := cc.conn.WriteMessage(websocket.TextMessage, data); err != nil {
 		if msgType == protocol.TypeTerminalOutput {

@@ -205,7 +205,7 @@ func (s *terminalSession) Attach(ctx context.Context, cols, rows uint16) error {
 
 func (s *terminalSession) readClient(c *terminalClient) {
 	defer close(c.done)
-	defer c.tty.Close()
+	defer func() { _ = c.tty.Close() }()
 	buf := make([]byte, 16*1024)
 	for {
 		n, err := c.tty.Read(buf)
