@@ -121,6 +121,20 @@ func terminalLaunchConfig(cfg config.AgentConfig) (config.TMuxConfig, error) {
 		}
 		option("--model", model)
 		option("--agent", c.Mode)
+	case protocol.ProfileOpenCode:
+		c := config.OpenCodeConfig{}
+		if cfg.OpenCode != nil {
+			c = *cfg.OpenCode
+		}
+		t.Command, t.Env, extra = c.Command, c.Env, c.Args
+		if t.Command == "" {
+			t.Command = "opencode"
+		}
+		model := c.Model
+		if model != "" && c.Provider != "" && !strings.Contains(model, "/") {
+			model = c.Provider + "/" + model
+		}
+		option("--model", model)
 	case protocol.ProfileGeminiCLI:
 		c := config.GeminiCLIConfig{}
 		if cfg.Gemini != nil {

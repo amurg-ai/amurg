@@ -139,6 +139,8 @@ func NewServer(s store.Store, ap auth.Provider, lp auth.LoginProvider, ra auth.R
 
 	// Authenticated API routes (all users)
 	srv.rl = newRateLimiter(cfg.RateLimit.RequestsPerSecond, cfg.RateLimit.Burst)
+	mux.With(srv.runtimeSessionAuth, rateLimitMiddleware(srv.rl)).Post("/api/runtime/sessions", srv.handleRuntimeSessionCreate)
+	mux.With(srv.runtimeSessionAuth, rateLimitMiddleware(srv.rl)).Get("/api/runtime/sessions/{sessionID}", srv.handleRuntimeSessionGet)
 	mux.Group(func(r chi.Router) {
 		r.Use(srv.authMiddleware)
 		// Auto-provision users when using external auth (Clerk).

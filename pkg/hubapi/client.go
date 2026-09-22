@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/amurg-ai/amurg/pkg/protocol"
 	"io"
 	"net/http"
 	"net/url"
@@ -191,4 +192,24 @@ func readAPIError(r io.Reader) string {
 		}
 	}
 	return strings.TrimSpace(string(data))
+}
+
+// StartRuntimeSession uses a user-linked runtime token, not a browser JWT.
+func (c *Client) StartRuntimeSession(ctx context.Context, agentID string, launch protocol.SessionLaunch) (*Session, error) {
+	var sess Session
+	err := c.do(ctx, http.MethodPost, "/api/runtime/sessions", map[string]any{"agent_id": agentID, "launch": launch}, true, &sess)
+	return &sess, err
+}
+
+func (c *Client) GetRuntimeSession(ctx context.Context, id string) (*Session, error) {
+	var sess Session
+	err := c.do(ctx, http.MethodGet, "/api/runtime/sessions/"+url.PathEscape(id), nil, true, &sess)
+	return &sess, err
+}
+
+type Agent struct {
+	ID        string
+	Name      string
+	Profile   string
+	RuntimeID string
 }

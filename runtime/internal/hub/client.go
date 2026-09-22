@@ -204,10 +204,11 @@ func (c *Client) connectOnce(ctx context.Context) error {
 	c.mu.Unlock()
 
 	hello := protocol.RuntimeHello{
-		RuntimeID: c.rtID,
-		Token:     token,
-		OrgID:     c.orgID,
-		Agents:    c.agents,
+		LocalLaunch: true,
+		RuntimeID:   c.rtID,
+		Token:       token,
+		OrgID:       c.orgID,
+		Agents:      c.agents,
 	}
 
 	if err := c.sendMessage(protocol.TypeRuntimeHello, "", hello); err != nil {

@@ -252,7 +252,20 @@ func (r *Runtime) handleSessionCreate(env protocol.Envelope) error {
 
 	ctx := context.Background()
 	var err error
-	if req.ResumeSessionID != "" {
+	if req.Launch != nil {
+		err = r.sessions.CreateWithLaunch(ctx, req.SessionID, req.AgentID, req.UserID, req.ResumeSessionID, req.PromptProfile, req.Launch)
+		if err == nil {
+			sess, _ := r.sessions.Get(req.SessionID)
+			if launcher, ok := sess.Agent().(adapter.ProcessLauncher); ok {
+				err = launcher.Launch(ctx)
+			} else {
+				err = fmt.Errorf("agent does not support interactive launch")
+			}
+			if err != nil {
+				_ = r.sessions.Close(req.SessionID)
+			}
+		}
+	} else if req.ResumeSessionID != "" {
 		err = r.sessions.CreateWithResume(ctx, req.SessionID, req.AgentID, req.UserID, req.ResumeSessionID, req.PromptProfile)
 	} else {
 		err = r.sessions.Create(ctx, req.SessionID, req.AgentID, req.UserID, req.PromptProfile)

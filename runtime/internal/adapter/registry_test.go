@@ -95,6 +95,7 @@ func TestDefaultRegistry(t *testing.T) {
 		"github-copilot",
 		"codex",
 		"kilo-code",
+		"opencode",
 		"gemini-cli",
 		"external",
 	}

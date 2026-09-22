@@ -88,11 +88,12 @@ type pendingPermission struct {
 }
 
 type runtimeConn struct {
-	id     string
-	orgID  string
-	conn   *websocket.Conn
-	mu     sync.Mutex
-	agents map[string]protocol.AgentRegistration
+	localLaunch bool
+	id          string
+	orgID       string
+	conn        *websocket.Conn
+	mu          sync.Mutex
+	agents      map[string]protocol.AgentRegistration
 }
 
 type clientConn struct {
@@ -252,10 +253,11 @@ func (r *Router) HandleRuntimeWS(w http.ResponseWriter, req *http.Request) {
 
 	// Register runtime.
 	rtConn := &runtimeConn{
-		id:     hello.RuntimeID,
-		orgID:  orgID,
-		conn:   conn,
-		agents: make(map[string]protocol.AgentRegistration),
+		localLaunch: hello.LocalLaunch,
+		id:          hello.RuntimeID,
+		orgID:       orgID,
+		conn:        conn,
+		agents:      make(map[string]protocol.AgentRegistration),
 	}
 	for _, agent := range hello.Agents {
 		rtConn.agents[agent.ID] = agent
@@ -1204,6 +1206,7 @@ func (cc *clientConn) allowMessage() bool {
 
 // CreateSessionOption configures session creation.
 type CreateSessionOption struct {
+	Launch             *protocol.SessionLaunch
 	ResumeSessionID    string
 	ResumeNativeHandle string
 	PromptProfile      string
@@ -1252,6 +1255,7 @@ func (r *Router) CreateSession(ctx context.Context, userID, agentID string, opts
 
 	// Send create request to runtime.
 	r.sendToRuntime(agent.RuntimeID, protocol.TypeSessionCreate, sess.ID, protocol.SessionCreate{
+		Launch:          opt.Launch,
 		SessionID:       sess.ID,
 		AgentID:         agentID,
 		UserID:          userID,
@@ -1632,4 +1636,11 @@ func (r *Router) sendToConn(conn *websocket.Conn, msgType, sessionID string, pay
 func routerSha256hex(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:])
+}
+
+func (r *Router) RuntimeSupportsLocalLaunch(id string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	rt := r.runtimes[id]
+	return rt != nil && rt.localLaunch
 }

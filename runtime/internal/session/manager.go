@@ -63,6 +63,9 @@ func (m *Manager) Create(ctx context.Context, sessionID, agentID, userID, profil
 
 // CreateWithResume creates a new session, optionally resuming a native session.
 func (m *Manager) CreateWithResume(ctx context.Context, sessionID, agentID, userID, resumeSessionID, profileID string) error {
+	return m.CreateWithLaunch(ctx, sessionID, agentID, userID, resumeSessionID, profileID, nil)
+}
+func (m *Manager) CreateWithLaunch(ctx context.Context, sessionID, agentID, userID, resumeSessionID, profileID string, launch *protocol.SessionLaunch) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -80,6 +83,11 @@ func (m *Manager) CreateWithResume(ctx context.Context, sessionID, agentID, user
 	}
 	agentCfg.PromptProfile = promptprofile.Normalize(profileID)
 	agentCfg.SessionKey = m.cfg.ID + "/" + userID + "/" + sessionID
+	var err error
+	agentCfg, err = adapter.WithSessionLaunch(agentCfg, launch)
+	if err != nil {
+		return err
+	}
 
 	adp, err := m.registry.Get(agentCfg.Profile)
 	if err != nil {

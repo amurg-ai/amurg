@@ -299,3 +299,26 @@ func (s *terminalSession) Close() error {
 	close(s.done)
 	return nil
 }
+
+// Launch boots the underlying tmux session without attaching a PTY client.
+// It is a no-op if the session already exists. Used by callers that want the
+// agent running before any user connects (e.g. local `amurg-runtime sessions
+// create`).
+func (s *terminalSession) Launch(ctx context.Context) error {
+	if s.closed {
+		return fmt.Errorf("terminal session closed")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.ensureSession(ctx, 120, 40); err != nil {
+		return err
+	}
+	if s.cfg.SocketName == "amurg" {
+		// Match the behaviour of Attach so native TUIs work even before the
+		// first user opens the dashboard.
+		if _, err := s.run(ctx, "set-option", "-s", "focus-events", "on"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
