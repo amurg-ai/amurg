@@ -61,6 +61,7 @@ func DefaultRegistry() *Registry {
 	r.Register("codex", &TMuxAdapter{})
 	r.Register("external", &ExternalAdapter{})
 	r.Register("kilo-code", &TMuxAdapter{})
+	r.Register("opencode", &TMuxAdapter{})
 	r.Register("gemini-cli", &TMuxAdapter{})
 	return r
 }

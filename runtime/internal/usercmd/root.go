@@ -13,6 +13,7 @@ func NewRootCmd(v string) *cobra.Command {
 	}
 
 	root.AddCommand(newSessionsCmd())
+	root.AddCommand(newStartCmd())
 	root.AddCommand(newVersionCmd(v))
 
 	return root

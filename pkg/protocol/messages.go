@@ -20,10 +20,11 @@ type Envelope struct {
 
 // RuntimeHello is sent by the runtime immediately after connecting.
 type RuntimeHello struct {
-	RuntimeID string              `json:"runtime_id"`
-	Token     string              `json:"token"`
-	OrgID     string              `json:"org_id,omitempty"` // empty defaults to "default"
-	Agents    []AgentRegistration `json:"agents"`
+	LocalLaunch bool                `json:"local_launch,omitempty"`
+	RuntimeID   string              `json:"runtime_id"`
+	Token       string              `json:"token"`
+	OrgID       string              `json:"org_id,omitempty"` // empty defaults to "default"
+	Agents      []AgentRegistration `json:"agents"`
 }
 
 // SecurityProfile defines security constraints for an agent.
@@ -75,11 +76,12 @@ type HelloAck struct {
 
 // SessionCreate is sent by the hub to the runtime to create a new session.
 type SessionCreate struct {
-	SessionID       string `json:"session_id"`
-	AgentID         string `json:"agent_id"`
-	UserID          string `json:"user_id"`
-	ResumeSessionID string `json:"resume_session_id,omitempty"` // native session ID for resume
-	PromptProfile   string `json:"prompt_profile,omitempty"`
+	Launch          *SessionLaunch `json:"launch,omitempty"`
+	SessionID       string         `json:"session_id"`
+	AgentID         string         `json:"agent_id"`
+	UserID          string         `json:"user_id"`
+	ResumeSessionID string         `json:"resume_session_id,omitempty"` // native session ID for resume
+	PromptProfile   string         `json:"prompt_profile,omitempty"`
 }
 
 // SessionCreated is the runtime's response to SessionCreate.
@@ -371,4 +373,11 @@ type NativeSessionsResponse struct {
 	RequestID string          `json:"request_id"`
 	Sessions  []NativeSession `json:"sessions"`
 	Error     string          `json:"error,omitempty"`
+}
+
+type SessionLaunch struct {
+	WorkDir     string   `json:"work_dir"`
+	Args        []string `json:"args,omitempty"`
+	Yolo        bool     `json:"yolo,omitempty"`
+	SkipSandbox bool     `json:"skip_sandbox,omitempty"`
 }

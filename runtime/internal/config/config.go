@@ -68,6 +68,7 @@ type AgentConfig struct {
 	Copilot    *CopilotConfig    `json:"copilot,omitempty"`
 	Codex      *CodexConfig      `json:"codex,omitempty"`
 	Kilo       *KiloConfig       `json:"kilo,omitempty"`
+	OpenCode   *OpenCodeConfig   `json:"opencode,omitempty"`
 	Gemini     *GeminiCLIConfig  `json:"gemini,omitempty"`
 	Job        *JobConfig        `json:"job,omitempty"`
 	HTTP       *HTTPConfig       `json:"http,omitempty"`
@@ -100,6 +101,8 @@ func (a AgentConfig) WorkDir() string {
 		return a.Codex.WorkDir
 	case a.Kilo != nil && a.Kilo.WorkDir != "":
 		return a.Kilo.WorkDir
+	case a.OpenCode != nil && a.OpenCode.WorkDir != "":
+		return a.OpenCode.WorkDir
 	case a.Gemini != nil && a.Gemini.WorkDir != "":
 		return a.Gemini.WorkDir
 	case a.Job != nil && a.Job.WorkDir != "":
@@ -180,6 +183,16 @@ type KiloConfig struct {
 	Mode         string            `json:"mode,omitempty"`          // "code", "architect", "debugger", "ask", "orchestrator"
 	SystemPrompt string            `json:"system_prompt,omitempty"` // --append-system-prompt
 	Timeout      int               `json:"timeout,omitempty"`       // --timeout seconds (requires --auto)
+}
+
+// OpenCodeConfig is config for the opencode profile.
+type OpenCodeConfig struct {
+	Args     []string          `json:"args,omitempty"`    // additional native interactive CLI arguments
+	Command  string            `json:"command,omitempty"` // default: "opencode"
+	WorkDir  string            `json:"work_dir,omitempty"`
+	Env      map[string]string `json:"env,omitempty"`
+	Model    string            `json:"model,omitempty"`    // e.g. "anthropic/claude-sonnet-4"
+	Provider string            `json:"provider,omitempty"` // e.g. "anthropic", "openrouter"
 }
 
 // GeminiCLIConfig is config for the gemini-cli profile.

@@ -115,3 +115,5 @@ type NativeSessionEntry struct {
 	Created      string `json:"created,omitempty"`
 	Modified     string `json:"modified,omitempty"`
 }
+
+type ProcessLauncher interface{ Launch(context.Context) error }

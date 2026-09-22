@@ -140,3 +140,25 @@ Contributions are welcome. Please open an issue to discuss significant changes b
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE) for details.
+
+## Start locally and continue in Cloud
+
+With an updated hub and a running, device-registered runtime:
+
+```sh
+cd /path/to/project
+amurg start codex --skip-sandbox
+amurg start opencode --yolo
+```
+
+Each command starts a separate persistent terminal and registers a session under
+the account that registered the runtime. Open the hub to select it. The command
+uses the existing runtime registration token; no browser JWT is needed. Shared
+static runtime tokens cannot identify the owning user and are not supported.
+
+`--cwd` / `-C` overrides the current directory. Use `--` before native agent
+arguments. `--skip-sandbox` disables Codex sandboxing and approval prompts;
+`--yolo` does the same for Codex and passes `--auto` to OpenCode. Directory and
+argument overrides are saved per session and do not change the configured agent.
+The command waits for the runtime's launch acknowledgement. This confirms process
+launch, not successful authentication or completion of a task.
